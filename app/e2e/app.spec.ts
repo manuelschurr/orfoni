@@ -1,6 +1,12 @@
-import { expect, test } from '@playwright/test';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { expect, test, type Page } from '@playwright/test';
+import type { PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { Hub, newProjectDir } from './hub';
+import { acceptTrustPrompt, Screen, sleep } from './terminal';
 
+const REPLY_MS = 120_000;
 let hub: Hub;
 
 test.beforeEach(async () => {
@@ -12,9 +18,192 @@ test.afterEach(async () => {
 	hub.close();
 });
 
+async function startReady(params: { prompt?: string; title?: string; permissionMode?: PermissionMode } = {}): Promise<SessionSummary & { dir: string }> {
+	const dir = newProjectDir();
+	const { session, needsTrust } = await hub.start({ projectDir: dir, ...params });
+	if (needsTrust) await acceptTrustPrompt(session.id);
+	return { ...session, dir };
+}
+
+async function openSession(page: Page, session: SessionSummary, query = '?transport=ws'): Promise<void> {
+	await page.goto(`/${query}`);
+	await page.locator(`[data-session="${session.id}"]`).click();
+}
+
+function you(page: Page) {
+	return page.getByRole('article', { name: 'You' });
+}
+
+function claude(page: Page) {
+	return page.getByRole('article', { name: 'Claude' });
+}
+
+function shownState(page: Page, label: string) {
+	return page.getByRole('main').getByText(label, { exact: true });
+}
+
 test('the session list loads', async ({ page }) => {
 	await hub.start({ projectDir: newProjectDir(), title: 'list check' });
 	const sessions = await hub.sessions();
 	await page.goto('/?transport=ws');
 	for (const session of sessions) await expect(page.locator(`[data-session="${session.id}"]`)).toBeVisible();
+});
+
+test('start a session and see the reply as a bubble', async ({ page }) => {
+	await page.goto('/?transport=ws');
+	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
+	const dialog = page.getByRole('dialog', { name: 'New session' });
+	await dialog.getByLabel('Folder').fill(newProjectDir());
+	await dialog.getByLabel('First message').fill('Reply with exactly: pong 7d3');
+	await dialog.getByLabel('Model').selectOption('haiku');
+	await dialog.getByRole('button', { name: 'Start session' }).click();
+	await expect(dialog).toBeHidden();
+
+	await expect(page.getByText('Claude Code asks whether you trust this folder')).toBeVisible();
+	const sessionId = (await page.locator('[data-session][aria-current="true"]').getAttribute('data-session')) ?? '';
+	await page.getByRole('button', { name: 'Open terminal' }).click();
+	await expect(page.getByRole('tab', { selected: true })).toBeVisible();
+	await acceptTrustPrompt(sessionId);
+
+	await expect(you(page)).toHaveText('Reply with exactly: pong 7d3', { timeout: REPLY_MS });
+	await expect(claude(page)).toContainText('pong 7d3', { timeout: REPLY_MS });
+	await expect(page.locator('[data-session][aria-current="true"]')).toContainText('Reply with exactly: pong 7d3');
+});
+
+test('allow an approval from its card', async ({ page }) => {
+	const session = await startReady({ prompt: 'Use the Write tool to create a.txt containing hi. Then reply with exactly: done' });
+	await openSession(page, session);
+	const card = page.getByRole('article', { name: 'Approval for Write' });
+	await card.getByRole('button', { name: 'Allow', exact: true }).click({ timeout: REPLY_MS });
+	await expect(card.getByText('Allowed')).toBeVisible();
+	await expect(card.getByRole('button')).toHaveCount(0);
+	await expect(claude(page).last()).toContainText('done', { timeout: REPLY_MS });
+	expect(readFileSync(`${session.dir}/a.txt`, 'utf8').trim()).toBe('hi');
+});
+
+test('answer a question from its card', async ({ page }) => {
+	const session = await startReady({
+		prompt: 'Use the AskUserQuestion tool to ask me which color I prefer, with exactly two options: Red and Blue. After I answer, reply with exactly: chosen <color>',
+	});
+	await openSession(page, session);
+	const card = page.getByRole('article', { name: 'Question from Claude' });
+	await card.getByRole('button', { name: 'Blue' }).click({ timeout: REPLY_MS });
+	await expect(card.getByText('Answered')).toBeVisible();
+	await expect(claude(page).last()).toContainText(/blue/i, { timeout: REPLY_MS });
+});
+
+test('approve a plan from its card', async ({ page }) => {
+	const session = await startReady({
+		permissionMode: 'plan',
+		prompt: 'Plan how to create a file c.txt containing the word planned. Keep the plan to two short steps and present it with ExitPlanMode right away. Do not ask questions.',
+	});
+	await openSession(page, session);
+	const card = page.getByRole('article', { name: 'Plan from Claude' });
+	await expect(card).toContainText('c.txt', { timeout: REPLY_MS });
+	await card.getByRole('button', { name: 'Approve plan' }).click();
+	await expect(card.getByText('Approved')).toBeVisible();
+	const next = page.getByRole('article', { name: /^Approval for / }).filter({ hasText: 'c.txt' }).or(page.getByRole('button', { name: /c\.txt/ }));
+	await expect(next.first()).toBeVisible({ timeout: REPLY_MS });
+});
+
+test('a message waiting on an approval keeps its text', async ({ page }) => {
+	const session = await startReady({ prompt: 'Use the Write tool to create a.txt containing hi. Then reply with exactly: done' });
+	await openSession(page, session);
+	await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible({ timeout: REPLY_MS });
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.fill('please also add a test');
+	await box.press('Enter');
+	await expect(page.getByText(/waits for an answer/)).toBeVisible();
+	await expect(box).toHaveValue('please also add a test');
+	await expect(you(page)).toHaveCount(1);
+});
+
+test('interrupt a running turn', async ({ page }) => {
+	const session = await startReady({ prompt: 'Write a 3000 word essay about the history of terminals, in plain prose. No tools.' });
+	await openSession(page, session);
+	const interrupt = page.getByRole('button', { name: 'Interrupt' });
+	await expect(interrupt).toBeVisible({ timeout: REPLY_MS });
+	await sleep(2000);
+	await interrupt.click();
+	await expect(shownState(page, 'Idle')).toBeVisible();
+	await expect(interrupt).toBeHidden();
+	await sleep(3000);
+	await expect(shownState(page, 'Idle')).toBeVisible();
+});
+
+test('a prompt typed in the terminal shows up in the chat', async ({ page }) => {
+	const session = await startReady({ title: 'two views' });
+	const screen = await Screen.attach(`=orfoni-${session.id}`);
+	try {
+		await screen.waitFor('❯', 60_000);
+		await sleep(2500);
+		await openSession(page, session);
+		await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+		await page.getByRole('tabpanel').locator('.xterm').click();
+		await page.keyboard.type('Reply with exactly: typed in the terminal 51');
+		await page.keyboard.press('Enter');
+		await expect(you(page)).toHaveText('Reply with exactly: typed in the terminal 51', { timeout: REPLY_MS });
+		await expect(claude(page).last()).toContainText('typed in the terminal 51', { timeout: REPLY_MS });
+
+		const box = page.getByRole('textbox', { name: 'Message' });
+		await box.fill('Reply with exactly: sent from the chat 52');
+		await box.press('Enter');
+		await expect(box).toHaveValue('');
+		await screen.waitFor('sent from the chat 52', 30_000);
+		await expect(claude(page).last()).toContainText('sent from the chat 52', { timeout: REPLY_MS });
+	} finally {
+		screen.close();
+	}
+});
+
+test('remove a session', async ({ page }) => {
+	const { session } = await hub.start({ projectDir: newProjectDir(), title: 'remove me' });
+	await openSession(page, session);
+	await page.getByRole('main').getByRole('button', { name: 'Remove' }).click();
+	const confirm = page.getByRole('dialog', { name: 'Remove "remove me"?' });
+	await expect(confirm).toBeVisible();
+	await confirm.getByRole('button', { name: 'Remove session' }).click();
+	await expect(page.locator(`[data-session="${session.id}"]`)).toHaveCount(0);
+	await expect(page.getByText('Pick a session on the left, or start a new one.')).toBeVisible();
+	expect((await hub.sessions()).map((s) => s.id)).not.toContain(session.id);
+});
+
+test('reconnect after the bridge restarts without duplicated items', async ({ page }) => {
+	const port = '4791';
+	const bridgePath = fileURLToPath(new URL('../../tools/dev-bridge/bridge.mjs', import.meta.url));
+	const startBridge = async (): Promise<ChildProcess> => {
+		const child = spawn(process.execPath, [bridgePath], { env: { ...process.env, ORFONI_BRIDGE_PORT: port }, stdio: 'ignore' });
+		for (let i = 0; i < 50; i++) {
+			if (await fetch(`http://127.0.0.1:${port}/`).then((r) => r.ok, () => false)) return child;
+			await sleep(100);
+		}
+		throw new Error('the second bridge did not start');
+	};
+	let bridge = await startBridge();
+	try {
+		const session = await startReady({ prompt: 'Reply with exactly: one' });
+		await openSession(page, session, `?transport=ws&bridge=ws://127.0.0.1:${port}`);
+		await expect(claude(page)).toContainText('one', { timeout: REPLY_MS });
+		await expect(you(page)).toHaveCount(1);
+		await expect(claude(page)).toHaveCount(1);
+
+		const exited = new Promise((resolve) => bridge.once('exit', resolve));
+		bridge.kill('SIGTERM');
+		await exited;
+		await expect(page.getByRole('status').getByText(/^Reconnecting/)).toBeVisible();
+		bridge = await startBridge();
+		await expect(page.getByRole('status').getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 });
+		await sleep(1000);
+		await expect(you(page)).toHaveCount(1);
+		await expect(claude(page)).toHaveCount(1);
+
+		const box = page.getByRole('textbox', { name: 'Message' });
+		await box.fill('Reply with exactly: two');
+		await box.press('Enter');
+		await expect(claude(page).last()).toContainText('two', { timeout: REPLY_MS });
+		await expect(you(page)).toHaveCount(2);
+		await expect(claude(page)).toHaveCount(2);
+	} finally {
+		bridge.kill('SIGTERM');
+	}
 });
