@@ -1,0 +1,27 @@
+{
+ "session_id": "e3a4b106-9cbb-42bb-8bf3-b0bb27db9900",
+ "transcript_path": "/home/user/.claude/projects/-var-tmp-claude-0-orfoni-spike-q/e3a4b106-9cbb-42bb-8bf3-b0bb27db9900.jsonl",
+ "cwd": "/var/tmp/claude-0/orfoni-spike-q",
+ "scratchpad_dir": "/var/tmp/claude-0/-var-tmp-claude-0-orfoni-spike-q/e3a4b106-9cbb-42bb-8bf3-b0bb27db9900/scratchpad",
+ "prompt_id": "2ced5f03-40ca-4424-98dd-c8312cb734ed",
+ "permission_mode": "plan",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Write",
+ "tool_input": {
+  "file_path": "/home/user/.claude/plans/plan-how-to-create-wiggly-scone.md",
+  "content": "# Plan: create d.txt\n\n## Context\nCreate a file `d.txt` in `/var/tmp/claude-0/orfoni-spike-q` containing the word \"planned\".\n\n## Steps\n1. Write `/var/tmp/claude-0/orfoni-spike-q/d.txt` with the content `planned`.\n2. Read the file back to verify it contains exactly `planned`.\n"
+ },
+ "tool_response": {
+  "type": "create",
+  "filePath": "/home/user/.claude/plans/plan-how-to-create-wiggly-scone.md",
+  "content": "# Plan: create d.txt\n\n## Context\nCreate a file `d.txt` in `/var/tmp/claude-0/orfoni-spike-q` containing the word \"planned\".\n\n## Steps\n1. Write `/var/tmp/claude-0/orfoni-spike-q/d.txt` with the content `planned`.\n2. Read the file back to verify it contains exactly `planned`.\n",
+  "structuredPatch": [],
+  "originalFile": null,
+  "userModified": false
+ },
+ "tool_use_id": "toolu_01MHahXwmuBpNF9kekcYPmZe",
+ "duration_ms": 32
+}
