@@ -4,3 +4,5 @@ dist/
 .claude/worktrees/
 app/src-tauri/target/
 app/dist/
+app/e2e/test-results/
+app/e2e/playwright-report/

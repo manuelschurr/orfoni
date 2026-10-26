@@ -12,7 +12,7 @@ export default defineConfig({
 				resolve: { alias: { '@orfoni/protocol': protocol } },
 				test: {
 					name: 'node',
-					include: ['packages/**/src/**/*.test.ts', 'hub/src/**/*.test.ts', 'hub/test/**/*.test.ts', 'cli/src/**/*.test.ts'],
+					include: ['packages/**/src/**/*.test.ts', 'hub/src/**/*.test.ts', 'hub/test/**/*.test.ts', 'cli/src/**/*.test.ts', 'app/src/**/*.node.test.ts'],
 					exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/**', '**/test/e2e.test.ts'],
 				},
 			},
@@ -23,7 +23,8 @@ export default defineConfig({
 					name: 'app',
 					environment: 'jsdom',
 					include: ['app/src/**/*.test.ts'],
-					exclude: ['**/node_modules/**', '**/.claude/**'],
+					// The Testing Library plugin resolves the browser condition, which maps Node packages such as ws to their browser stubs.
+					exclude: ['**/node_modules/**', '**/.claude/**', 'app/src/**/*.node.test.ts'],
 				},
 			},
 		],
