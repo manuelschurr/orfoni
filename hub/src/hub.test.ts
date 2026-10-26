@@ -93,7 +93,9 @@ function body(name: string, claudeSessionId: string, fields: Record<string, unkn
 }
 
 async function until(check: () => boolean): Promise<void> {
-	for (let i = 0; i < 1000 && !check(); i++) await new Promise((resolve) => setImmediate(resolve));
+	// performance.now() and setImmediate stay real under the fake timers, so file writes on the thread pool get 2 s of real time.
+	const deadline = performance.now() + 2000;
+	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
 	if (!check()) throw new Error('condition never became true');
 }
 
