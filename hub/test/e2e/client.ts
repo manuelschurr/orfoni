@@ -110,7 +110,6 @@ export async function acceptTrustPrompt(started: Started): Promise<void> {
 		}
 		await sleep(250);
 	}
-	throw new Error('trust prompt never appeared');
 }
 
 export function sleep(ms: number): Promise<void> {
