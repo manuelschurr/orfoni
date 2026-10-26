@@ -88,7 +88,7 @@ Memory caps:
 The hub has these jobs:
 
 - Start a session by creating a tmux session in the project folder that runs `claude --session-id <uuid> --name <title>`. Stop a session by ending its tmux session.
-- Receive Claude Code's hook events over HTTP on 127.0.0.1. Each hook adds the tmux pane ID as a header, so the hub knows which pane sent it.
+- Receive Claude Code's hook events on 127.0.0.1. Each hook is a short `curl` command that posts the event with the orfoni session ID as a header, so the hub knows which session sent it.
 - Turn hook events into session states and chat messages, and forward both to connected apps.
 - Send your chat messages into the session with `tmux paste-buffer -p` followed by Enter, only while the session is waiting for input or working. Claude Code queues a message typed while it works.
 - Hold `PermissionRequest` hook requests open until an app answers. If the terminal answers first, the hub sees the tool run and withdraws the card.
@@ -118,6 +118,8 @@ The hub needs these hooks, configured in the user settings so they cover every s
 | `Stop`, `StopFailure` | The turn ended, with the final reply or the error |
 
 `MessageDisplay` holds each batch of text until the hook returns, so the hub answers it immediately and does its work afterwards. Its hook entry gets a short timeout, so a hub that hangs delays the terminal by seconds at most.
+
+The hooks are command hooks that run `curl ... || true`, not Claude Code's `http` hook type. `SessionStart` accepts only command hooks. A failed `http` hook also prints an error line in the terminal on every event while the hub is down, and the curl command fails silently instead (spike, 2026-10-26).
 
 ## Session states
 
