@@ -1,0 +1,341 @@
+[
+	{
+		"type": "system",
+		"uuid": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8b7a1e01",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:12:40.010Z"
+	},
+	{
+		"type": "user",
+		"uuid": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8b7a1e02",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"role": "user",
+			"content": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent:\n   The user asked for a file a.txt in /var/tmp/claude-0/orfoni-spike3/proj."
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"isCompactSummary": true,
+		"is_meta": true,
+		"timestamp": "2026-10-26T11:12:40.000Z"
+	},
+	{
+		"type": "user",
+		"uuid": "4b4168d1-a91e-4ea6-9e56-d048add35af4",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"role": "user",
+			"content": "Use the Write tool to create a.txt containing hi. Then reply with exactly: done"
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:12:46.574Z",
+		"origin": {
+			"kind": "human"
+		}
+	},
+	{
+		"type": "assistant",
+		"uuid": "a473825f-8f5a-4d02-93aa-19a972f34706",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"model": "claude-haiku-5-5",
+			"id": "msg_011CgQkQfaKA1ci8CKH9hvHH",
+			"type": "message",
+			"role": "assistant",
+			"content": [
+				{
+					"type": "tool_use",
+					"id": "toolu_01UQKSL1nYQaS2LRg2ZjBL8a",
+					"name": "Write",
+					"input": {
+						"file_path": "/var/tmp/claude-0/orfoni-spike3/proj/a.txt",
+						"content": "hi"
+					},
+					"caller": {
+						"type": "direct"
+					}
+				}
+			],
+			"container": null,
+			"stop_reason": "tool_use",
+			"stop_sequence": null,
+			"stop_details": null,
+			"usage": {
+				"input_tokens": 2,
+				"cache_creation_input_tokens": 20241,
+				"cache_read_input_tokens": 27455,
+				"output_tokens": 97,
+				"output_tokens_details": {
+					"thinking_tokens": 0
+				},
+				"server_tool_use": {
+					"web_search_requests": 0,
+					"web_fetch_requests": 0
+				},
+				"service_tier": "standard",
+				"cache_creation": {
+					"ephemeral_1h_input_tokens": 20241,
+					"ephemeral_5m_input_tokens": 0
+				},
+				"inference_geo": "global",
+				"iterations": [
+					{
+						"input_tokens": 2,
+						"output_tokens": 97,
+						"cache_read_input_tokens": 27455,
+						"cache_creation_input_tokens": 20241,
+						"cache_creation": {
+							"ephemeral_5m_input_tokens": 0,
+							"ephemeral_1h_input_tokens": 20241
+						},
+						"type": "message"
+					}
+				],
+				"speed": "standard",
+				"fallback_credit": null
+			},
+			"input_transformations": [],
+			"diagnostics": null,
+			"context_management": null
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:12:48.973Z"
+	},
+	{
+		"type": "user",
+		"uuid": "46370f45-86b9-46e5-8cf9-e6a265e64581",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"role": "user",
+			"content": [
+				{
+					"tool_use_id": "toolu_01UQKSL1nYQaS2LRg2ZjBL8a",
+					"type": "tool_result",
+					"content": "File created successfully at: /var/tmp/claude-0/orfoni-spike3/proj/a.txt (file state is current in your context, no need to Read it back)"
+				}
+			]
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:09.224Z"
+	},
+	{
+		"type": "assistant",
+		"uuid": "3057e130-fd33-4d95-8f58-176e288b315f",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"model": "claude-haiku-5-5",
+			"id": "msg_011CgQkSJKvd7T5WCB36dGdk",
+			"type": "message",
+			"role": "assistant",
+			"content": [
+				{
+					"type": "thinking",
+					"thinking": "",
+					"signature": "CAQSpwcKEAgTGAI4AUIIdGhpbmtpbmcSDHppe6bizSWlADUh9BoMK89WyjDPdmHgP79gIjAeShLkEJfWOA+ZvP6ls18pi7FQPqzjMmo3O/OymFbryIv5HUFlVL+7TKh4SHlWn0kqxAZo+MKOcQy+02AaCN3RBWW6/u6aTFoTeXKiR/iJrFFxdcZSmnPzfuvpQ1HCCo38ihrsrJfLwLxSzOBGL8EusiSfLQsUCIUER2HW8ZhDV79LCj5EW2mJr30uRdhhNRf7bzu0bUiiZytk55Q/2Yl32b6Tyb5O9BTn0YBBAWAoMf3Iwtx9yKFvXvf0osYyRFesxPO2o0LrUaJRGLwU5CY48ZNSEc9T7vSvqO0WY72JbV8rifwCG2NwVLRbXUnlkca0emGXAPi1Q0ywUYHPBTp8p7xG/1HEu+ok0oVqh511JLasOWGzpcvPaRhtKGUEMsNIn4SLz89uxtw4mFKL2MGsqzqUixIJ2rw4X95xfDVki50OM3ecisvXfXPiIcVMr5PA0PgOBalT5yx4RHTWr2K9nrDY/o6s3t/WBxxw3MUaozy5hVOs4GFs+7cukRPmoUZyTwcXBsXMYUekVoFFEoOYlQ2HC0/AnOgg4Vc75W66mYQRo0uo9Z9TmF1VA74UbdOMhKODVwAzvzPxy63+vpkGi+yZW9ESKYon8ieOLvErxUWVyKVBBt6eerCauqiRg4D3sRcbN7ifv/A+oEphy7VQo3IGp/FqJnQwrP2Uru/f9RTtq1eN/nb/pGtw9kVxssmZ+guV/z+Dgu4U5DR8Ry7/QxaWziM2l9TN9VaV6AAx3THQ2wANsFRXr7W98OyJo6EpiZMMD1qD89JVFzPQXNChGK2Z2/4y9OhWKxZA5v54IpRP6wNot290cU/j3Adp++lB89WBxqCW1e+RLICF0rm3puL+iX/R2T6KdytA15U4Vv2amY7QMdhg0JMy2M8sLaWhvQMauVJHCVas0bb6CGSHyRhasEDAywDfqB7T7J1pTswaSOVJ0IERzIZRJfP1LNRVdfXdyB4suL9kzY8suFOnuqHEoAVv8xHLg7AYMglx3Dk9wWN0YZiIdh1CGCWg0E5STTlJUiiEtVXWvQ7klMC/KO6mR6Z51rAkr7H+8PekZoytw06TleoAnTr9nsk2U6lDqJeiBFvt/loihdTXnrDxZwa7QADn6Ohsmumevhc8n185CVfV/CiSi7s3osFWnlmGr39p8adP4pdr8DBqPmj1PTTmQ2KdhxgB"
+				}
+			],
+			"container": null,
+			"stop_reason": "end_turn",
+			"stop_sequence": null,
+			"stop_details": null,
+			"usage": {
+				"input_tokens": 2,
+				"cache_creation_input_tokens": 4193,
+				"cache_read_input_tokens": 47696,
+				"output_tokens": 112,
+				"output_tokens_details": {
+					"thinking_tokens": 109
+				},
+				"server_tool_use": {
+					"web_search_requests": 0,
+					"web_fetch_requests": 0
+				},
+				"service_tier": "standard",
+				"cache_creation": {
+					"ephemeral_1h_input_tokens": 4193,
+					"ephemeral_5m_input_tokens": 0
+				},
+				"inference_geo": "global",
+				"iterations": [
+					{
+						"input_tokens": 2,
+						"output_tokens": 112,
+						"cache_read_input_tokens": 47696,
+						"cache_creation_input_tokens": 4193,
+						"cache_creation": {
+							"ephemeral_5m_input_tokens": 0,
+							"ephemeral_1h_input_tokens": 4193
+						},
+						"type": "message"
+					}
+				],
+				"speed": "standard",
+				"fallback_credit": null
+			},
+			"input_transformations": [],
+			"diagnostics": null,
+			"context_management": null
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:11.076Z"
+	},
+	{
+		"type": "assistant",
+		"uuid": "14d7a162-1b3e-48f9-a70f-d87108229979",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"model": "claude-haiku-5-5",
+			"id": "msg_011CgQkSJKvd7T5WCB36dGdk",
+			"type": "message",
+			"role": "assistant",
+			"content": [
+				{
+					"type": "text",
+					"text": "done"
+				}
+			],
+			"container": null,
+			"stop_reason": "end_turn",
+			"stop_sequence": null,
+			"stop_details": null,
+			"usage": {
+				"input_tokens": 2,
+				"cache_creation_input_tokens": 4193,
+				"cache_read_input_tokens": 47696,
+				"output_tokens": 112,
+				"output_tokens_details": {
+					"thinking_tokens": 109
+				},
+				"server_tool_use": {
+					"web_search_requests": 0,
+					"web_fetch_requests": 0
+				},
+				"service_tier": "standard",
+				"cache_creation": {
+					"ephemeral_1h_input_tokens": 4193,
+					"ephemeral_5m_input_tokens": 0
+				},
+				"inference_geo": "global",
+				"iterations": [
+					{
+						"input_tokens": 2,
+						"output_tokens": 112,
+						"cache_read_input_tokens": 47696,
+						"cache_creation_input_tokens": 4193,
+						"cache_creation": {
+							"ephemeral_5m_input_tokens": 0,
+							"ephemeral_1h_input_tokens": 4193
+						},
+						"type": "message"
+					}
+				],
+				"speed": "standard",
+				"fallback_credit": null
+			},
+			"input_transformations": [],
+			"diagnostics": null,
+			"context_management": null
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:11.092Z"
+	},
+	{
+		"type": "system",
+		"uuid": "db184e36-b8c9-4e8b-ac51-0a2c5336606d",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:11.174Z"
+	},
+	{
+		"type": "system",
+		"uuid": "a6e13f98-3148-4969-b018-3fee3637cbb8",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:11.185Z"
+	},
+	{
+		"type": "user",
+		"uuid": "c2379042-82c6-43c1-b16c-640a5db65440",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"role": "user",
+			"content": "Count from 1 to 12, one number per line, then reply with exactly: counted"
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:37.436Z",
+		"origin": {
+			"kind": "human"
+		}
+	},
+	{
+		"type": "assistant",
+		"uuid": "79b8345d-27c0-48b5-a32c-7e4a6c12b816",
+		"session_id": "4ecd4361-bd8e-4912-8492-9885ac58d8df",
+		"message": {
+			"model": "claude-haiku-5-5",
+			"id": "msg_011CgQkUP21ptrUSqD9MmRuK",
+			"type": "message",
+			"role": "assistant",
+			"content": [
+				{
+					"type": "text",
+					"text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\ncounted"
+				}
+			],
+			"container": null,
+			"stop_reason": "end_turn",
+			"stop_sequence": null,
+			"stop_details": null,
+			"usage": {
+				"input_tokens": 2,
+				"cache_creation_input_tokens": 52,
+				"cache_read_input_tokens": 52001,
+				"output_tokens": 28,
+				"output_tokens_details": {
+					"thinking_tokens": 0
+				},
+				"server_tool_use": {
+					"web_search_requests": 0,
+					"web_fetch_requests": 0
+				},
+				"service_tier": "standard",
+				"cache_creation": {
+					"ephemeral_1h_input_tokens": 52,
+					"ephemeral_5m_input_tokens": 0
+				},
+				"inference_geo": "global",
+				"iterations": [
+					{
+						"input_tokens": 2,
+						"output_tokens": 28,
+						"cache_read_input_tokens": 52001,
+						"cache_creation_input_tokens": 52,
+						"cache_creation": {
+							"ephemeral_5m_input_tokens": 0,
+							"ephemeral_1h_input_tokens": 52
+						},
+						"type": "message"
+					}
+				],
+				"speed": "standard",
+				"fallback_credit": null
+			},
+			"input_transformations": [],
+			"diagnostics": null,
+			"context_management": null
+		},
+		"parent_tool_use_id": null,
+		"parent_agent_id": null,
+		"timestamp": "2026-10-26T11:13:39.073Z"
+	}
+]
