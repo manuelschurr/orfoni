@@ -1,0 +1,10 @@
+[Unit]
+Description=tmux server for orfoni sessions
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/tmux -L orfoni -f %h/.config/orfoni/tmux.conf start-server
+ExecStop=/usr/bin/tmux -L orfoni kill-server
+
+[Install]
+WantedBy=default.target
