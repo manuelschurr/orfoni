@@ -17,7 +17,7 @@ async function daemon(): Promise<void> {
 	const hub = await Hub.start({
 		tmux: createTmux(runTmux(process.env.ORFONI_TMUX_SOCKET ?? 'orfoni')),
 		hookSocket,
-		stateDir: join(homedir(), '.local/state/orfoni'),
+		stateDir: join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni'),
 		claudeConfigPath: join(homedir(), '.claude.json'),
 		shell: process.env.SHELL ?? '/bin/bash',
 		readHistory: (claudeSessionId, projectDir) => getSessionMessages(claudeSessionId, { dir: projectDir, includeSystemMessages: true }),
