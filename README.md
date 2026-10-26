@@ -55,3 +55,7 @@ npm run test:e2e
 ```
 
 `npm run test:e2e` drives the installed hub with real Claude Code sessions on the `haiku` model, so it needs the services running and uses a little of your Claude usage.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
