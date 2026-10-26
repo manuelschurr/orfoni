@@ -3,7 +3,7 @@
 mod sshd;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orfoni_lib::commands::{AppState, ConnectOutcome};
 use orfoni_lib::known_hosts::KnownHosts;
@@ -339,24 +339,25 @@ async fn a_hub_that_exits_at_once_is_never_reported_connected_and_backs_off() {
             let _ = tx.send(event);
         });
     opening.await.unwrap().unwrap();
+    let started = Instant::now();
 
-    let mut statuses = Vec::new();
-    let _ = timeout(Duration::from_millis(5500), async {
+    let mut shown = Vec::new();
+    let _ = timeout(Duration::from_secs(20), async {
         while let Some(event) = events.recv().await {
-            if let LinkEvent::Status(status) = event {
-                statuses.push(status);
+            match event {
+                LinkEvent::Status(Status::Reconnecting { attempt, .. }) => {
+                    shown.push(format!("reconnecting {attempt}"));
+                    if attempt == 3 {
+                        return;
+                    }
+                }
+                LinkEvent::Status(other) => shown.push(format!("{other:?}")),
+                LinkEvent::Line(_) => {}
             }
         }
     })
     .await;
 
-    let shown: Vec<String> = statuses
-        .iter()
-        .map(|status| match status {
-            Status::Reconnecting { attempt, .. } => format!("reconnecting {attempt}"),
-            other => format!("{other:?}"),
-        })
-        .collect();
     assert_eq!(
         shown,
         [
@@ -365,6 +366,11 @@ async fn a_hub_that_exits_at_once_is_never_reported_connected_and_backs_off() {
             "reconnecting 2",
             "reconnecting 3"
         ]
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(3),
+        "the waits of 1 and 2 s before attempts 2 and 3 were skipped: {:?}",
+        started.elapsed()
     );
     let logins = sshd.log().matches("Accepted publickey").count();
     assert_eq!(logins, 3, "{}", sshd.log());
