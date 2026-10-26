@@ -61,3 +61,16 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 	}
 	return items;
 }
+
+function sameEvent(a: ChatItem, b: ChatItem): boolean {
+	if (a.kind === 'user' && b.kind === 'user') return a.text === b.text;
+	if (a.kind === 'tool' && b.kind === 'tool') return a.toolUseId === b.toolUseId;
+	return false;
+}
+
+// The transcript stamps an event a moment before its hook reaches the hub, so the time cutoff alone keeps a copy of the first live item.
+export function joinHistory(history: ChatItem[], live: ChatItem[]): ChatItem[] {
+	const first = live[0];
+	const copy = first ? history.findLastIndex((item) => sameEvent(item, first)) : -1;
+	return [...(copy === -1 ? history : history.slice(0, copy)), ...live];
+}

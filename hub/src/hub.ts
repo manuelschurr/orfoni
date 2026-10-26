@@ -16,7 +16,7 @@ import {
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
-import { normalizeHistory } from './history.js';
+import { joinHistory, normalizeHistory } from './history.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
@@ -244,7 +244,7 @@ export class Hub {
 		this.view(client, session.id);
 		const { chat, chatStartedAt, claudeSessionId } = session.model;
 		const history = normalizeHistory(await this.options.readHistory(claudeSessionId, session.projectDir), chatStartedAt ?? Infinity);
-		return { session: summary(session), chat: [...history, ...chat] };
+		return { session: summary(session), chat: joinHistory(history, chat) };
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {

@@ -389,13 +389,15 @@ describe('openSession', () => {
 		transcript = JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
 		const client = await startHub();
 		const { id, claude } = await ready(client);
-		vi.setSystemTime(Date.parse('2026-10-26T11:13:30.000Z'));
-		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'live prompt', prompt_id: 'p9' }));
+		const prompt = 'Count from 1 to 12, one number per line, then reply with exactly: counted';
+		// The transcript stamps this prompt at 11:13:37.436, a moment before its hook reaches the hub.
+		vi.setSystemTime(Date.parse('2026-10-26T11:13:37.600Z'));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt, prompt_id: 'p9' }));
 		const opened = (await client.ok('openSession', { sessionId: id })) as { session: SessionSummary; chat: ChatItem[] };
 		expect(history).toEqual([{ claudeSessionId: claude, projectDir: PROJECT }]);
 		expect(opened.session).toMatchObject({ id, state: 'working' });
 		expect(opened.chat.map((item) => item.kind)).toEqual(['notice', 'user', 'tool', 'assistant', 'user']);
-		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: 'user-p9', text: 'live prompt', at: Date.parse('2026-10-26T11:13:30.000Z') });
+		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: 'user-p9', text: prompt, at: Date.parse('2026-10-26T11:13:37.600Z') });
 	});
 
 	test('an unknown session fails with not_found', async () => {

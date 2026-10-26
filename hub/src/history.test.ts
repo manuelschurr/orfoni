@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, test } from 'vitest';
-import { normalizeHistory } from './history.js';
+import type { ChatItem } from '@orfoni/protocol';
+import { joinHistory, normalizeHistory } from './history.js';
 
 const recorded: SessionMessage[] = JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
 
@@ -73,5 +74,32 @@ describe('normalizeHistory', () => {
 	test('a message that does not have the expected shape is skipped', () => {
 		const items = normalizeHistory([{ type: 'user', uuid: 'u', message: { content: 42 } } as unknown as SessionMessage, message('user', 'hello')]);
 		expect(items).toEqual([{ kind: 'user', id: expect.any(String), text: 'hello', at: Date.parse('2026-10-26T12:00:00.000Z') }]);
+	});
+});
+
+describe('joinHistory', () => {
+	const notice: ChatItem = { kind: 'notice', id: 'n1', text: 'summary', at: 1 };
+	const firstPrompt: ChatItem = { kind: 'user', id: 'user-h1', text: 'first', at: 2 };
+	const tool: ChatItem = { kind: 'tool', toolUseId: 't1', name: 'Bash', input: {}, status: 'running' };
+	const reply: ChatItem = { kind: 'assistant', id: 'assistant-h2', text: 'ok', done: true };
+
+	test('the transcript copy of the first live prompt and anything after it give way to the live chat', () => {
+		const live: ChatItem[] = [
+			{ kind: 'user', id: 'user-p1', text: 'second', at: 9 },
+			{ kind: 'assistant', id: 'm1', text: 'live reply', done: false },
+		];
+		const history: ChatItem[] = [notice, firstPrompt, reply, { kind: 'user', id: 'user-h3', text: 'second', at: 8 }, { kind: 'assistant', id: 'assistant-h4', text: 'live', done: true }];
+		expect(joinHistory(history, live)).toEqual([notice, firstPrompt, reply, ...live]);
+	});
+
+	test('a first live tool item cuts the history at the same tool call', () => {
+		const live: ChatItem[] = [{ ...tool, status: 'done', output: 'x' }];
+		expect(joinHistory([firstPrompt, tool], live)).toEqual([firstPrompt, ...live]);
+	});
+
+	test('history without a copy of the first live item stays whole', () => {
+		const live: ChatItem[] = [{ kind: 'user', id: 'user-p1', text: 'new', at: 9 }];
+		expect(joinHistory([notice, firstPrompt, reply], live)).toEqual([notice, firstPrompt, reply, ...live]);
+		expect(joinHistory([notice, firstPrompt], [])).toEqual([notice, firstPrompt]);
 	});
 });
