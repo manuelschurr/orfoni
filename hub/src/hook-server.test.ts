@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,7 @@ import { hookSettings } from './settings.js';
 
 let server: Server;
 let logs: string[];
-let calls: { header: string | undefined; body: unknown }[];
+let calls: { header: string | undefined; body: unknown; closed: AbortSignal | undefined }[];
 
 function socketPath(): string {
 	return join(mkdtempSync(join(tmpdir(), 'orfoni-hooks-')), 'orfoni', 'hooks.sock');
@@ -21,8 +21,8 @@ async function serve(answer: () => Promise<HookResponse>, path = socketPath()): 
 	calls = [];
 	server = await listenHooks(
 		{
-			hook: (header, body) => {
-				calls.push({ header, body });
+			hook: (header, body, closed) => {
+				calls.push({ header, body, closed });
 				return answer();
 			},
 		},
@@ -56,6 +56,12 @@ function send(path: string, method: string, url: string, body?: string): Promise
 
 const never = () => new Promise<HookResponse>(() => {});
 
+async function until(check: () => boolean): Promise<void> {
+	const deadline = Date.now() + 3000;
+	while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	if (!check()) throw new Error('condition never became true');
+}
+
 afterEach(() => {
 	server.closeAllConnections();
 	server.close();
@@ -66,7 +72,7 @@ describe('hook server', () => {
 		const path = await serve(never);
 		const body = { hook_event_name: 'Stop', session_id: 'c1', last_assistant_message: 'done' };
 		expect(await runHookCommand(path, 'Stop', body)).toBe('');
-		expect(calls).toEqual([{ header: 'session-1', body }]);
+		expect(calls).toMatchObject([{ header: 'session-1', body }]);
 	});
 
 	test('a PermissionRequest is held until the hub answers, and curl prints the answer', async () => {
@@ -76,12 +82,30 @@ describe('hook server', () => {
 		const body = { hook_event_name: 'PermissionRequest', session_id: 'c1', tool_name: 'Write', tool_input: {} };
 		const done = runHookCommand(path, 'PermissionRequest', body).then((stdout) => (printed = stdout));
 		await new Promise((resolve) => setTimeout(resolve, 300));
-		expect(calls).toEqual([{ header: 'session-1', body }]);
+		expect(calls).toMatchObject([{ header: 'session-1', body }]);
 		expect(printed).toBeUndefined();
 		const decision: HookResponse = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
 		answer(decision);
 		await done;
 		expect(JSON.parse(printed!)).toEqual(decision);
+	});
+
+	test('killing the curl of a held PermissionRequest, as Claude Code does on a terminal No or Escape, tells the hub the connection closed', async () => {
+		const path = await serve(never);
+		const entry = (hookSettings(path) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.PermissionRequest![0]!.hooks[0]!;
+		const child = spawn('/bin/sh', ['-c', entry.command], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ORFONI_SESSION: 'session-1' } });
+		child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: 'c1', tool_name: 'Write', tool_input: {} }));
+		await until(() => calls.length === 1);
+		expect(calls[0]!.closed?.aborted).toBe(false);
+		process.kill(-child.pid!, 'SIGTERM');
+		await until(() => calls[0]!.closed?.aborted === true);
+	});
+
+	test('a hook answered at once never reports a closed connection', async () => {
+		const path = await serve(never);
+		await runHookCommand(path, 'Stop', { hook_event_name: 'Stop', session_id: 'c1' });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(calls[0]!.closed?.aborted).toBe(false);
 	});
 
 	test('the socket lives in a directory only its owner can enter, even one that existed before', async () => {

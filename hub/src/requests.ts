@@ -129,6 +129,12 @@ export class PendingRequests {
 		}
 	}
 
+	cancel(requestId: RequestId): boolean {
+		if (!this.pending.has(requestId)) return false;
+		this.close(requestId, {});
+		return true;
+	}
+
 	withdrawSession(sessionId: SessionId): RequestId[] {
 		return this.withdraw((request) => request.sessionId === sessionId);
 	}

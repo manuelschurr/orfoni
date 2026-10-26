@@ -371,6 +371,35 @@ describe('requests', () => {
 		expect(client.state(id)).toBe('working');
 	});
 
+	test('a request whose hook Claude Code kills, as it does when the terminal answers No or Escape, is withdrawn and the session takes messages again', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'write' }));
+		const connection = new AbortController();
+		void hub.hook(id, body('PermissionRequest', claude), connection.signal);
+		expect(client.state(id)).toBe('needs_approval');
+		connection.abort();
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'approval', status: 'withdrawn' });
+		expect(client.state(id)).toBe('idle');
+		const sent = client.request('send', { sessionId: id, text: 'try something else' });
+		await vi.advanceTimersByTimeAsync(0);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'try something else' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('a closed connection after a decision changes nothing', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const connection = new AbortController();
+		void hub.hook(id, body('PermissionRequest', claude), connection.signal);
+		const approval = client.chat(id).at(-1);
+		if (approval?.kind !== 'approval') throw new Error('expected an approval');
+		await client.ok('decide', { requestId: approval.requestId, decision: { type: 'allow' } });
+		connection.abort();
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'approval', status: 'allowed' });
+		expect(client.state(id)).toBe('working');
+	});
+
 	test('a question and a plan need an answer', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);

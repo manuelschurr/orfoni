@@ -102,7 +102,7 @@ The hub has these jobs:
 - Accept a Claude session ID only as a UUID, from hooks and from the state file, and pass it to `claude` only glued to its option, as `--resume=<id>`. The ID arrives in hook input, so without both rules a forged hook could add options to `claude`'s arguments.
 - Turn hook events into session states and chat messages, and forward both to connected apps.
 - Send your chat messages into the session as bracketed pastes of at most 400 characters without a newline, with Ctrl+J between lines and Enter at the end, only while the session is waiting for input or working. Claude Code queues a message typed while it works. Pastes that small stay plain text, while one paste of a long message would reach Claude as untrusted pasted content (spike, 2026-10-26).
-- Hold `PermissionRequest` hook requests open until an app answers. If the terminal answers first, the hub sees the tool run and withdraws the card.
+- Hold `PermissionRequest` hook requests open until an app answers. If the terminal answers Yes first, the hub sees the tool run and withdraws the card. If the terminal answers No or Escape, Claude Code kills the hook within 0.3 s and ends the turn without `PostToolUse`, `PostToolUseFailure`, or `Stop` (measured 2026-10-26). The hub then sees the held connection close, withdraws the card, and marks the session `idle`.
 - Answer questions from `AskUserQuestion` and plan approvals from `ExitPlanMode` the same way. The hooks docs describe answering both through `updatedInput`.
 - Interrupt a turn by sending Escape to the pane.
 - Read history and titles through the Agent SDK's `listSessions()` and `getSessionMessages()`. Claude's own transcript store is the source of truth for both. These functions read files and start no Claude process.
@@ -139,11 +139,11 @@ Each session has one state, and every event moves it to a defined next state. Th
 | State | Meaning | Enters on | Leaves on |
 |---|---|---|---|
 | `offline` | No `claude` process runs in the session's tmux session | `SessionEnd`, the pane exits | you send a message, which starts `claude --resume` |
-| `working` | A turn is running | `UserPromptSubmit`, an answered request | a request, `Stop`, `StopFailure` |
+| `working` | A turn is running | `UserPromptSubmit`, a request answered from the app or with Yes in the terminal | a request, `Stop`, `StopFailure` |
 | `needs_approval` | Claude waits for permission to use a tool | `PermissionRequest` | an answer from the app or the terminal |
 | `needs_answer` | Claude asked a question or wants a plan approved | `AskUserQuestion` or `ExitPlanMode` | an answer from the app or the terminal |
 | `answered` | The turn finished and you have not read the reply | `Stop` | you open the session |
-| `idle` | The turn finished and you have read the reply | you open an `answered` session | `UserPromptSubmit` |
+| `idle` | The turn finished and you have read the reply | you open an `answered` session, the terminal answers a request with No or Escape | `UserPromptSubmit` |
 | `failed` | The turn ended with an error | `StopFailure` | `UserPromptSubmit` |
 
 A row in the session list is a tmux session. Claude's session ID is a property of that row. It changes when you run `/clear`, and the chat then starts empty while the earlier conversation stays in the project's history.

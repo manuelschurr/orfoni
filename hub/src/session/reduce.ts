@@ -16,6 +16,7 @@ export type SessionInput =
 	| { kind: 'hook'; event: HookEvent; at: number }
 	| { kind: 'request_opened'; requestId: RequestId; item: ChatItem; at: number }
 	| { kind: 'request_closed'; requestId: RequestId; outcome: RequestOutcome | 'withdrawn'; at: number }
+	| { kind: 'request_cancelled'; requestId: RequestId; at: number }
 	| { kind: 'view_changed'; viewing: boolean; at: number }
 	| { kind: 'pane_exited'; at: number };
 
@@ -41,6 +42,17 @@ function isTool(toolUseId: string) {
 
 function isAssistant(messageId: string) {
 	return (item: ChatItem): item is AssistantItem => item.kind === 'assistant' && item.id === messageId;
+}
+
+function closeRequest(model: SessionModel, requestId: RequestId, outcome: RequestOutcome | 'withdrawn', after: SessionStateKind, at: number): SessionModel {
+	const openRequests = model.openRequests.filter((id) => id !== requestId);
+	const next = {
+		...model,
+		openRequests,
+		chat: model.chat.map((item) => ('requestId' in item && item.requestId === requestId ? ({ ...item, status: outcome } as ChatItem) : item)),
+	};
+	const waiting = model.state === 'needs_approval' || model.state === 'needs_answer';
+	return waiting && openRequests.length === 0 ? enter(next, after, at) : next;
 }
 
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
@@ -142,20 +154,10 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				at,
 			);
 		}
-		case 'request_closed': {
-			const openRequests = model.openRequests.filter((id) => id !== input.requestId);
-			const next = {
-				...model,
-				openRequests,
-				chat: model.chat.map((item) =>
-					'requestId' in item && item.requestId === input.requestId
-						? ({ ...item, status: input.outcome } as ChatItem)
-						: item,
-				),
-			};
-			const waiting = model.state === 'needs_approval' || model.state === 'needs_answer';
-			return waiting && openRequests.length === 0 ? enter(next, 'working', at) : next;
-		}
+		case 'request_closed':
+			return closeRequest(model, input.requestId, input.outcome, 'working', at);
+		case 'request_cancelled':
+			return closeRequest(model, input.requestId, 'withdrawn', 'idle', at);
 		case 'view_changed':
 			return enter({ ...model, viewing: input.viewing }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
 		case 'pane_exited':

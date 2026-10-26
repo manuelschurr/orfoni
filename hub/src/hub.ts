@@ -128,7 +128,7 @@ export class Hub {
 		};
 	}
 
-	async hook(sessionHeader: string | undefined, body: unknown): Promise<HookResponse> {
+	async hook(sessionHeader: string | undefined, body: unknown, closed?: AbortSignal): Promise<HookResponse> {
 		const id = SessionId.safeParse(sessionHeader);
 		const session = id.success ? this.sessions.get(id.data) : undefined;
 		if (!session) {
@@ -143,7 +143,7 @@ export class Hub {
 			this.options.log(`orfoni-hub: dropped a hook for session ${session.id}: ${error.message}`);
 			return {};
 		}
-		if (event.type === 'permission_request') return this.openRequest(session, event);
+		if (event.type === 'permission_request') return this.openRequest(session, event, closed);
 		this.receive(session, event);
 		return {};
 	}
@@ -359,7 +359,7 @@ export class Hub {
 		this.apply(session, { kind: 'pane_exited', at });
 	}
 
-	private openRequest(session: Session, event: PermissionRequest): Promise<HookResponse> {
+	private openRequest(session: Session, event: PermissionRequest, closed: AbortSignal | undefined): Promise<HookResponse> {
 		const tool = session.model.chat.findLast((item): item is ToolItem => item.kind === 'tool' && item.name === event.name && item.status === 'running');
 		let opened: ReturnType<PendingRequests['open']>;
 		try {
@@ -369,7 +369,12 @@ export class Hub {
 			this.options.log(`orfoni-hub: left a request of session ${session.id} to the terminal: ${error.message}`);
 			return Promise.resolve({});
 		}
-		this.apply(session, { kind: 'request_opened', requestId: opened.requestId, item: opened.item, at: Date.now() });
+		const { requestId } = opened;
+		this.apply(session, { kind: 'request_opened', requestId, item: opened.item, at: Date.now() });
+		// Claude Code kills the hook when the terminal answers No or Escape, and then ends the turn without another hook.
+		closed?.addEventListener('abort', () => {
+			if (this.requests.cancel(requestId)) this.apply(session, { kind: 'request_cancelled', requestId, at: Date.now() });
+		});
 		return opened.response;
 	}
 

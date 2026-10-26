@@ -28,9 +28,13 @@ function hookServer(hub: Pick<Hub, 'hook'>, log: (line: string) => void): Server
 			}
 			const header = request.headers['x-orfoni-session'];
 			const held = hookName(body) === 'PermissionRequest';
+			const closed = new AbortController();
+			response.on('close', () => {
+				if (!response.writableFinished) closed.abort();
+			});
 			// Claude Code waits for every hook to return, and MessageDisplay holds back the terminal's text until it does.
 			if (!held) response.end();
-			hub.hook(typeof header === 'string' ? header : undefined, body).then(
+			hub.hook(typeof header === 'string' ? header : undefined, body, closed.signal).then(
 				(answer) => {
 					if (held) response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(answer));
 				},
