@@ -1,10 +1,5 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
-import { probeHub } from './lib/debug-probe';
-import { TauriHubTransport } from './lib/tauri-transport';
+import './lib/ui/theme.css';
 
-const app = mount(App, { target: document.getElementById('app')! });
-
-if ('__TAURI_INTERNALS__' in window) void probeHub(new TauriHubTransport());
-
-export default app;
+export default mount(App, { target: document.getElementById('app')! });

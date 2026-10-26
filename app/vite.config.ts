@@ -1,8 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
 	plugins: [svelte()],
+	resolve: {
+		alias: { '@orfoni/protocol': fileURLToPath(new URL('../packages/protocol/src/index.ts', import.meta.url)) },
+	},
 	clearScreen: false,
 	server: {
 		port: 5173,
