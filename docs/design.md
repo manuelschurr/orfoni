@@ -53,9 +53,9 @@ VPS
         history and titles           ◄─ listSessions() and getSessionMessages()
         summaries                    ──► Claude API, Haiku 5.5
         memory per session           ◄─ each pane's cgroup files
-    tmux server for orfoni             one tmux session per Claude session
-        window 1: claude               the session itself, in its own memory-capped scope
-        more windows: shells           plain shells in the session's folder, opened from the app
+    tmux server for orfoni             one process per tmux session, each in its own memory-capped scope
+        orfoni-<id>                    a Claude session
+        orfoni-<id>-sh<n>              a plain shell opened from that session, in its folder
 ```
 
 The app stores nothing. All state lives on the VPS, so the desktop and the phone always agree. The hub is the only new server program. It never runs Claude itself. It starts sessions in tmux, listens to their hooks, and types into them.
@@ -95,7 +95,7 @@ The hub has these jobs:
 - Answer questions from `AskUserQuestion` and plan approvals from `ExitPlanMode` the same way. The hooks docs describe answering both through `updatedInput`.
 - Interrupt a turn by sending Escape to the pane.
 - Read history and titles through the Agent SDK's `listSessions()` and `getSessionMessages()`. Claude's own transcript store is the source of truth for both. These functions read files and start no Claude process.
-- Open extra tmux windows with a plain shell in the session's folder.
+- Open a plain shell in the session's folder as its own tmux session, tagged with the Claude session it belongs to, and close those shells when the Claude session is stopped.
 - Write summaries and track which answers you have not read yet.
 - Read memory use and out-of-memory kills for each pane.
 
@@ -135,6 +135,8 @@ Each session has one state, and every event moves it to a defined next state. Th
 
 A row in the session list is a tmux session. Claude's session ID is a property of that row. It changes when you run `/clear`, and the chat then starts empty while the earlier conversation stays in the project's history.
 
+Sessions started outside orfoni, such as panes in an existing multi-pane tmux session in Tabby, still report through the hooks and show up in the list. Each hook also sends `$TMUX`, which names the tmux server, so the hub can follow and answer them where they run. orfoni offers to move such a session into its own tmux session by resuming it there.
+
 ## The app
 
 The app is Tauri 2 with a Svelte 5 UI, built for Windows and Android from one codebase. The Rust side opens one SSH connection with `russh`, a pure-Rust SSH library. On that connection it runs `orfoni-hub connect` for the control channel and opens a terminal channel whenever you open a terminal.
@@ -143,7 +145,7 @@ The session list shows each project folder as a group. Each session row shows it
 
 The chat view follows claude.ai. Your messages and Claude's replies are bubbles, and Claude's reply appears line by line as it is written. Markdown renders, including code blocks. Tool calls show as compact cards that expand to show a command and its output or a file diff. An approval request shows as a card with Allow, Always allow, and Deny. A question shows as a card with its options. Claude's task list shows as a progress bar. The message box completes slash commands, sends `!` commands as shell commands inside the session, and stops a running turn.
 
-Each session has two terminal actions. Terminal opens the session's own pane, so you see and type into the same `claude` process the chat shows. New shell opens a plain shell in the session's folder as another tmux window. Both use xterm.js and attach through tmux, which repaints the whole screen on attach. On the phone the terminal has a row of keys for Esc, Tab, Shift+Tab, Ctrl+C, and the arrows, and a normal text field for typing, because Android keyboards often skip the input events that xterm.js relies on.
+Each session has two terminal actions. Terminal opens the session's own pane, so you see and type into the same `claude` process the chat shows. New shell opens a plain shell in the session's folder as its own tmux session. Every tmux session holds exactly one process, because tmux shares the current window between all clients attached to one tmux session. With one process per tmux session, the session's terminal and its shells can be open side by side without switching each other's view. Both actions use xterm.js and attach through tmux, which repaints the whole screen on attach. On the phone the terminal has a row of keys for Esc, Tab, Shift+Tab, Ctrl+C, and the arrows, and a normal text field for typing, because Android keyboards often skip the input events that xterm.js relies on.
 
 ## Messages between the app and the hub
 
