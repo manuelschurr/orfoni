@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createTmux, runTmux } from './tmux.js';
 
 function recorder(output = '') {
@@ -81,6 +84,18 @@ describe('createTmux', () => {
 
 	it('lists no panes on a real tmux socket that has no server', async () => {
 		expect(await createTmux(runTmux(`orfoni-test-${randomUUID()}`)).listSessions()).toEqual([]);
+	});
+
+	it('lists no panes on a real tmux server that runs without sessions, as orfoni-tmux.service leaves it', async () => {
+		const socket = `orfoni-test-${randomUUID()}`;
+		const run = runTmux(socket);
+		await run(['-f', fileURLToPath(new URL('../tmux.conf', import.meta.url)), 'start-server']);
+		try {
+			expect(await createTmux(run).listSessions()).toEqual([]);
+		} finally {
+			await run(['kill-server']);
+			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
+		}
 	});
 
 	it('still fails on other list-panes errors', async () => {

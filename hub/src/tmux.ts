@@ -28,7 +28,7 @@ export function runTmux(socket: string): Run {
 		});
 }
 
-const NO_SERVER = /no server running|error connecting to/;
+const NO_PANES = /no server running|error connecting to|no current target/;
 
 export function createTmux(run: Run): Tmux {
 	return {
@@ -41,7 +41,7 @@ export function createTmux(run: Run): Tmux {
 		},
 		async listSessions() {
 			const output = await run(['list-panes', '-a', '-F', '#{session_name}\t#{pane_pid}\t#{pane_dead}']).catch((error: Error) => {
-				if (NO_SERVER.test(error.message)) return '';
+				if (NO_PANES.test(error.message)) return '';
 				throw error;
 			});
 			return output
