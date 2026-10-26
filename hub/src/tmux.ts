@@ -24,6 +24,8 @@ export function runTmux(socket: string): Run {
 				if (error) reject(error);
 				else resolve(stdout);
 			});
+			// Most tmux commands exit without reading stdin, so the write can fail with EPIPE; the exit status above still reports how tmux did.
+			child.stdin?.on('error', () => {});
 			child.stdin?.end(stdin ?? '');
 		});
 }

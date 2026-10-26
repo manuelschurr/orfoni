@@ -98,6 +98,11 @@ describe('createTmux', () => {
 		}
 	});
 
+	it('reports the tmux error, not a crash, when tmux exits without reading its stdin', async () => {
+		const run = runTmux(`orfoni-test-${randomUUID()}`);
+		await expect(run(['kill-session', '-t', 'none'], 'x'.repeat(1_000_000))).rejects.toThrow(/error connecting to/);
+	});
+
 	it('still fails on other list-panes errors', async () => {
 		const tmux = createTmux(async () => {
 			throw new Error('spawn tmux ENOENT');
