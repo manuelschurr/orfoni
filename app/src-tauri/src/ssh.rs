@@ -77,6 +77,16 @@ fn shell_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
+// -u because the login environment may not name a UTF-8 locale, while xterm.js always speaks UTF-8.
+fn attach_command(target: &str) -> String {
+    let exact = if target.starts_with('=') {
+        target.to_string()
+    } else {
+        format!("={target}")
+    };
+    format!("tmux -u -L orfoni attach -t {}", shell_quote(&exact))
+}
+
 pub struct Connection {
     handle: Handle<HostKeyCheck>,
     hub_command: String,
@@ -153,12 +163,7 @@ impl Connection {
         channel
             .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
-        // -u because the login environment may not name a UTF-8 locale, while xterm.js always speaks UTF-8.
-        let command = format!(
-            "tmux -u -L orfoni attach -t {}",
-            shell_quote(&format!("={target}"))
-        );
-        channel.exec(true, command).await?;
+        channel.exec(true, attach_command(target)).await?;
         Ok(TerminalChannel::spawn(channel))
     }
 }
@@ -214,5 +219,22 @@ impl HubChannel {
             .data_bytes(bytes)
             .await
             .map_err(|_| SshError::Closed("the connection closed".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::attach_command;
+
+    #[test]
+    fn attach_command_adds_the_exact_match_prefix_once() {
+        assert_eq!(
+            attach_command("orfoni-x"),
+            "tmux -u -L orfoni attach -t '=orfoni-x'"
+        );
+        assert_eq!(
+            attach_command("=orfoni-x-sh1"),
+            "tmux -u -L orfoni attach -t '=orfoni-x-sh1'"
+        );
     }
 }
