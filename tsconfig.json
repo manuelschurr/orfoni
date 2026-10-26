@@ -1,4 +1,4 @@
 {
 	"files": [],
-	"references": [{ "path": "packages/protocol" }, { "path": "hub" }]
+	"references": [{ "path": "packages/protocol" }, { "path": "hub" }, { "path": "cli" }]
 }
