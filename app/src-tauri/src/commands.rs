@@ -17,18 +17,16 @@ use crate::terminal::TerminalInput;
 pub struct AppState {
     settings_path: PathBuf,
     known_hosts_path: PathBuf,
-    debug: bool,
     link: Mutex<Option<HubLink>>,
     terminals: Arc<Mutex<HashMap<u32, TerminalInput>>>,
     next_terminal: AtomicU32,
 }
 
 impl AppState {
-    pub fn new(data_dir: &Path, debug: bool) -> AppState {
+    pub fn new(data_dir: &Path) -> AppState {
         AppState {
             settings_path: data_dir.join("settings.json"),
             known_hosts_path: data_dir.join("known-hosts.json"),
-            debug,
             link: Mutex::new(None),
             terminals: Arc::default(),
             next_terminal: AtomicU32::new(1),
@@ -229,14 +227,6 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, String> {
 #[tauri::command]
 pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     settings.save(&state.settings_path).map_err(describe)
-}
-
-#[tauri::command]
-pub fn debug_log(state: State<'_, AppState>, message: String) -> bool {
-    if state.debug {
-        eprintln!("orfoni-debug: {message}");
-    }
-    state.debug
 }
 
 #[cfg(test)]

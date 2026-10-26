@@ -381,7 +381,7 @@ async fn the_app_takes_hub_lines_as_soon_as_its_link_reports_connected() {
         .unwrap()
         .trust("127.0.0.1", sshd.port, &sshd.host_fingerprint())
         .unwrap();
-    let state = Arc::new(AppState::new(data.path(), false));
+    let state = Arc::new(AppState::new(data.path()));
     let (tx, mut seen) = mpsc::unbounded_channel();
     let app = Arc::downgrade(&state);
 

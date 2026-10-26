@@ -43,8 +43,7 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let debug = std::env::var_os("ORFONI_DEBUG").is_some();
-            app.manage(commands::AppState::new(&app.path().app_data_dir()?, debug));
+            app.manage(commands::AppState::new(&app.path().app_data_dir()?));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -58,7 +57,6 @@ pub fn run() {
             commands::terminal_close,
             commands::settings_get,
             commands::settings_set,
-            commands::debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
