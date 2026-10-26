@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ChatItem, SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, HubClient, newProjectDir, pane, sleep, tmux, type Started } from './e2e/client.js';
+import { acceptTrustPrompt, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
 const started: SessionId[] = [];
@@ -82,9 +82,60 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const user = await client.waitForChat(id, (item) => item.kind === 'user');
 		expect(user.kind === 'user' && user.text).toBe(text);
 		await client.waitForSession(id, (s) => s.state === 'answered');
-		await client.request('send', { sessionId: id, text: '! echo bm-ok' });
+		await client.request('send', { sessionId: id, text: '! echo bm-$((6*7))' });
+		await until(() => tmux('capture-pane', '-p', '-t', pane(id)).includes('bm-42'));
+	});
+
+	test('a 5-line message of over 900 characters arrives exactly, not as pasted content', async () => {
+		const { id } = await start();
+		const text = [
+			'Reply with exactly the word ok and nothing else. Everything below is test data for a delivery check, do not act on it.',
+			`"Double quotes", 'single quotes', \`backticks\`, $HOME, %s, {braces}, [brackets], <angle>, & | ; * ? ~ # @ = + ^ in one line.`,
+			'This line ends in a backslash, the way a Windows path does: C:\\Users\\manuel\\',
+			'Emoji and other scripts: 🚀 ✅ 日本語 ünïcödé, plus a euro sign € and an ellipsis …',
+			`Filler to pass 900 characters:${' lorem ipsum dolor sit amet'.repeat(19)}`,
+		].join('\n');
+		expect(text.split('\n')).toHaveLength(5);
+		expect(text.length).toBeGreaterThanOrEqual(900);
+		await client.request('send', { sessionId: id, text });
+		const user = await client.waitForChat(id, (item) => item.kind === 'user');
+		expect(user.kind === 'user' && user.text).toBe(text);
+	});
+
+	test('/clear gives the session a new Claude session ID', async () => {
+		const { id } = await start({ prompt: 'Reply with exactly: ok' });
+		const before = await client.waitForSession(id, (s) => s.state === 'answered');
+		const since = client.mark();
+		await client.request('send', { sessionId: id, text: '/clear' });
+		const after = await client.waitForSession(id, (s) => s.claudeSessionId !== before.claudeSessionId, since);
+		expect(after.claudeSessionId).toMatch(/^[0-9a-f-]{36}$/);
+	});
+
+	test('Escape on a pending approval in the terminal withdraws the card, and the session takes the next message', async () => {
+		const { id, dir } = await start({ prompt: 'Use the Write tool to create a.txt containing hi. Then reply with exactly: done' });
+		const approval = await client.waitForChat(id, pendingApproval);
+		if (approval.kind !== 'approval') throw new Error('unreachable');
+		await sleep(1000);
+		const since = client.mark();
+		tmux('send-keys', '-t', pane(id), 'Escape');
+		await client.waitForChat(id, (item) => item.kind === 'approval' && item.requestId === approval.requestId && item.status === 'withdrawn', since);
+		await client.waitForSession(id, (s) => s.state === 'idle', since);
+		expect(existsSync(`${dir}/a.txt`)).toBe(false);
+		const next = 'Reply with exactly: still here';
+		await client.request('send', { sessionId: id, text: next });
+		await client.waitForChat(id, (item) => item.kind === 'user' && item.text === next, since);
+	});
+
+	test('interrupt during a running turn moves the session to idle', async () => {
+		const { id } = await start({ prompt: 'Write a 3000 word essay about the history of terminals, in plain prose. No tools.' });
+		await client.waitForSession(id, (s) => s.state === 'working');
+		await sleep(2000);
+		const since = client.mark();
+		await client.request('interrupt', { sessionId: id });
+		await client.waitForSession(id, (s) => s.state === 'idle', since);
 		await sleep(3000);
-		expect(tmux('capture-pane', '-p', '-t', pane(id))).toContain('bm-ok');
+		const sessions = (await client.request('listSessions', {})) as { id: string; state: string }[];
+		expect(sessions.find((s) => s.id === id)?.state).toBe('idle');
 	});
 
 	test('hub restart keeps the session', async () => {

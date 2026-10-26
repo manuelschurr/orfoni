@@ -42,8 +42,12 @@ export class HubClient {
 		return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
 	}
 
-	waitFor(predicate: (message: HubMessage) => boolean, timeoutMs = 120_000): Promise<HubMessage> {
-		const earlier = this.seen.find(predicate);
+	mark(): number {
+		return this.seen.length;
+	}
+
+	waitFor(predicate: (message: HubMessage) => boolean, since = 0, timeoutMs = 120_000): Promise<HubMessage> {
+		const earlier = this.seen.slice(since).find(predicate);
 		if (earlier) return Promise.resolve(earlier);
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => reject(new Error('timed out waiting for a hub message')), timeoutMs);
@@ -51,14 +55,14 @@ export class HubClient {
 		});
 	}
 
-	async waitForChat(sessionId: SessionId, predicate: (item: ChatItem) => boolean, timeoutMs?: number): Promise<ChatItem> {
-		const message = await this.waitFor((m) => m.type === 'chatItem' && m.sessionId === sessionId && predicate(m.item), timeoutMs);
+	async waitForChat(sessionId: SessionId, predicate: (item: ChatItem) => boolean, since?: number): Promise<ChatItem> {
+		const message = await this.waitFor((m) => m.type === 'chatItem' && m.sessionId === sessionId && predicate(m.item), since);
 		if (message.type !== 'chatItem') throw new Error('unreachable');
 		return message.item;
 	}
 
-	async waitForSession(sessionId: SessionId, predicate: (session: SessionSummary) => boolean, timeoutMs?: number): Promise<SessionSummary> {
-		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && predicate(m.session), timeoutMs);
+	async waitForSession(sessionId: SessionId, predicate: (session: SessionSummary) => boolean, since?: number): Promise<SessionSummary> {
+		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && predicate(m.session), since);
 		if (message.type !== 'sessionUpdated') throw new Error('unreachable');
 		return message.session;
 	}
@@ -116,6 +120,14 @@ export async function acceptTrustPrompt(started: Started): Promise<void> {
 			tmux('send-keys', '-t', target, 'Enter');
 			return;
 		}
+		await sleep(250);
+	}
+}
+
+export async function until(check: () => boolean, timeoutMs = 30_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!check()) {
+		if (Date.now() > deadline) throw new Error('condition never became true');
 		await sleep(250);
 	}
 }
