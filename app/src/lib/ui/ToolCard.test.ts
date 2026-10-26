@@ -14,6 +14,14 @@ test('a tool card starts collapsed and, opened, shows the first 200 lines of a l
 	expect(screen.getByText('250 more lines not shown')).toBeTruthy();
 });
 
+test('a 2 MB output on one line is cut by characters too, with a note of how many it left out', async () => {
+	render(ToolCard, { item: { kind: 'tool', toolUseId: 't3', name: 'Bash', input: { command: 'cat one-line.json' }, status: 'done', output: 'x'.repeat(2_000_000) } });
+	await fireEvent.click(screen.getByRole('button', { expanded: false }));
+	const output = screen.getByText('Output').closest('figure')?.querySelector('pre')?.textContent ?? '';
+	expect(output).toBe('x'.repeat(20_000));
+	expect(screen.getByText('1,980,000 more characters not shown')).toBeTruthy();
+});
+
 test('a short output is shown whole, without a note', async () => {
 	render(ToolCard, { item: { kind: 'tool', toolUseId: 't2', name: 'Read', input: { file_path: '/root/a.txt' }, status: 'done', output: 'one\ntwo' } });
 	expect(screen.getByText('/root/a.txt')).toBeTruthy();

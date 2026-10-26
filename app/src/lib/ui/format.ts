@@ -110,19 +110,21 @@ export function outputText(output: unknown): string {
 	return JSON.stringify(output, null, 2);
 }
 
-// Walks newlines instead of splitting, so a 2 MB output costs one pass and no array of every line.
-export function firstLines(value: string, max: number): { shown: string; hidden: number } {
-	const all = value.replace(/\n+$/, '');
-	let end = -1;
-	for (let line = 0; line < max; line++) {
-		end = all.indexOf('\n', end + 1);
-		if (end === -1) return { shown: all, hidden: 0 };
-	}
-	let hidden = 1;
-	for (let at = all.indexOf('\n', end + 1); at !== -1; at = all.indexOf('\n', at + 1)) hidden++;
-	return { shown: all.slice(0, end), hidden };
+function notShown(count: number, unit: string): string {
+	return `${count.toLocaleString('en')} more ${unit}${count === 1 ? '' : 's'} not shown`;
 }
 
-export function linesNote(hidden: number): string {
-	return `${hidden} more ${hidden === 1 ? 'line' : 'lines'} not shown`;
+// Walks newlines instead of splitting, so a 2 MB output costs one pass and no array of every line. The character cap keeps one huge line from being laid out whole.
+export function firstLines(value: string, maxLines: number, maxChars: number): { shown: string; note: string | null } {
+	const all = value.replace(/\n+$/, '');
+	let end = -1;
+	for (let line = 0; line < maxLines && end !== all.length; line++) {
+		end = all.indexOf('\n', end + 1);
+		if (end === -1) end = all.length;
+	}
+	if (end > maxChars) return { shown: all.slice(0, maxChars), note: notShown(all.length - maxChars, 'character') };
+	if (end === all.length) return { shown: all, note: null };
+	let hidden = 1;
+	for (let at = all.indexOf('\n', end + 1); at !== -1; at = all.indexOf('\n', at + 1)) hidden++;
+	return { shown: all.slice(0, end), note: notShown(hidden, 'line') };
 }

@@ -17,6 +17,25 @@ test('a pending approval offers Allow, Always allow, and Deny, and Allow answers
 	expect(transport.requests('decide')).toMatchObject([{ requestId: 'r1', decision: { type: 'allow' } }]);
 });
 
+test('an approval for a long command or file shows the whole input on demand before you decide', async () => {
+	const { client } = await connectedClient([summary('a1', 'needs_approval')]);
+	const command = Array.from({ length: 450 }, (_, i) => `echo line ${i + 1}`).join('\n');
+	const bash = render(ApprovalCard, { client, item: { kind: 'approval', requestId, toolName: 'Bash', input: { command }, status: 'pending' } });
+	expect(document.body.textContent).toContain('echo line 200');
+	expect(document.body.textContent).not.toContain('echo line 201');
+	expect(screen.getByText('250 more lines not shown')).toBeTruthy();
+	await fireEvent.click(screen.getByRole('button', { name: 'Show the whole command' }));
+	expect(document.body.textContent).toContain('echo line 450');
+	expect(screen.queryByText(/not shown/)).toBeNull();
+	bash.unmount();
+
+	const content = 'y'.repeat(300_000);
+	render(ApprovalCard, { client, item: { kind: 'approval', requestId, toolName: 'Write', input: { file_path: '/root/big.txt', content }, status: 'pending' } });
+	expect(screen.getByText('280,000 more characters not shown')).toBeTruthy();
+	await fireEvent.click(screen.getByRole('button', { name: 'Show the whole input' }));
+	expect(screen.getByText('Input').closest('figure')?.querySelector('pre')?.textContent).toBe(content);
+});
+
 test('a pending question answers the hub with the option you pick', async () => {
 	const { client, transport } = await connectedClient([summary('a1', 'needs_answer')]);
 	render(QuestionCard, { client, item: { kind: 'question', requestId, questions: [question], status: 'pending' } });

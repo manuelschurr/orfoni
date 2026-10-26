@@ -1,16 +1,21 @@
 <script lang="ts">
-	import { firstLines, linesNote } from './format';
+	import { firstLines } from './format';
 
 	const MAX_LINES = 200;
-	let { text, label }: { text: string; label: string } = $props();
-	const excerpt = $derived(firstLines(text, MAX_LINES));
+	const MAX_CHARS = 20_000;
+	let { text, label, expandable = false }: { text: string; label: string; expandable?: boolean } = $props();
+	let whole = $state(false);
+	const excerpt = $derived(whole ? { shown: text, note: null } : firstLines(text, MAX_LINES, MAX_CHARS));
 </script>
 
 <figure class="excerpt">
 	<figcaption>{label}</figcaption>
 	<pre>{excerpt.shown}</pre>
-	{#if excerpt.hidden > 0}
-		<p class="note">{linesNote(excerpt.hidden)}</p>
+	{#if excerpt.note}
+		<p class="note">
+			{excerpt.note}
+			{#if expandable}<button class="btn btn-quiet" onclick={() => (whole = true)}>Show the whole {label.toLowerCase()}</button>{/if}
+		</p>
 	{/if}
 </figure>
 
@@ -41,8 +46,17 @@
 	}
 
 	.note {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.2rem 0.6rem;
 		margin: 0.3rem 0 0;
 		color: var(--muted);
 		font-size: 0.8125rem;
+	}
+
+	.note .btn {
+		padding-block: 0.15rem;
+		font-size: inherit;
 	}
 </style>

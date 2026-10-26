@@ -32,7 +32,7 @@
 		{#if summary}<p class="target">{summary}</p>{/if}
 	{:else}
 		{#if summary && item.toolName !== 'Bash'}<p class="target">{summary}</p>{/if}
-		<Excerpt label={item.toolName === 'Bash' ? 'Command' : 'Input'} text={inputText(item.toolName, item.input)} />
+		<Excerpt label={item.toolName === 'Bash' ? 'Command' : 'Input'} text={inputText(item.toolName, item.input)} expandable />
 		<div class="request-actions">
 			<button class="btn btn-primary" disabled={busy} onclick={() => decide({ type: 'allow' })}>Allow</button>
 			<button class="btn" disabled={busy} onclick={() => decide({ type: 'allow_always' })}>Always allow</button>
