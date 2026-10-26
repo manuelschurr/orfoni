@@ -73,6 +73,18 @@ npm run test:e2e
 
 `npm run test:e2e` drives the installed hub with real Claude Code sessions on the `haiku` model, so it needs the services running and uses a little of your Claude usage.
 
+The app also runs in a browser on the server, where a development bridge in `tools/dev-bridge` connects it to the hub and to tmux. The Playwright checks drive the app that way. The bridge keeps its own dependencies outside the npm workspaces, and the checks need Playwright's Chromium:
+
+```sh
+npm ci --prefix tools/dev-bridge
+npx playwright install chromium
+npx playwright test -c app/e2e
+```
+
+The checks start the bridge and Vite, run real Claude Code sessions on the `haiku` model through the installed hub, and remove the sessions they started.
+
+The bridge listens on 127.0.0.1:4790 and refuses every connection that does not carry its token, because a terminal it opens is a shell on the server. It takes the token from `ORFONI_BRIDGE_TOKEN`, or generates one at start and prints the address to open. The Playwright checks generate a token for each run. To run them against a bridge that is already running, export that bridge's token as `ORFONI_BRIDGE_TOKEN` first. To use the browser build yourself, run `node tools/dev-bridge/bridge.mjs` and `npm run dev -w app`, then open the address the bridge printed.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
