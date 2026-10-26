@@ -1,8 +1,97 @@
-import { render, screen } from '@testing-library/svelte';
-import { expect, test } from 'vitest';
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeAll, expect, test } from 'vitest';
 import App from './App.svelte';
+import type { Settings } from './lib/tauri-transport';
+import { stubDialogs, summary } from './lib/testing';
+
+type Internals = {
+	invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+	runCallback: (id: number, data: unknown) => void;
+};
+type Handler = (cmd: string, args: Record<string, unknown>, push: (message: unknown) => void) => unknown;
+
+const settings: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect' };
+const globals = window as unknown as { __TAURI_INTERNALS__: Internals; isTauri?: boolean };
+
+function inTauri(handle: Handler): string[] {
+	const commands: string[] = [];
+	let push: (message: unknown) => void = () => {};
+	mockIPC(() => null);
+	globals.isTauri = true;
+	globals.__TAURI_INTERNALS__.invoke = async (cmd, args = {}) => {
+		commands.push(cmd);
+		if (cmd === 'connect') {
+			const channel = args.events as { id: number };
+			let index = 0;
+			push = (message) => globals.__TAURI_INTERNALS__.runCallback(channel.id, { index: index++, message });
+		}
+		return handle(cmd, args, push);
+	};
+	return commands;
+}
+
+beforeAll(stubDialogs);
+
+afterEach(() => {
+	cleanup();
+	clearMocks();
+	delete globals.isTauri;
+});
 
 test('shows the app name', () => {
 	render(App);
 	expect(screen.getByText('orfoni')).toBeTruthy();
+});
+
+test('in Tauri, the first start asks for the connection settings and connects nowhere', async () => {
+	const commands = inTauri((cmd) => (cmd === 'settings_get' ? { ...settings, host: '' } : null));
+	render(App);
+	expect(await screen.findByRole('dialog', { name: 'Connect to the VPS' })).toBeTruthy();
+	expect(commands).not.toContain('connect');
+});
+
+test('in Tauri, a saved host connects, lists the sessions, and the settings open from the sidebar and close again', async () => {
+	const commands = inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string };
+				if (request.method === 'listSessions') push({ kind: 'line', value: JSON.stringify({ type: 'response', id: request.id, ok: true, result: [summary('a1', 'idle', { title: 'Fix the login page' })] }) });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	render(App);
+	expect(await screen.findByText('Fix the login page')).toBeTruthy();
+	await fireEvent.click(screen.getByRole('button', { name: 'Connection settings' }));
+	expect(((await screen.findByLabelText('Host')) as HTMLInputElement).value).toBe('vps.example.org');
+	await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+	await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Connect to the VPS' })).toBeNull());
+	expect(screen.getByText('Fix the login page')).toBeTruthy();
+	expect(commands.filter((cmd) => cmd === 'connect')).toHaveLength(1);
+});
+
+test('in Tauri, an unknown host key is asked about, and trusting it connects', async () => {
+	let trusted = false;
+	const commands = inTauri((cmd, _args, push) => {
+		if (cmd === 'settings_get') return settings;
+		if (cmd === 'trust_host') trusted = true;
+		if (cmd !== 'connect') return null;
+		if (!trusted) return { kind: 'hostKeyUnknown', fingerprint: 'SHA256:first' };
+		push({ kind: 'status', value: { kind: 'connected' } });
+		return { kind: 'connected' };
+	});
+	render(App);
+	const dialog = await screen.findByRole('dialog', { name: 'Trust this host?' });
+	expect(dialog.textContent).toContain('SHA256:first');
+	await fireEvent.click(screen.getByRole('button', { name: 'Trust and connect' }));
+	expect(await screen.findByRole('navigation', { name: 'Sessions' })).toBeTruthy();
+	expect(commands.filter((cmd) => cmd === 'connect')).toHaveLength(2);
 });
