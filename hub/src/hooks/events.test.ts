@@ -35,7 +35,26 @@ describe('parseHookEvent', () => {
 			type: 'prompt',
 			claudeSessionId: tuiSession,
 			text: 'Use the Write tool to create a.txt containing hi. Then reply with exactly: done',
+			promptId: 'e2079599-f644-42e2-bc0a-5a54c700506b',
 		});
+	});
+
+	test('UserPromptSubmit without prompt_id still gives each prompt its own ID', () => {
+		const { prompt_id: _, ...body } = fixture('UserPromptSubmit') as Record<string, unknown>;
+		const a = parseHookEvent('UserPromptSubmit', body);
+		const b = parseHookEvent('UserPromptSubmit', body);
+		if (a.type !== 'prompt' || b.type !== 'prompt') throw new Error('expected prompt events');
+		expect(a.promptId).toMatch(/.+/);
+		expect(a.promptId).not.toBe(b.promptId);
+	});
+
+	test.each(['PreToolUse', 'PostToolUse', 'PostToolUseFailure'])('%s inside a subagent carries the agent ID', (name) => {
+		const body = { ...(fixture(name) as Record<string, unknown>), agent_id: 'agent-7' };
+		expect(parseHookEvent(name, body)).toMatchObject({ agentId: 'agent-7' });
+	});
+
+	test('PreToolUse in the main conversation has no agent ID', () => {
+		expect(parseHookEvent('PreToolUse', fixture('PreToolUse'))).not.toHaveProperty('agentId', expect.anything());
 	});
 
 	test('MessageDisplay gives assistant_text with the batch position', () => {

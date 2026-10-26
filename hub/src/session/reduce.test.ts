@@ -15,11 +15,11 @@ function hook<T extends HookEvent['type']>(type: T, body: EventBody<T>, at: numb
 }
 
 function run(...inputs: SessionInput[]): SessionModel {
-	return inputs.reduce(reduce, emptySession(0));
+	return inputs.reduce(reduce, emptySession(0, first));
 }
 
 const started = hook('session_start', { source: 'startup' }, 1);
-const prompted = hook('prompt', { text: 'hi' }, 2);
+const prompted = hook('prompt', { text: 'hi', promptId: 'p1' }, 2);
 
 function approval(requestId: RequestId): ChatItem {
 	return { kind: 'approval', requestId, toolName: 'Write', input: { file_path: 'a.txt' }, status: 'pending' };
@@ -27,13 +27,14 @@ function approval(requestId: RequestId): ChatItem {
 
 describe('reduce', () => {
 	test('emptySession starts idle with no conversation', () => {
-		expect(emptySession(7)).toEqual({
+		expect(emptySession(7, first)).toEqual({
 			state: 'idle',
 			stateSince: 7,
-			claudeSessionId: null,
+			claudeSessionId: first,
 			chat: [],
 			openRequests: [],
-			viewed: false,
+			viewing: false,
+			chatStartedAt: null,
 		});
 	});
 
@@ -51,21 +52,21 @@ describe('reduce', () => {
 		expect(model.state).toBe('working');
 	});
 
-	test('prompt appends a user item and starts working', () => {
+	test('prompt appends a user item named after the prompt ID and starts working', () => {
 		const model = run(started, prompted);
-		expect(model.chat).toEqual([{ kind: 'user', id: expect.any(String), text: 'hi', at: 2 }]);
+		expect(model.chat).toEqual([{ kind: 'user', id: 'user-p1', text: 'hi', at: 2 }]);
 		expect(model.state).toBe('working');
 		expect(model.stateSince).toBe(2);
 	});
 
 	test('two prompts give user items with different IDs', () => {
-		const model = run(started, prompted, hook('stop', { lastAssistantMessage: null }, 3), hook('prompt', { text: 'again' }, 4));
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: null }, 3), hook('prompt', { text: 'again', promptId: 'p2' }, 4));
 		const ids = model.chat.map((item) => (item.kind === 'user' ? item.id : null));
 		expect(new Set(ids).size).toBe(2);
 	});
 
 	test('a state that does not change keeps its stateSince', () => {
-		const model = run(started, prompted, hook('prompt', { text: 'queued' }, 3));
+		const model = run(started, prompted, hook('prompt', { text: 'queued', promptId: 'p2' }, 3));
 		expect(model.state).toBe('working');
 		expect(model.stateSince).toBe(2);
 	});
@@ -201,9 +202,20 @@ describe('reduce', () => {
 		expect(model.stateSince).toBe(3);
 	});
 
-	test('stop goes idle when the session was viewed since the prompt', () => {
-		const model = run(started, prompted, { kind: 'viewed', at: 3 }, hook('stop', { lastAssistantMessage: 'done' }, 4));
+	test('stop goes idle while a client views the session', () => {
+		const model = run(started, prompted, { kind: 'view_changed', viewing: true, at: 3 }, hook('stop', { lastAssistantMessage: 'done' }, 4));
 		expect(model.state).toBe('idle');
+	});
+
+	test('stop is answered once the last client stopped viewing', () => {
+		const model = run(
+			started,
+			prompted,
+			{ kind: 'view_changed', viewing: true, at: 3 },
+			{ kind: 'view_changed', viewing: false, at: 4 },
+			hook('stop', { lastAssistantMessage: 'done' }, 5),
+		);
+		expect(model.state).toBe('answered');
 	});
 
 	test('stop_failure appends a notice with the error text and fails', () => {
@@ -218,13 +230,19 @@ describe('reduce', () => {
 	});
 
 	test('a prompt after a failure starts working again', () => {
-		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3), hook('prompt', { text: 'retry' }, 4));
+		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3), hook('prompt', { text: 'retry', promptId: 'p2' }, 4));
 		expect(model.state).toBe('working');
 	});
 
 	test('session_end goes offline', () => {
 		const model = run(started, prompted, hook('session_end', { reason: 'prompt_input_exit' }, 3));
 		expect(model.state).toBe('offline');
+		expect(model.stateSince).toBe(3);
+	});
+
+	test.each(['clear', 'resume'])('session_end for /%s keeps the state, because the process keeps running', (reason) => {
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_end', { reason }, 4));
+		expect(model.state).toBe('answered');
 		expect(model.stateSince).toBe(3);
 	});
 
@@ -237,30 +255,78 @@ describe('reduce', () => {
 		expect(model.state).toBe('idle');
 	});
 
-	test('viewed turns answered into idle and marks the session viewed', () => {
-		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), { kind: 'viewed', at: 4 });
+	test('view_changed to viewing turns answered into idle', () => {
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), { kind: 'view_changed', viewing: true, at: 4 });
 		expect(model.state).toBe('idle');
 		expect(model.stateSince).toBe(4);
-		expect(model.viewed).toBe(true);
+		expect(model.viewing).toBe(true);
 	});
 
-	test('viewed during a turn keeps working', () => {
-		const model = run(started, prompted, { kind: 'viewed', at: 3 });
+	test('view_changed during a turn keeps working', () => {
+		const model = run(started, prompted, { kind: 'view_changed', viewing: true, at: 3 });
 		expect(model.state).toBe('working');
-		expect(model.viewed).toBe(true);
+		expect(model.viewing).toBe(true);
 	});
 
-	test('the next prompt clears viewed, so the next stop is answered again', () => {
+	test('view_changed to not viewing leaves the state alone', () => {
 		const model = run(
 			started,
 			prompted,
-			{ kind: 'viewed', at: 3 },
+			hook('stop', { lastAssistantMessage: 'done' }, 3),
+			{ kind: 'view_changed', viewing: true, at: 4 },
+			{ kind: 'view_changed', viewing: false, at: 5 },
+		);
+		expect(model.state).toBe('idle');
+		expect(model.viewing).toBe(false);
+	});
+
+	test('a prompt keeps viewing, so the next stop goes idle again', () => {
+		const model = run(
+			started,
+			prompted,
+			{ kind: 'view_changed', viewing: true, at: 3 },
 			hook('stop', { lastAssistantMessage: 'done' }, 4),
-			hook('prompt', { text: 'more' }, 5),
+			hook('prompt', { text: 'more', promptId: 'p2' }, 5),
 			hook('stop', { lastAssistantMessage: 'done again' }, 6),
 		);
-		expect(model.viewed).toBe(false);
-		expect(model.state).toBe('answered');
+		expect(model.viewing).toBe(true);
+		expect(model.state).toBe('idle');
+	});
+
+	test('notices keep distinct IDs across /clear', () => {
+		const failed = hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3);
+		const before = run(started, prompted, failed);
+		const after = run(started, prompted, failed, hook('session_start', { source: 'clear' }, 4, second), hook('prompt', { text: 'x', promptId: 'p2' }, 5), failed);
+		const noticeIds = [...before.chat, ...after.chat].flatMap((item) => (item.kind === 'notice' ? [item.id] : []));
+		expect(noticeIds).toHaveLength(2);
+		expect(new Set(noticeIds).size).toBe(2);
+	});
+
+	test('tool events from a subagent stay out of the chat', () => {
+		const model = run(
+			started,
+			prompted,
+			hook('tool_start', { toolUseId: 'a1', name: 'Agent', input: { prompt: 'look around' } }, 3),
+			hook('tool_start', { toolUseId: 's1', name: 'Bash', input: { command: 'ls' }, agentId: 'agent-7' }, 4),
+			hook('tool_end', { toolUseId: 's1', name: 'Bash', output: 'a.txt', agentId: 'agent-7' }, 5),
+			hook('tool_failed', { toolUseId: 's2', name: 'Read', error: 'missing', interrupted: false, agentId: 'agent-7' }, 6),
+			hook('tool_end', { toolUseId: 'a1', name: 'Agent', output: 'found a.txt' }, 7),
+		);
+		expect(model.chat.slice(1)).toEqual([
+			{ kind: 'tool', toolUseId: 'a1', name: 'Agent', input: { prompt: 'look around' }, status: 'done', output: 'found a.txt' },
+		]);
+	});
+
+	test('chatStartedAt is when the conversation got its first chat item', () => {
+		const model = run(started, prompted, hook('assistant_text', { messageId: 'm1', index: 0, final: true, delta: 'ok' }, 3));
+		expect(run(started).chatStartedAt).toBeNull();
+		expect(model.chatStartedAt).toBe(2);
+	});
+
+	test('chatStartedAt restarts with the conversation after /clear', () => {
+		const cleared = run(started, prompted, hook('session_start', { source: 'clear' }, 3, second));
+		expect(cleared.chatStartedAt).toBeNull();
+		expect(reduce(cleared, hook('prompt', { text: 'new', promptId: 'p2' }, 4, second)).chatStartedAt).toBe(4);
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {

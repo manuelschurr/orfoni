@@ -1,27 +1,29 @@
+import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind } from '@orfoni/protocol';
 import type { HookEvent } from '../hooks/events.js';
 
 export interface SessionModel {
 	state: SessionStateKind;
 	stateSince: number;
-	claudeSessionId: ClaudeSessionId | null;
+	claudeSessionId: ClaudeSessionId;
 	chat: ChatItem[];
 	openRequests: RequestId[];
-	viewed: boolean;
+	viewing: boolean;
+	chatStartedAt: number | null;
 }
 
 export type SessionInput =
 	| { kind: 'hook'; event: HookEvent; at: number }
 	| { kind: 'request_opened'; requestId: RequestId; item: ChatItem; at: number }
 	| { kind: 'request_closed'; requestId: RequestId; outcome: RequestOutcome | 'withdrawn'; at: number }
-	| { kind: 'viewed'; at: number }
+	| { kind: 'view_changed'; viewing: boolean; at: number }
 	| { kind: 'pane_exited'; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
 
-export function emptySession(at: number): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId: null, chat: [], openRequests: [], viewed: false };
+export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
@@ -42,6 +44,13 @@ function isAssistant(messageId: string) {
 }
 
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
+	const next = step(model, input);
+	if (next.chat === model.chat) return next;
+	const chatStartedAt = next.chat.length === 0 ? null : model.chat.length === 0 ? input.at : model.chatStartedAt;
+	return { ...next, chatStartedAt };
+}
+
+function step(model: SessionModel, input: SessionInput): SessionModel {
 	const { at } = input;
 	switch (input.kind) {
 		case 'hook': {
@@ -54,7 +63,7 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 				}
 				case 'prompt':
 					return enter(
-						{ ...model, viewed: false, chat: [...model.chat, { kind: 'user', id: `user-${model.chat.length}`, text: event.text, at }] },
+						{ ...model, chat: [...model.chat, { kind: 'user', id: `user-${event.promptId}`, text: event.text, at }] },
 						'working',
 						at,
 					);
@@ -69,6 +78,7 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'tool_start':
+					if (event.agentId !== undefined) return model;
 					return {
 						...model,
 						chat: upsert(model.chat, isTool(event.toolUseId), () => ({
@@ -80,6 +90,7 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'tool_end':
+					if (event.agentId !== undefined) return model;
 					return {
 						...model,
 						chat: upsert(model.chat, isTool(event.toolUseId), (existing) => ({
@@ -92,6 +103,7 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'tool_failed':
+					if (event.agentId !== undefined) return model;
 					return {
 						...model,
 						chat: upsert(model.chat, isTool(event.toolUseId), (existing) => ({
@@ -104,18 +116,18 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'stop':
-					return enter(model, model.viewed ? 'idle' : 'answered', at);
+					return enter(model, model.viewing ? 'idle' : 'answered', at);
 				case 'stop_failure':
 					return enter(
 						{
 							...model,
-							chat: [...model.chat, { kind: 'notice', id: `notice-${model.chat.length}`, text: event.lastAssistantMessage ?? event.error, at }],
+							chat: [...model.chat, { kind: 'notice', id: `notice-${randomUUID()}`, text: event.lastAssistantMessage ?? event.error, at }],
 						},
 						'failed',
 						at,
 					);
 				case 'session_end':
-					return enter(model, 'offline', at);
+					return event.reason === 'clear' || event.reason === 'resume' ? model : enter(model, 'offline', at);
 				case 'permission_request':
 				case 'task_created':
 				case 'task_completed':
@@ -145,8 +157,8 @@ export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 			const waiting = model.state === 'needs_approval' || model.state === 'needs_answer';
 			return waiting && openRequests.length === 0 ? enter(next, 'working', at) : next;
 		}
-		case 'viewed':
-			return enter({ ...model, viewed: true }, model.state === 'answered' ? 'idle' : model.state, at);
+		case 'view_changed':
+			return enter({ ...model, viewing: input.viewing }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
 		case 'pane_exited':
 			return enter(model, 'offline', at);
 	}

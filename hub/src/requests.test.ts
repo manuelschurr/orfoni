@@ -184,7 +184,7 @@ describe('PendingRequests.withdrawFor', () => {
 	test.each<HookEvent>([
 		{ type: 'stop', claudeSessionId: claude, lastAssistantMessage: null },
 		{ type: 'stop_failure', claudeSessionId: claude, error: 'overloaded', lastAssistantMessage: null },
-		{ type: 'prompt', claudeSessionId: claude, text: 'never mind' },
+		{ type: 'prompt', claudeSessionId: claude, text: 'never mind', promptId: 'p9' },
 		{ type: 'session_end', claudeSessionId: claude, reason: 'prompt_input_exit' },
 	])('$type withdraws every open request of the session and no other', async (event) => {
 		const requests = new PendingRequests();
@@ -194,6 +194,16 @@ describe('PendingRequests.withdrawFor', () => {
 		expect(requests.withdrawFor(session, event).sort()).toEqual([a.requestId, b.requestId].sort());
 		await expect(a.response).resolves.toEqual({});
 		await expect(b.response).resolves.toEqual({});
+		expect(requests.decide(other.requestId, { type: 'allow' })).toBe('allowed');
+	});
+
+	test('withdrawSession withdraws every open request of the session and no other', async () => {
+		const requests = new PendingRequests();
+		const a = requests.open(session, write, { toolUseId: 't1' });
+		const other = requests.open(otherSession, write, { toolUseId: 't3' });
+		expect(requests.withdrawSession(session)).toEqual([a.requestId]);
+		await expect(a.response).resolves.toEqual({});
+		expectRequestError(() => requests.decide(a.requestId, { type: 'allow' }), 'already_resolved');
 		expect(requests.decide(other.requestId, { type: 'allow' })).toBe('allowed');
 	});
 

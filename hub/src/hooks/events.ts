@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ClaudeSessionId } from '@orfoni/protocol';
 import { z } from 'zod';
 
@@ -6,11 +7,11 @@ type Event<T extends string, F> = { type: T; claudeSessionId: ClaudeSessionId } 
 export type HookEvent =
 	| Event<'session_start', { source: 'startup' | 'resume' | 'clear' | 'compact' | 'fork' }>
 	| Event<'session_end', { reason: string }>
-	| Event<'prompt', { text: string }>
+	| Event<'prompt', { text: string; promptId: string }>
 	| Event<'assistant_text', { messageId: string; index: number; final: boolean; delta: string }>
-	| Event<'tool_start', { toolUseId: string; name: string; input: unknown }>
-	| Event<'tool_end', { toolUseId: string; name: string; output: unknown }>
-	| Event<'tool_failed', { toolUseId: string; name: string; error: string; interrupted: boolean }>
+	| Event<'tool_start', { toolUseId: string; name: string; input: unknown; agentId?: string }>
+	| Event<'tool_end', { toolUseId: string; name: string; output: unknown; agentId?: string }>
+	| Event<'tool_failed', { toolUseId: string; name: string; error: string; interrupted: boolean; agentId?: string }>
 	| Event<'permission_request', { name: string; input: unknown; suggestions: unknown[] }>
 	| Event<'task_created', { taskId: string; subject: string }>
 	| Event<'task_completed', { taskId: string; subject: string }>
@@ -32,6 +33,7 @@ function hook<S extends z.ZodRawShape, E extends HookEvent>(
 }
 
 const lastAssistantMessage = z.string().nullish().transform((text) => text ?? null);
+const agentId = z.string().optional();
 
 const schemas = {
 	SessionStart: hook({ source: z.enum(['startup', 'resume', 'clear', 'compact', 'fork']) }, (b) => ({
@@ -40,7 +42,12 @@ const schemas = {
 		source: b.source,
 	})),
 	SessionEnd: hook({ reason: z.string() }, (b) => ({ type: 'session_end', claudeSessionId: b.session_id, reason: b.reason })),
-	UserPromptSubmit: hook({ prompt: z.string() }, (b) => ({ type: 'prompt', claudeSessionId: b.session_id, text: b.prompt })),
+	UserPromptSubmit: hook({ prompt: z.string(), prompt_id: z.string().default(() => randomUUID()) }, (b) => ({
+		type: 'prompt',
+		claudeSessionId: b.session_id,
+		text: b.prompt,
+		promptId: b.prompt_id,
+	})),
 	MessageDisplay: hook(
 		{ message_id: z.string(), index: z.number().int(), final: z.boolean(), delta: z.string() },
 		(b) => ({
@@ -52,22 +59,24 @@ const schemas = {
 			delta: b.delta,
 		}),
 	),
-	PreToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_input: z.unknown() }, (b) => ({
+	PreToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_input: z.unknown(), agent_id: agentId }, (b) => ({
 		type: 'tool_start',
 		claudeSessionId: b.session_id,
 		toolUseId: b.tool_use_id,
 		name: b.tool_name,
 		input: b.tool_input,
+		agentId: b.agent_id,
 	})),
-	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_response: z.unknown() }, (b) => ({
+	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_response: z.unknown(), agent_id: agentId }, (b) => ({
 		type: 'tool_end',
 		claudeSessionId: b.session_id,
 		toolUseId: b.tool_use_id,
 		name: b.tool_name,
 		output: b.tool_response,
+		agentId: b.agent_id,
 	})),
 	PostToolUseFailure: hook(
-		{ tool_use_id: z.string(), tool_name: z.string(), error: z.string(), is_interrupt: z.boolean().default(false) },
+		{ tool_use_id: z.string(), tool_name: z.string(), error: z.string(), is_interrupt: z.boolean().default(false), agent_id: agentId },
 		(b) => ({
 			type: 'tool_failed',
 			claudeSessionId: b.session_id,
@@ -75,6 +84,7 @@ const schemas = {
 			name: b.tool_name,
 			error: b.error,
 			interrupted: b.is_interrupt,
+			agentId: b.agent_id,
 		}),
 	),
 	PermissionRequest: hook(
@@ -116,6 +126,10 @@ type HookName = keyof typeof schemas;
 
 function isHookName(name: string): name is HookName {
 	return Object.hasOwn(schemas, name);
+}
+
+export function hookName(body: unknown): string {
+	return typeof body === 'object' && body !== null && 'hook_event_name' in body && typeof body.hook_event_name === 'string' ? body.hook_event_name : '';
 }
 
 export function parseHookEvent(hookName: string, body: unknown): HookEvent {
