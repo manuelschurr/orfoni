@@ -23,7 +23,7 @@ describe('hookSettings', () => {
 			[
 				'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'MessageDisplay',
 				'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest',
-				'TaskCreated', 'TaskCompleted', 'Stop', 'StopFailure',
+				'TaskCreated', 'TaskCompleted', 'Stop', 'StopFailure', 'Notification',
 			].sort(),
 		);
 		for (const hook of Object.keys(settings.hooks)) expect(entry(hook).type).toBe('command');

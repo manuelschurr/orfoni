@@ -11,6 +11,7 @@ const HOOK_TIMEOUTS = {
 	TaskCompleted: 5,
 	Stop: 5,
 	StopFailure: 5,
+	Notification: 5,
 } as const;
 
 function shellQuote(text: string): string {

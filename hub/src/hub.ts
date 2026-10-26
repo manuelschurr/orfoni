@@ -12,16 +12,17 @@ import {
 	type HubMessage,
 	type RequestId,
 	type RequestOutcome,
+	type SessionStateKind,
 	type SessionSummary,
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
-import { joinHistory, normalizeHistory } from './history.js';
+import { joinHistory, normalizeHistory, turnEnded } from './history.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, endsSession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
-import { loadState, saveState } from './store.js';
+import { loadState, saveState, type StoredSession } from './store.js';
 import { sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -92,6 +93,15 @@ function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
 	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
 }
 
+async function stateAfterRestart(options: HubOptions, { claudeSessionId, projectDir }: StoredSession): Promise<SessionStateKind> {
+	try {
+		return turnEnded(await options.readHistory(claudeSessionId, projectDir)) ? 'idle' : 'working';
+	} catch (error) {
+		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
+		return 'working';
+	}
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -111,13 +121,13 @@ export class Hub {
 		const state = await loadState(join(options.stateDir, 'state.json'), options.log);
 		const running = new Set((await options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
 		const hub = new Hub(options);
+		const states = await Promise.all(state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : 'offline')));
 		const now = Date.now();
-		for (const { id, projectDir, title, claudeSessionId, createdAt } of state.sessions) {
-			const alive = running.has(tmuxName(id));
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: alive ? 'working' : 'offline' };
-			const claude: ClaudeProcess = alive ? { kind: 'running', inputReadyAt: 0 } : { kind: 'exited' };
+		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt }, index) => {
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: states[index] ?? 'offline' };
+			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
-		}
+		});
 		return hub;
 	}
 
@@ -186,6 +196,10 @@ export class Hub {
 				const session = this.session(request.sessionId);
 				if (session.model.state === 'offline') throw new HubError('not_ready', `session ${session.id} is offline`);
 				await this.options.tmux.sendKeys(tmuxName(session.id), 'Escape');
+				const at = Date.now();
+				this.withdrawAll(session, at);
+				// Claude Code fires no Stop after an interrupt.
+				this.apply(session, { kind: 'interrupted', at });
 				return {};
 			}
 			case 'stopSession':
@@ -381,8 +395,12 @@ export class Hub {
 	private paneExited(session: Session): void {
 		const at = Date.now();
 		session.claude = { kind: 'exited' };
-		for (const requestId of this.requests.withdrawSession(session.id)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
+		this.withdrawAll(session, at);
 		this.apply(session, { kind: 'pane_exited', at });
+	}
+
+	private withdrawAll(session: Session, at: number): void {
+		for (const requestId of this.requests.withdrawSession(session.id)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 	}
 
 	private openRequest(session: Session, event: PermissionRequest, closed: AbortSignal | undefined): Promise<HookResponse> {

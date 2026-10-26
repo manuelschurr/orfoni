@@ -18,6 +18,7 @@ export type SessionInput =
 	| { kind: 'request_closed'; requestId: RequestId; outcome: RequestOutcome | 'withdrawn'; at: number }
 	| { kind: 'request_cancelled'; requestId: RequestId; at: number }
 	| { kind: 'view_changed'; viewing: boolean; at: number }
+	| { kind: 'interrupted'; at: number }
 	| { kind: 'pane_exited'; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -144,6 +145,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					);
 				case 'session_end':
 					return endsSession(event) ? enter(model, 'offline', at) : model;
+				case 'notification':
+					return event.kind === 'idle_prompt' && model.state === 'working' ? enter(model, model.viewing ? 'idle' : 'answered', at) : model;
 				case 'permission_request':
 				case 'task_created':
 				case 'task_completed':
@@ -164,6 +167,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return closeRequest(model, input.requestId, 'withdrawn', 'idle', at);
 		case 'view_changed':
 			return enter({ ...model, viewing: input.viewing }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
+		case 'interrupted':
+			return model.state === 'offline' ? model : enter(model, 'idle', at);
 		case 'pane_exited':
 			return enter(model, 'offline', at);
 	}

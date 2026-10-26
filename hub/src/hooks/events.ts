@@ -15,7 +15,8 @@ export type HookEvent =
 	| Event<'task_created', { taskId: string; subject: string }>
 	| Event<'task_completed', { taskId: string; subject: string }>
 	| Event<'stop', { lastAssistantMessage: string | null }>
-	| Event<'stop_failure', { error: string; lastAssistantMessage: string | null }>;
+	| Event<'stop_failure', { error: string; lastAssistantMessage: string | null }>
+	| Event<'notification', { kind: string }>;
 
 export class HookParseError extends Error {
 	constructor(message: string) {
@@ -97,6 +98,7 @@ const schemas = {
 		taskId: b.task_id,
 		subject: b.task_subject,
 	})),
+	Notification: hook({ notification_type: z.string() }, (b) => ({ type: 'notification', claudeSessionId: b.session_id, kind: b.notification_type })),
 	TaskCompleted: hook({ task_id: z.string(), task_subject: z.string() }, (b) => ({
 		type: 'task_completed',
 		claudeSessionId: b.session_id,

@@ -62,6 +62,13 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 	return items;
 }
 
+const TurnEntry = z.object({ type: z.enum(['user', 'assistant']), message: z.object({ stop_reason: z.string().nullish() }).optional() });
+
+export function turnEnded(messages: SessionMessage[]): boolean {
+	const last = TurnEntry.safeParse(messages.findLast((message) => message.type !== 'system'));
+	return last.success && last.data.type === 'assistant' && last.data.message?.stop_reason === 'end_turn';
+}
+
 function sameEvent(a: ChatItem, b: ChatItem): boolean {
 	if (a.kind === 'user' && b.kind === 'user') return a.text === b.text;
 	if (a.kind === 'tool' && b.kind === 'tool') return a.toolUseId === b.toolUseId;

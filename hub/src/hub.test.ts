@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,6 +94,10 @@ function recordedConversation(): SessionMessage[] {
 	return JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
 }
 
+function entry(type: SessionMessage['type'], content: unknown, stopReason?: string): SessionMessage {
+	return { type, uuid: randomUUID(), session_id: 'transcript', message: { role: type, content, stop_reason: stopReason }, parent_tool_use_id: null, parent_agent_id: null };
+}
+
 const writeInput = { file_path: '/var/tmp/claude-0/orfoni-spike-tui/a.txt', content: 'hi' };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -113,6 +118,7 @@ let hub: Hub;
 let logs: string[];
 let history: { claudeSessionId: ClaudeSessionId; projectDir: string }[];
 let transcript: SessionMessage[];
+let transcripts: Map<string, SessionMessage[]>;
 
 async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 	fake = tmux;
@@ -124,7 +130,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 		shell: '/bin/zsh',
 		readHistory: async (claudeSessionId, projectDir) => {
 			history.push({ claudeSessionId, projectDir });
-			return transcript;
+			return transcripts.get(claudeSessionId) ?? transcript;
 		},
 		log: (line) => logs.push(line),
 	});
@@ -149,6 +155,7 @@ beforeEach(() => {
 	logs = [];
 	history = [];
 	transcript = [];
+	transcripts = new Map();
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
 });
@@ -545,7 +552,7 @@ describe('hooks', () => {
 		['no session header', undefined, () => body('Stop', 'c')],
 		['an unknown session', 'not-a-session', () => body('Stop', 'c')],
 		['a body that does not parse', 'known', () => ({ hook_event_name: 'Stop' })],
-		['an unknown hook', 'known', () => ({ ...body('Stop', 'c'), hook_event_name: 'Notification' })],
+		['an unknown hook', 'known', () => ({ ...body('Stop', 'c'), hook_event_name: 'NoSuchHook' })],
 	])('a hook with %s gets an empty response and a log line', async (_, header, makeBody) => {
 		const client = await startHub();
 		const { id } = await start(client);
@@ -601,6 +608,45 @@ describe('restart', () => {
 		]);
 	});
 
+	test('a session that kept running comes back idle when its transcript ends with a finished reply, and working otherwise', async () => {
+		const client = await startHub();
+		const done = await start(client);
+		const busy = await start(client);
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(busy.id));
+		hub.close();
+		const toolUse = [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }];
+		const toolResult = [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }];
+		transcripts.set(done.claude, [entry('user', 'list'), entry('assistant', toolUse, 'tool_use'), entry('user', toolResult), entry('assistant', [{ type: 'text', text: 'a.txt' }], 'end_turn'), entry('system', undefined)]);
+		transcripts.set(busy.claude, [entry('user', 'list'), entry('assistant', toolUse, 'tool_use'), entry('user', toolResult)]);
+
+		const after = await startHub(fakeTmux([`orfoni-${done.id}`, `orfoni-${busy.id}`]));
+		const sessions = (await after.ok('listSessions', {})) as SessionSummary[];
+		expect(Object.fromEntries(sessions.map((session) => [session.id, session.state]))).toEqual({ [done.id]: 'idle', [busy.id]: 'working' });
+	});
+
+	test('an idle_prompt notification moves a session still marked working to answered, or to idle while a client has it open', async () => {
+		const client = await startHub();
+		const unread = await start(client);
+		const open = await start(client);
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(open.id));
+		hub.close();
+
+		const after = await startHub(fakeTmux([`orfoni-${unread.id}`, `orfoni-${open.id}`]));
+		await after.ok('openSession', { sessionId: open.id });
+		await hub.hook(unread.id, body('Notification', unread.claude));
+		await hub.hook(open.id, body('Notification', open.claude));
+		expect(after.state(unread.id)).toBe('answered');
+		expect(after.state(open.id)).toBe('idle');
+	});
+
+	test('an idle_prompt notification leaves a session that is not working alone', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		void hub.hook(id, body('PermissionRequest', claude));
+		await hub.hook(id, body('Notification', claude));
+		expect(client.state(id)).toBe('needs_approval');
+	});
+
 	test('a session that kept running through the restart takes a message without waiting for SessionStart', async () => {
 		const client = await startHub();
 		const { id, claude } = await start(client);
@@ -616,11 +662,24 @@ describe('restart', () => {
 });
 
 describe('session control', () => {
-	test('interrupt sends Escape to the session', async () => {
+	test('interrupt sends Escape and moves the session to idle, because Claude Code fires no Stop after an interrupt', async () => {
 		const client = await startHub();
-		const { id } = await ready(client);
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'a long task' }));
+		expect(client.state(id)).toBe('working');
 		await client.ok('interrupt', { sessionId: id });
 		expect(fake.of('sendKeys')).toEqual([[`orfoni-${id}`, 'Escape']]);
+		expect(client.state(id)).toBe('idle');
+	});
+
+	test('interrupt during an approval withdraws the card', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const held = hub.hook(id, body('PermissionRequest', claude));
+		await client.ok('interrupt', { sessionId: id });
+		expect(await held).toEqual({});
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'approval', status: 'withdrawn' });
+		expect(client.state(id)).toBe('idle');
 	});
 
 	test('openShell starts numbered login shells in the session folder', async () => {

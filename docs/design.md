@@ -90,6 +90,7 @@ A third spike, after the final review on 2026-10-26, tested how long messages ar
 - Claude Code removes trailing whitespace from every prompt, and keeps leading whitespace.
 - Enter after a final backslash inserts a newline instead of submitting, with every input method. A space after the backslash makes Enter submit, and the trim removes the space again.
 - A tab is lost when typed, because Tab is a key binding, and turns into four spaces when pasted.
+- Escape during a turn ended it without a `Stop` hook. When no reply had appeared yet, Claude Code put the interrupted prompt back into the input box. No `idle_prompt` notification followed within 110 s, while after a normal `Stop` one arrived 60 s later.
 
 ## The hub
 
@@ -104,7 +105,7 @@ The hub has these jobs:
 - Send your chat messages into the session as bracketed pastes of at most 400 characters without a newline, with Ctrl+J between lines and Enter at the end, only while the session is waiting for input or working. Claude Code queues a message typed while it works. Pastes that small stay plain text, while one paste of a long message would reach Claude as untrusted pasted content (spike, 2026-10-26).
 - Hold `PermissionRequest` hook requests open until an app answers. The hub links each request to the oldest running tool call, from the main conversation or from a subagent, that has the same tool name and the same input and no request yet. If the terminal answers Yes first, the hub sees that call finish and withdraws the card. If the terminal answers No or Escape, Claude Code kills the hook within 0.3 s and ends the turn without `PostToolUse`, `PostToolUseFailure`, or `Stop` (measured 2026-10-26). The hub then sees the held connection close, withdraws the card, and marks the session `idle`.
 - Answer questions from `AskUserQuestion` and plan approvals from `ExitPlanMode` the same way. The hooks docs describe answering both through `updatedInput`.
-- Interrupt a turn by sending Escape to the pane.
+- Interrupt a turn by sending Escape to the pane, and mark the session `idle`, because Claude Code fires no `Stop` after an interrupt (measured 2026-10-26).
 - Read history and titles through the Agent SDK's `listSessions()` and `getSessionMessages()`. Claude's own transcript store is the source of truth for both. These functions read files and start no Claude process.
 - Open a plain shell in the session's folder as its own tmux session, tagged with the Claude session it belongs to, and close those shells when the Claude session is stopped.
 - Write summaries and track which answers you have not read yet.
@@ -112,7 +113,7 @@ The hub has these jobs:
 
 The hub stores only what Claude Code and tmux do not: summaries, read state, and the list of project folders. It keeps them in one small file with a version field and writes it atomically, by writing a temporary file and renaming it. That file and the per-session settings files have mode 0600, in directories with mode 0700.
 
-Sessions do not depend on the hub. If the hub is down, Claude keeps working, because a hook that fails defaults to continuing. When the hub comes back, it rebuilds each session's state from tmux and the transcripts.
+Sessions do not depend on the hub. If the hub is down, Claude keeps working, because a hook that fails defaults to continuing. When the hub comes back, it rebuilds each session's state from tmux and the transcripts. A session whose tmux session runs comes back `idle` when the last user or assistant message of its transcript is an assistant message with `stop_reason` `end_turn`, and `working` otherwise.
 
 ## Hooks
 
@@ -127,6 +128,7 @@ The hub needs these hooks, configured in the user settings so they cover every s
 | `PermissionRequest` | Claude waits for an approval |
 | `TaskCreated`, `TaskCompleted` | Progress through Claude's task list |
 | `Stop`, `StopFailure` | The turn ended, with the final reply or the error |
+| `Notification` | With `notification_type` `idle_prompt`, that the session has waited 60 s for input, which corrects a session the hub still thinks is working |
 
 `MessageDisplay` holds each batch of text until the hook returns, so the hub answers it immediately and does its work afterwards. Its hook entry gets a short timeout, so a hub that hangs delays the terminal by seconds at most.
 
@@ -139,11 +141,11 @@ Each session has one state, and every event moves it to a defined next state. Th
 | State | Meaning | Enters on | Leaves on |
 |---|---|---|---|
 | `offline` | No `claude` process runs in the session's tmux session | `SessionEnd`, the session's tmux session is gone, also when `claude` exits before `SessionStart` | you send a message, which starts `claude --resume=<id>`, or a new conversation when the session never had one |
-| `working` | A turn is running | `UserPromptSubmit`, a request answered from the app or with Yes in the terminal | a request, `Stop`, `StopFailure` |
+| `working` | A turn is running | `UserPromptSubmit`, a request answered from the app or with Yes in the terminal | a request, `Stop`, `StopFailure`, an interrupt, an `idle_prompt` notification |
 | `needs_approval` | Claude waits for permission to use a tool | `PermissionRequest` | an answer from the app or the terminal |
 | `needs_answer` | Claude asked a question or wants a plan approved | `AskUserQuestion` or `ExitPlanMode` | an answer from the app or the terminal |
-| `answered` | The turn finished and you have not read the reply | `Stop` | you open the session |
-| `idle` | The turn finished and you have read the reply | you open an `answered` session, the terminal answers a request with No or Escape | `UserPromptSubmit` |
+| `answered` | The turn finished and you have not read the reply | `Stop`, an `idle_prompt` notification while `working` | you open the session |
+| `idle` | The turn finished and you have read the reply | you open an `answered` session, the terminal answers a request with No or Escape, an interrupt | `UserPromptSubmit` |
 | `failed` | The turn ended with an error | `StopFailure` | `UserPromptSubmit` |
 
 A message to an `offline` session whose transcript holds no conversation starts `claude` with a new `--session-id`. Both alternatives fail there: `claude --resume=<id>` prints "No conversation found" and exits 1, and `claude --session-id=<id>` prints "Session ID ... is already in use" and exits 1, because Claude Code wrote a transcript with only the session's title when it started (measured 2026-10-26).
@@ -201,6 +203,7 @@ Each milestone ends with a check on the real thing, not only tests.
 - Answering `AskUserQuestion` and `ExitPlanMode` from the app is documented for `PreToolUse` hooks but untested here. A `PreToolUse` hook that waits for the app may also hold back the terminal's dialog, unlike `PermissionRequest`. Test both before building the cards.
 - A message pasted while you type in the terminal mixes with your typing. The app warns when the terminal for that session is attached and the prompt is not empty, or the hub waits until the prompt is empty.
 - Typing into the session depends on undocumented behaviour of Claude Code's input box: a paste of at most 3 lines and 800 characters stays plain text, Ctrl+J inserts a newline, and trailing whitespace is trimmed. A change in any of them makes `send` report `not_delivered` for messages that arrived changed. A self-test on hub start would catch it.
+- An interrupt before Claude's first reply puts the prompt back into the input box, so the next message from the app is appended to it and `send` reports `not_delivered`. The hub could clear the input box after an interrupt, but the keys that do that also act on an empty box: a second Ctrl+C exits Claude Code.
 - Messages lose their tabs, which turn into four spaces. In one of six runs a 66,854-character message lost one 59-character piece, and `send` then reports `not_delivered`. Messages of a few thousand characters arrived exactly every time.
 - A `PermissionRequest` hook has a 600 s timeout by default. After that the app can no longer answer, and the request stays open in the terminal. Raise the timeout, or show the request as "answer in the terminal".
 - The hooks go into the user settings, which changes every Claude session on the VPS. Hooks that fail do no harm, but each session sends events to the hub.

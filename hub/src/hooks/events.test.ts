@@ -185,7 +185,15 @@ describe('parseHookEvent', () => {
 	});
 
 	test('an unknown hook name throws HookParseError', () => {
-		expect(() => parseHookEvent('Notification', fixture('Stop'))).toThrow(HookParseError);
+		expect(() => parseHookEvent('NoSuchHook', fixture('Stop'))).toThrow(HookParseError);
+	});
+
+	test('Notification gives notification with its type', () => {
+		expect(parseHookEvent('Notification', fixture('Notification'))).toEqual({
+			type: 'notification',
+			claudeSessionId: '6f014a57-9090-4db3-9a65-a59fd1eef77a',
+			kind: 'idle_prompt',
+		});
 	});
 
 	test('a hook name that only exists on Object.prototype throws HookParseError', () => {
