@@ -103,8 +103,12 @@ export async function acceptTrustPrompt(started: Started): Promise<void> {
 	const target = `orfoni-${started.session.id}`;
 	for (let i = 0; i < 40; i++) {
 		if (tmux('capture-pane', '-p', '-t', target).includes('Yes, I trust this folder')) {
-			tmux('send-keys', '-t', target, 'Down');
-			await sleep(300);
+			// The dialog drops keys that arrive in its first second, and Enter on the default choice exits Claude Code.
+			for (let j = 0; j < 20 && !tmux('capture-pane', '-p', '-t', target).includes('❯ Yes, I trust this folder'); j++) {
+				tmux('send-keys', '-t', target, 'Down');
+				await sleep(500);
+			}
+			if (!tmux('capture-pane', '-p', '-t', target).includes('❯ Yes, I trust this folder')) throw new Error('could not select "Yes, I trust this folder"');
 			tmux('send-keys', '-t', target, 'Enter');
 			return;
 		}
