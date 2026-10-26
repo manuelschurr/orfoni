@@ -128,6 +128,10 @@ function isHookName(name: string): name is HookName {
 	return Object.hasOwn(schemas, name);
 }
 
+export function hookName(body: unknown): string {
+	return typeof body === 'object' && body !== null && 'hook_event_name' in body && typeof body.hook_event_name === 'string' ? body.hook_event_name : '';
+}
+
 export function parseHookEvent(hookName: string, body: unknown): HookEvent {
 	if (!isHookName(hookName)) throw new HookParseError(`unknown hook ${hookName}`);
 	const result = schemas[hookName].safeParse(body);
