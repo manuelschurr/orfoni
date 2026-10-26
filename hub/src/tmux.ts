@@ -17,18 +17,20 @@ export interface Tmux {
 	sendKeys(target: string, ...keys: string[]): Promise<void>;
 }
 
-export const TMUX_SOCKET = 'orfoni';
-
-export const runTmux: Run = (args, stdin) =>
-	new Promise((resolve, reject) => {
-		const child = execFile('tmux', ['-L', TMUX_SOCKET, ...args], (error, stdout) => {
-			if (error) reject(error);
-			else resolve(stdout);
+export function runTmux(socket: string): Run {
+	return (args, stdin) =>
+		new Promise((resolve, reject) => {
+			const child = execFile('tmux', ['-L', socket, ...args], (error, stdout) => {
+				if (error) reject(error);
+				else resolve(stdout);
+			});
+			child.stdin?.end(stdin ?? '');
 		});
-		child.stdin?.end(stdin ?? '');
-	});
+}
 
-export function createTmux(run: Run = runTmux): Tmux {
+const NO_SERVER = /no server running|error connecting to/;
+
+export function createTmux(run: Run): Tmux {
 	return {
 		async newSession(name, cwd, env, command) {
 			const envArgs = Object.entries(env).flatMap(([key, value]) => ['-e', `${key}=${value}`]);
@@ -38,7 +40,10 @@ export function createTmux(run: Run = runTmux): Tmux {
 			await run(['kill-session', '-t', name]);
 		},
 		async listSessions() {
-			const output = await run(['list-panes', '-a', '-F', '#{session_name}\t#{pane_pid}\t#{pane_dead}']);
+			const output = await run(['list-panes', '-a', '-F', '#{session_name}\t#{pane_pid}\t#{pane_dead}']).catch((error: Error) => {
+				if (NO_SERVER.test(error.message)) return '';
+				throw error;
+			});
 			return output
 				.split('\n')
 				.filter((line) => line !== '')
