@@ -103,7 +103,6 @@ async function run(hub: Connection, command: Command): Promise<void> {
 			return;
 		case 'watch': {
 			const sessionId = await findSession(hub, command.session);
-			// Live items can arrive in the same read as the openSession response, so they wait until the history is printed.
 			let early: ChatItem[] | null = [];
 			hub.listen((message) => {
 				if (message.type !== 'chatItem' || message.sessionId !== sessionId) return;
