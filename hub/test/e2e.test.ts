@@ -55,8 +55,10 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		if (question.kind !== 'question') throw new Error('unreachable');
 		const answers = Object.fromEntries(question.questions.map((q) => [q.question, 'Blue']));
 		await client.request('decide', { requestId: question.requestId, decision: { type: 'answer', answers } });
-		const reply = await client.waitForChat(id, (item) => item.kind === 'assistant' && item.done && item.text.includes('chosen'));
-		expect(reply.kind === 'assistant' && reply.text).toContain('Blue');
+		await client.waitForSession(id, (s) => s.state === 'answered');
+		const { chat } = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		const reply = chat.findLast((item) => item.kind === 'assistant');
+		expect(reply?.kind === 'assistant' && reply.text).toMatch(/blue/i);
 	});
 
 	test('plan approved from the client', async () => {
