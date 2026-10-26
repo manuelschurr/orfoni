@@ -92,7 +92,7 @@ function body(name: string, claudeSessionId: string, fields: Record<string, unkn
 	return { ...fixture(name), session_id: claudeSessionId, ...fields };
 }
 
-async function until(check: () => boolean): Promise<void> {
+async function untilRealTime(check: () => boolean): Promise<void> {
 	const deadline = performance.now() + 2000;
 	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
 	if (!check()) throw new Error('condition never became true');
@@ -207,7 +207,7 @@ describe('send', () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(response).toBeUndefined();
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hello "there"\nline two' }));
-		await until(() => response !== undefined);
+		await untilRealTime(() => response !== undefined);
 		expect(response).toMatchObject({ ok: true });
 	});
 
@@ -267,11 +267,11 @@ describe('send', () => {
 		expect(client.state(id)).toBe('offline');
 		let response: Response | undefined;
 		void client.request('send', { sessionId: id, text: 'continue' }).then((r) => (response = r));
-		await until(() => fake.of('newSession').length === 2);
+		await untilRealTime(() => fake.of('newSession').length === 2);
 		expect(fake.of('newSession')[1]).toEqual([`orfoni-${id}`, PROJECT, { ORFONI_SESSION: id }, ['claude', '--resume', claude, '--settings', settings, '--', 'continue']]);
 		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
-		await until(() => response !== undefined);
+		await untilRealTime(() => response !== undefined);
 		expect(response).toMatchObject({ ok: true });
 		expect(fake.of('paste')).toEqual([]);
 	});
@@ -303,7 +303,7 @@ describe('requests', () => {
 		if (approval?.kind !== 'approval') throw new Error('expected an approval');
 
 		expect(await client.request('decide', { requestId: approval.requestId, decision: { type: 'allow' } })).toMatchObject({ ok: true, result: { outcome: 'allowed' } });
-		await until(() => answer !== undefined);
+		await untilRealTime(() => answer !== undefined);
 		expect(answer).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
 		expect(client.chat(id).at(-1)).toEqual({ ...approval, status: 'allowed' });
 		expect(client.state(id)).toBe('working');
@@ -391,13 +391,14 @@ describe('openSession', () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		const prompt = 'Count from 1 to 12, one number per line, then reply with exactly: counted';
-		vi.setSystemTime(Date.parse('2026-10-26T11:13:37.600Z'));
+		const hookArrivalAfterTranscriptStamp = Date.parse('2026-10-26T11:13:37.600Z');
+		vi.setSystemTime(hookArrivalAfterTranscriptStamp);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt, prompt_id: 'p9' }));
 		const opened = (await client.ok('openSession', { sessionId: id })) as { session: SessionSummary; chat: ChatItem[] };
 		expect(history).toEqual([{ claudeSessionId: claude, projectDir: PROJECT }]);
 		expect(opened.session).toMatchObject({ id, state: 'working' });
 		expect(opened.chat.map((item) => item.kind)).toEqual(['notice', 'user', 'tool', 'assistant', 'user']);
-		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: 'user-p9', text: prompt, at: Date.parse('2026-10-26T11:13:37.600Z') });
+		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: 'user-p9', text: prompt, at: hookArrivalAfterTranscriptStamp });
 	});
 
 	test('an unknown session fails with not_found', async () => {
@@ -440,7 +441,7 @@ describe('hooks', () => {
 		await hub.hook(id, body('SessionStart', next, { source: 'clear' }));
 		expect(client.messages.at(-1)).toEqual({ type: 'sessionUpdated', session: expect.objectContaining({ id, claudeSessionId: next, state: 'idle' }) });
 		expect((await client.ok('openSession', { sessionId: id })) as object).toMatchObject({ chat: [] });
-		await until(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(next));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(next));
 	});
 });
 
@@ -449,7 +450,7 @@ describe('restart', () => {
 		const client = await startHub();
 		const a = await start(client);
 		const b = await start(client);
-		await until(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(b.id));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(b.id));
 		hub.close();
 		vi.setSystemTime(T0 + 60_000);
 
@@ -463,12 +464,12 @@ describe('restart', () => {
 	test('a session that kept running through the restart takes a message without waiting for SessionStart', async () => {
 		const client = await startHub();
 		const { id, claude } = await start(client);
-		await until(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
 		hub.close();
 
 		const after = await startHub(fakeTmux([`orfoni-${id}`]));
 		const sent = after.request('send', { sessionId: id, text: 'still there?' });
-		await until(() => fake.of('paste').length === 1);
+		await untilRealTime(() => fake.of('paste').length === 1);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'still there?' }));
 		expect(await sent).toMatchObject({ ok: true });
 	});

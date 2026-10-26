@@ -103,16 +103,16 @@ async function run(hub: Connection, command: Command): Promise<void> {
 			return;
 		case 'watch': {
 			const sessionId = await findSession(hub, command.session);
-			let early: ChatItem[] | null = [];
+			let itemsBeforeHistory: ChatItem[] | null = [];
 			hub.listen((message) => {
 				if (message.type !== 'chatItem' || message.sessionId !== sessionId) return;
 				if (message.item.kind === 'assistant' && !message.item.done) return;
-				if (early) early.push(message.item);
+				if (itemsBeforeHistory) itemsBeforeHistory.push(message.item);
 				else console.log(formatChatItem(message.item));
 			});
 			const { chat } = Opened.parse(await hub.request('openSession', { sessionId }));
-			for (const item of [...chat, ...early]) console.log(formatChatItem(item));
-			early = null;
+			for (const item of [...chat, ...itemsBeforeHistory]) console.log(formatChatItem(item));
+			itemsBeforeHistory = null;
 			throw await hub.closed;
 		}
 		case 'allow':
