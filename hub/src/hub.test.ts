@@ -89,6 +89,12 @@ function fixture(name: string): Record<string, unknown> {
 	return JSON.parse(readFileSync(new URL(`../test/fixtures/hooks/${name}.json`, import.meta.url), 'utf8'));
 }
 
+function recordedConversation(): SessionMessage[] {
+	return JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 function body(name: string, claudeSessionId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
 	return { ...fixture(name), session_id: claudeSessionId, ...fields };
 }
@@ -291,6 +297,7 @@ describe('send', () => {
 	});
 
 	test('a message to an offline session resumes claude with the message as its prompt', async () => {
+		transcript = recordedConversation();
 		const client = await startHub();
 		const { id, claude, settings } = await ready(client);
 		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
@@ -305,6 +312,21 @@ describe('send', () => {
 		await untilRealTime(() => response !== undefined);
 		expect(response).toMatchObject({ ok: true });
 		expect(fake.of('submit')).toEqual([]);
+	});
+
+	test('a message to an offline session that never had a conversation starts a new one, because --resume would find nothing and the old ID is taken', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await ready(client);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		fake.live.delete(`orfoni-${id}`);
+		void client.request('send', { sessionId: id, text: 'hello' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		const command = fake.of('newSession')[1]?.[3] as string[];
+		const fresh = command[1]?.match(/^--session-id=(.+)$/)?.[1];
+		expect(fresh).toMatch(UUID);
+		expect(fresh).not.toBe(claude);
+		expect(command).toEqual(['claude', `--session-id=${fresh}`, '--settings', settings, '--', 'hello']);
+		expect(history).toContainEqual({ claudeSessionId: claude, projectDir: PROJECT });
 	});
 
 	test('an unknown session fails with not_found', async () => {
@@ -447,7 +469,7 @@ describe('viewing', () => {
 
 describe('openSession', () => {
 	test('returns the transcript up to the first live item, then the live items', async () => {
-		transcript = JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
+		transcript = recordedConversation();
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		const prompt = 'Count from 1 to 12, one number per line, then reply with exactly: counted';
@@ -492,6 +514,7 @@ describe('hooks', () => {
 	});
 
 	test('a forged hook whose session_id is a claude option is dropped, and claude only ever gets the ID glued to its option', async () => {
+		transcript = recordedConversation();
 		const client = await startHub();
 		const { id, claude, settings } = await ready(client);
 		expect(await hub.hook(id, body('SessionStart', '--mcp-config=/tmp/evil.json', { source: 'clear' }))).toEqual({});
@@ -567,6 +590,43 @@ describe('session control', () => {
 			[`orfoni-${id}-sh1`, PROJECT, {}, ['/bin/zsh', '-l']],
 			[`orfoni-${id}-sh2`, PROJECT, {}, ['/bin/zsh', '-l']],
 		]);
+	});
+
+	test('claude that exits before SessionStart takes the session offline within 5 s, and the next message starts it again', async () => {
+		const client = await startHub();
+		const { id } = await start(client);
+		fake.live.delete(`orfoni-${id}`);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(client.state(id)).toBe('offline');
+		void client.request('send', { sessionId: id, text: 'hello' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect((fake.of('newSession')[1]?.[3] as string[]).slice(-2)).toEqual(['--', 'hello']);
+	});
+
+	test('a resume that exits before SessionStart leaves the session offline and ready for the next message', async () => {
+		transcript = recordedConversation();
+		const client = await startHub();
+		const { id, claude, settings } = await ready(client);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		fake.live.delete(`orfoni-${id}`);
+		const first = client.request('send', { sessionId: id, text: 'continue' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		fake.live.delete(`orfoni-${id}`);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(await first).toMatchObject({ ok: false, error: { code: 'not_delivered' } });
+		expect(client.state(id)).toBe('offline');
+		void client.request('send', { sessionId: id, text: 'again' });
+		await untilRealTime(() => fake.of('newSession').length === 3);
+		expect(fake.of('newSession')[2]?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--', 'again']);
+	});
+
+	test('stopSession while claude is still starting leaves the session ready for the next message', async () => {
+		const client = await startHub();
+		const { id } = await start(client);
+		await client.ok('stopSession', { sessionId: id });
+		expect(client.state(id)).toBe('offline');
+		void client.request('send', { sessionId: id, text: 'hello' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
 	});
 
 	test('stopSession ends the session and its shells, withdraws its requests, and leaves it offline', async () => {

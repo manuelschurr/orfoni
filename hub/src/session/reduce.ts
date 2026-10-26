@@ -23,6 +23,10 @@ export type SessionInput =
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
 
+export function endsSession(event: HookEvent): boolean {
+	return event.type === 'session_end' && event.reason !== 'clear' && event.reason !== 'resume';
+}
+
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
 	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null };
 }
@@ -139,7 +143,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 						at,
 					);
 				case 'session_end':
-					return event.reason === 'clear' || event.reason === 'resume' ? model : enter(model, 'offline', at);
+					return endsSession(event) ? enter(model, 'offline', at) : model;
 				case 'permission_request':
 				case 'task_created':
 				case 'task_completed':

@@ -19,7 +19,7 @@ import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, normalizeHistory } from './history.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { emptySession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
 import { loadState, saveState } from './store.js';
 import { sessionTarget, type Tmux } from './tmux.js';
@@ -60,8 +60,10 @@ interface Session {
 	readonly title: string | null;
 	readonly createdAt: number;
 	model: SessionModel;
-	sessionStartAt: number | null;
+	claude: ClaudeProcess;
 }
+
+type ClaudeProcess = { kind: 'exited' } | { kind: 'launching'; createdAt: number | null } | { kind: 'running'; inputReadyAt: number };
 
 interface Waiter {
 	session: Session;
@@ -86,6 +88,11 @@ function summary(session: Session): SessionSummary {
 	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince };
 }
 
+function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
+	// A launch whose tmux session appeared after the listing started is missing from it without having exited.
+	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -107,8 +114,10 @@ export class Hub {
 		const hub = new Hub(options);
 		const now = Date.now();
 		for (const { id, projectDir, title, claudeSessionId, createdAt } of state.sessions) {
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: running.has(tmuxName(id)) ? 'working' : 'offline' };
-			hub.sessions.set(id, { id, projectDir, title, createdAt, model, sessionStartAt: 0 });
+			const alive = running.has(tmuxName(id));
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: alive ? 'working' : 'offline' };
+			const claude: ClaudeProcess = alive ? { kind: 'running', inputReadyAt: 0 } : { kind: 'exited' };
+			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		}
 		return hub;
 	}
@@ -203,7 +212,7 @@ export class Hub {
 			title: request.title ?? null,
 			createdAt: now,
 			model: emptySession(now, claudeSessionId),
-			sessionStartAt: null,
+			claude: { kind: 'exited' },
 		};
 		const options = [
 			...(request.model ? ['--model', request.model] : []),
@@ -236,8 +245,22 @@ export class Hub {
 	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
 		const settings = join(this.options.stateDir, 'settings', `${session.id}.json`);
 		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket), null, '\t')}\n`);
-		session.sessionStartAt = null;
-		await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
+		session.claude = { kind: 'launching', createdAt: null };
+		try {
+			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
+		} catch (error) {
+			session.claude = { kind: 'exited' };
+			throw error;
+		}
+		if (session.claude.kind === 'launching') session.claude = { kind: 'launching', createdAt: Date.now() };
+	}
+
+	private async resumeIdentity(session: Session): Promise<string[]> {
+		const { claudeSessionId } = session.model;
+		const messages = await this.options.readHistory(claudeSessionId, session.projectDir);
+		if (messages.some((message) => message.type !== 'system')) return [`--resume=${claudeSessionId}`];
+		// claude --resume finds no conversation here, and --session-id refuses the old ID once its empty transcript exists.
+		return [`--session-id=${ClaudeSessionId.parse(randomUUID())}`];
 	}
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
@@ -266,17 +289,19 @@ export class Hub {
 		const delivery = (timeoutMs: number, typing?: Promise<void>) =>
 			confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && event.text === text.trimEnd(), timeoutMs, typing) : Promise.resolve(true);
 		this.assertTakesInput(session);
-		if (session.model.state === 'offline' && session.sessionStartAt !== null) {
+		if (session.claude.kind === 'exited') {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
-			await this.launch(session, [`--resume=${session.model.claudeSessionId}`], ['--', text]);
-			if (!(await delivered)) throw new HubError('not_delivered', `claude --resume did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
+			await this.launch(session, await this.resumeIdentity(session), ['--', text]);
+			if (!(await delivered)) throw new HubError('not_delivered', `claude did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
 		}
-		if (session.sessionStartAt === null && !(await this.waitForHook(session, (event) => event.type === 'session_start', STARTUP_TIMEOUT_MS))) {
+		if (session.claude.kind === 'launching' && !(await this.waitForHook(session, (event) => event.type === 'session_start', STARTUP_TIMEOUT_MS))) {
 			throw new HubError('not_ready', `Claude Code did not start within ${STARTUP_TIMEOUT_MS / 1000} s`);
 		}
-		const untilInputReady = (session.sessionStartAt ?? 0) + INPUT_READY_DELAY_MS - Date.now();
+		const { claude } = session;
+		if (claude.kind !== 'running') throw new HubError('not_ready', `claude exited in session ${session.id} before it took the message`);
+		const untilInputReady = claude.inputReadyAt - Date.now();
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);
 		const typing = this.options.tmux.submit(tmuxName(session.id), text);
@@ -344,9 +369,10 @@ export class Hub {
 
 	private async checkPanes(): Promise<void> {
 		try {
+			const listedAt = Date.now();
 			const running = new Set((await this.options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
 			for (const session of this.sessions.values()) {
-				if (session.sessionStartAt !== null && session.model.state !== 'offline' && !running.has(tmuxName(session.id))) this.paneExited(session);
+				if (!running.has(tmuxName(session.id)) && expectsTmux(session.claude, listedAt)) this.paneExited(session);
 			}
 		} catch (error) {
 			this.options.log(`orfoni-hub: listing tmux panes failed: ${(error as Error).message}`);
@@ -355,6 +381,7 @@ export class Hub {
 
 	private paneExited(session: Session): void {
 		const at = Date.now();
+		session.claude = { kind: 'exited' };
 		for (const requestId of this.requests.withdrawSession(session.id)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 		this.apply(session, { kind: 'pane_exited', at });
 	}
@@ -382,7 +409,8 @@ export class Hub {
 		const at = Date.now();
 		for (const requestId of this.requests.withdrawFor(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 		this.apply(session, { kind: 'hook', event, at });
-		if (event.type === 'session_start' && session.sessionStartAt === null) session.sessionStartAt = at;
+		if (event.type === 'session_start' && session.claude.kind === 'launching') session.claude = { kind: 'running', inputReadyAt: at + INPUT_READY_DELAY_MS };
+		if (endsSession(event)) session.claude = { kind: 'exited' };
 		for (const waiter of this.waiters) {
 			if (waiter.session === session && waiter.matches(event)) {
 				this.waiters.delete(waiter);

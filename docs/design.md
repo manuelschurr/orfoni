@@ -138,13 +138,15 @@ Each session has one state, and every event moves it to a defined next state. Th
 
 | State | Meaning | Enters on | Leaves on |
 |---|---|---|---|
-| `offline` | No `claude` process runs in the session's tmux session | `SessionEnd`, the pane exits | you send a message, which starts `claude --resume` |
+| `offline` | No `claude` process runs in the session's tmux session | `SessionEnd`, the session's tmux session is gone, also when `claude` exits before `SessionStart` | you send a message, which starts `claude --resume=<id>`, or a new conversation when the session never had one |
 | `working` | A turn is running | `UserPromptSubmit`, a request answered from the app or with Yes in the terminal | a request, `Stop`, `StopFailure` |
 | `needs_approval` | Claude waits for permission to use a tool | `PermissionRequest` | an answer from the app or the terminal |
 | `needs_answer` | Claude asked a question or wants a plan approved | `AskUserQuestion` or `ExitPlanMode` | an answer from the app or the terminal |
 | `answered` | The turn finished and you have not read the reply | `Stop` | you open the session |
 | `idle` | The turn finished and you have read the reply | you open an `answered` session, the terminal answers a request with No or Escape | `UserPromptSubmit` |
 | `failed` | The turn ended with an error | `StopFailure` | `UserPromptSubmit` |
+
+A message to an `offline` session whose transcript holds no conversation starts `claude` with a new `--session-id`. Both alternatives fail there: `claude --resume=<id>` prints "No conversation found" and exits 1, and `claude --session-id=<id>` prints "Session ID ... is already in use" and exits 1, because Claude Code wrote a transcript with only the session's title when it started (measured 2026-10-26).
 
 A row in the session list is a tmux session. Claude's session ID is a property of that row. It changes when you run `/clear`, and the chat then starts empty while the earlier conversation stays in the project's history.
 
