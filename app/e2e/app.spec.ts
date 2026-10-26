@@ -53,7 +53,7 @@ test('start a session and see the reply as a bubble', async ({ page }) => {
 	await page.goto('/?transport=ws');
 	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
 	const dialog = page.getByRole('dialog', { name: 'New session' });
-	await dialog.getByLabel('Folder').fill(newProjectDir());
+	await dialog.getByLabel('Folder', { exact: true }).fill(newProjectDir());
 	await dialog.getByLabel('First message').fill('Reply with exactly: pong 7d3');
 	await dialog.getByLabel('Model').selectOption('haiku');
 	await dialog.getByRole('button', { name: 'Start session' }).click();
