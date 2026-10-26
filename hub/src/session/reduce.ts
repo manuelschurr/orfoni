@@ -5,7 +5,7 @@ import type { HookEvent } from '../hooks/events.js';
 export interface SessionModel {
 	state: SessionStateKind;
 	stateSince: number;
-	claudeSessionId: ClaudeSessionId | null;
+	claudeSessionId: ClaudeSessionId;
 	chat: ChatItem[];
 	openRequests: RequestId[];
 	viewing: boolean;
@@ -22,8 +22,8 @@ export type SessionInput =
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
 
-export function emptySession(at: number): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId: null, chat: [], openRequests: [], viewing: false, chatStartedAt: null };
+export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
@@ -127,7 +127,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 						at,
 					);
 				case 'session_end':
-					return enter(model, 'offline', at);
+					return event.reason === 'clear' || event.reason === 'resume' ? model : enter(model, 'offline', at);
 				case 'permission_request':
 				case 'task_created':
 				case 'task_completed':

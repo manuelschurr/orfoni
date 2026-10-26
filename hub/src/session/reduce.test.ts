@@ -15,7 +15,7 @@ function hook<T extends HookEvent['type']>(type: T, body: EventBody<T>, at: numb
 }
 
 function run(...inputs: SessionInput[]): SessionModel {
-	return inputs.reduce(reduce, emptySession(0));
+	return inputs.reduce(reduce, emptySession(0, first));
 }
 
 const started = hook('session_start', { source: 'startup' }, 1);
@@ -27,10 +27,10 @@ function approval(requestId: RequestId): ChatItem {
 
 describe('reduce', () => {
 	test('emptySession starts idle with no conversation', () => {
-		expect(emptySession(7)).toEqual({
+		expect(emptySession(7, first)).toEqual({
 			state: 'idle',
 			stateSince: 7,
-			claudeSessionId: null,
+			claudeSessionId: first,
 			chat: [],
 			openRequests: [],
 			viewing: false,
@@ -237,6 +237,12 @@ describe('reduce', () => {
 	test('session_end goes offline', () => {
 		const model = run(started, prompted, hook('session_end', { reason: 'prompt_input_exit' }, 3));
 		expect(model.state).toBe('offline');
+		expect(model.stateSince).toBe(3);
+	});
+
+	test.each(['clear', 'resume'])('session_end for /%s keeps the state, because the process keeps running', (reason) => {
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_end', { reason }, 4));
+		expect(model.state).toBe('answered');
 		expect(model.stateSince).toBe(3);
 	});
 

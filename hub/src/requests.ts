@@ -124,10 +124,14 @@ export class PendingRequests {
 			case 'stop_failure':
 			case 'prompt':
 			case 'session_end':
-				return this.withdraw((request) => request.sessionId === sessionId);
+				return this.withdrawSession(sessionId);
 			default:
 				return [];
 		}
+	}
+
+	withdrawSession(sessionId: SessionId): RequestId[] {
+		return this.withdraw((request) => request.sessionId === sessionId);
 	}
 
 	private withdraw(matches: (request: OpenRequest) => boolean): RequestId[] {
