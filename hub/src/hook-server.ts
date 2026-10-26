@@ -1,8 +1,15 @@
 import { createServer, type Server } from 'node:http';
 import { hookName } from './hooks/events.js';
 import type { Hub } from './hub.js';
+import { listenOnSocket } from './socket.js';
 
-export function createHookServer(hub: Pick<Hub, 'hook'>, log: (line: string) => void): Server {
+export async function listenHooks(hub: Pick<Hub, 'hook'>, path: string, log: (line: string) => void): Promise<Server> {
+	const server = hookServer(hub, log);
+	await listenOnSocket(server, path);
+	return server;
+}
+
+function hookServer(hub: Pick<Hub, 'hook'>, log: (line: string) => void): Server {
 	return createServer((request, response) => {
 		if (request.method !== 'POST' || request.url !== '/hook') {
 			response.writeHead(404).end();

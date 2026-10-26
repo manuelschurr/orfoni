@@ -68,7 +68,7 @@ describe('formatSession', () => {
 			id: SessionId.parse('0b9c1f2e'),
 			projectDir: '/root/code/orfoni',
 			title: 'hub',
-			claudeSessionId: ClaudeSessionId.parse('c1'),
+			claudeSessionId: ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76'),
 			state: 'idle',
 			stateSince: 0,
 		};

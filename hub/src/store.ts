@@ -1,7 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rename } from 'node:fs/promises';
 import { ClaudeSessionId, SessionId } from '@orfoni/protocol';
 import { z } from 'zod';
+import { writePrivate } from './files.js';
 
 const StoredSession = z.object({
 	id: SessionId,
@@ -42,8 +42,5 @@ export async function loadState(path: string, log: (line: string) => void): Prom
 }
 
 export async function saveState(path: string, state: HubState): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(state, null, '\t')}\n`);
-	await rename(temporary, path);
+	await writePrivate(path, `${JSON.stringify(state, null, '\t')}\n`);
 }

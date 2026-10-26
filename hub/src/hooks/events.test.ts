@@ -178,7 +178,7 @@ describe('parseHookEvent', () => {
 	test('StopFailure gives stop_failure with the error and the rendered error text', () => {
 		expect(parseHookEvent('StopFailure', fixture('StopFailure-docs-example'))).toEqual({
 			type: 'stop_failure',
-			claudeSessionId: 'abc123',
+			claudeSessionId: '00893aaf-19fa-41d2-8238-13269b9b3ca0',
 			error: 'rate_limit',
 			lastAssistantMessage: 'API Error: Rate limit reached',
 		});

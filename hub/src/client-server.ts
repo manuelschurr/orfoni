@@ -1,31 +1,13 @@
-import { mkdir, rm } from 'node:fs/promises';
-import { connect, createServer, type Server, type Socket } from 'node:net';
-import { dirname } from 'node:path';
+import { createServer, type Server, type Socket } from 'node:net';
 import { createInterface } from 'node:readline';
 import { parseClientRequest, ProtocolError, type ClientRequest, type HubMessage } from '@orfoni/protocol';
 import type { Hub } from './hub.js';
+import { listenOnSocket } from './socket.js';
 
 export async function listenClients(hub: Pick<Hub, 'connect'>, path: string): Promise<Server> {
-	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	if (await answers(path)) throw new Error(`another orfoni-hub is already listening on ${path}`);
-	await rm(path, { force: true });
 	const server = createServer((socket) => serve(hub, socket));
-	await new Promise<void>((resolve, reject) => {
-		server.once('error', reject);
-		server.listen(path, resolve);
-	});
+	await listenOnSocket(server, path);
 	return server;
-}
-
-function answers(path: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const probe = connect(path);
-		probe.once('connect', () => {
-			probe.destroy();
-			resolve(true);
-		});
-		probe.once('error', () => resolve(false));
-	});
 }
 
 function lineId(line: string): number {

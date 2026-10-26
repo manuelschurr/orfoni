@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { RequestId, SessionId, type ClaudeSessionId } from '@orfoni/protocol';
+import { ClaudeSessionId, RequestId, SessionId } from '@orfoni/protocol';
 import { describe, expect, test } from 'vitest';
 import { HookParseError, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
@@ -13,7 +13,7 @@ function permission(fixture: string): PermissionRequest {
 
 const session = SessionId.parse('session-a');
 const otherSession = SessionId.parse('session-b');
-const claude = 'claude-1' as ClaudeSessionId;
+const claude = ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76');
 
 const write = permission('PermissionRequest');
 const question = permission('PermissionRequest-AskUserQuestion');

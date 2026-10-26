@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { once } from 'node:events';
-import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { chmodSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
+import { request as httpRequest, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { createHookServer } from './hook-server.js';
+import { listenHooks } from './hook-server.js';
 import type { HookResponse } from './requests.js';
 import { hookSettings } from './settings.js';
 
@@ -11,30 +12,45 @@ let server: Server;
 let logs: string[];
 let calls: { header: string | undefined; body: unknown }[];
 
-async function serve(answer: () => Promise<HookResponse>): Promise<number> {
+function socketPath(): string {
+	return join(mkdtempSync(join(tmpdir(), 'orfoni-hooks-')), 'orfoni', 'hooks.sock');
+}
+
+async function serve(answer: () => Promise<HookResponse>, path = socketPath()): Promise<string> {
 	logs = [];
 	calls = [];
-	server = createHookServer(
+	server = await listenHooks(
 		{
 			hook: (header, body) => {
 				calls.push({ header, body });
 				return answer();
 			},
 		},
+		path,
 		(line) => logs.push(line),
 	);
-	server.listen(0, '127.0.0.1');
-	await once(server, 'listening');
-	return (server.address() as AddressInfo).port;
+	return path;
 }
 
-function runHookCommand(port: number, hook: 'Stop' | 'PermissionRequest', body: object): Promise<string> {
-	const entry = (hookSettings(port) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
+function runHookCommand(path: string, hook: 'Stop' | 'PermissionRequest', body: object): Promise<string> {
+	const entry = (hookSettings(path) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', entry.command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
 			error ? reject(error) : resolve(stdout),
 		);
 		child.stdin?.end(JSON.stringify(body));
+	});
+}
+
+function send(path: string, method: string, url: string, body?: string): Promise<{ status: number; text: string }> {
+	return new Promise((resolve, reject) => {
+		const request = httpRequest({ socketPath: path, method, path: url }, (response) => {
+			const chunks: Buffer[] = [];
+			response.on('data', (chunk: Buffer) => chunks.push(chunk));
+			response.on('end', () => resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
+		});
+		request.on('error', reject);
+		request.end(body);
 	});
 }
 
@@ -47,18 +63,18 @@ afterEach(() => {
 
 describe('hook server', () => {
 	test('the curl hook command gets an empty answer at once, before the hub has handled the hook', async () => {
-		const port = await serve(never);
+		const path = await serve(never);
 		const body = { hook_event_name: 'Stop', session_id: 'c1', last_assistant_message: 'done' };
-		expect(await runHookCommand(port, 'Stop', body)).toBe('');
+		expect(await runHookCommand(path, 'Stop', body)).toBe('');
 		expect(calls).toEqual([{ header: 'session-1', body }]);
 	});
 
 	test('a PermissionRequest is held until the hub answers, and curl prints the answer', async () => {
 		let answer: (response: HookResponse) => void = () => {};
-		const port = await serve(() => new Promise((resolve) => (answer = resolve)));
+		const path = await serve(() => new Promise((resolve) => (answer = resolve)));
 		let printed: string | undefined;
 		const body = { hook_event_name: 'PermissionRequest', session_id: 'c1', tool_name: 'Write', tool_input: {} };
-		const done = runHookCommand(port, 'PermissionRequest', body).then((stdout) => (printed = stdout));
+		const done = runHookCommand(path, 'PermissionRequest', body).then((stdout) => (printed = stdout));
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(calls).toEqual([{ header: 'session-1', body }]);
 		expect(printed).toBeUndefined();
@@ -68,18 +84,24 @@ describe('hook server', () => {
 		expect(JSON.parse(printed!)).toEqual(decision);
 	});
 
+	test('the socket lives in a directory only its owner can enter, even one that existed before', async () => {
+		const path = socketPath();
+		mkdirSync(join(path, '..'), { mode: 0o755 });
+		chmodSync(join(path, '..'), 0o755);
+		await serve(never, path);
+		expect(statSync(join(path, '..')).mode & 0o777).toBe(0o700);
+	});
+
 	test('a body that is not JSON gets an empty 200 and a log line', async () => {
-		const port = await serve(never);
-		const response = await fetch(`http://127.0.0.1:${port}/hook`, { method: 'POST', body: 'not json' });
-		expect(response.status).toBe(200);
-		expect(await response.text()).toBe('');
+		const path = await serve(never);
+		expect(await send(path, 'POST', '/hook', 'not json')).toEqual({ status: 200, text: '' });
 		expect(calls).toEqual([]);
 		expect(logs).toHaveLength(1);
 	});
 
 	test('anything but POST /hook gets 404', async () => {
-		const port = await serve(never);
-		expect((await fetch(`http://127.0.0.1:${port}/hook`)).status).toBe(404);
-		expect((await fetch(`http://127.0.0.1:${port}/other`, { method: 'POST', body: '{}' })).status).toBe(404);
+		const path = await serve(never);
+		expect((await send(path, 'GET', '/hook')).status).toBe(404);
+		expect((await send(path, 'POST', '/other', '{}')).status).toBe(404);
 	});
 });

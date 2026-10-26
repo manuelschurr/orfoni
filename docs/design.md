@@ -47,7 +47,7 @@ orfoni app on Windows and Android     Tauri 2 + Svelte 5
 
 VPS
     orfoni-hub                         Node + TypeScript, systemd user service
-        session states and chat      ◄─ Claude Code hooks, posted to 127.0.0.1
+        session states and chat      ◄─ Claude Code hooks, posted to the hub's Unix socket
         your chat messages           ──► the session's input, through tmux
         approvals and questions      ◄─► hook requests held open until someone answers
         history and titles           ◄─ listSessions() and getSessionMessages()
@@ -87,8 +87,9 @@ Memory caps:
 
 The hub has these jobs:
 
-- Start a session by creating a tmux session in the project folder that runs `claude --session-id <uuid> --name <title>`. Stop a session by ending its tmux session.
-- Receive Claude Code's hook events on 127.0.0.1. Each hook is a short `curl` command that posts the event with the orfoni session ID as a header, so the hub knows which session sent it.
+- Start a session by creating a tmux session in the project folder that runs `claude --session-id=<uuid> --name <title>`. Stop a session by ending its tmux session.
+- Receive Claude Code's hook events on a Unix socket in the hub's runtime directory, `$XDG_RUNTIME_DIR/orfoni/hooks.sock`. The directory has mode 0700, so no other account on the VPS can post hooks. Each hook is a short `curl --unix-socket` command that posts the event with the orfoni session ID as a header, so the hub knows which session sent it.
+- Accept a Claude session ID only as a UUID, from hooks and from the state file, and pass it to `claude` only glued to its option, as `--resume=<id>`. The ID arrives in hook input, so without both rules a forged hook could add options to `claude`'s arguments.
 - Turn hook events into session states and chat messages, and forward both to connected apps.
 - Send your chat messages into the session with `tmux paste-buffer -p` followed by Enter, only while the session is waiting for input or working. Claude Code queues a message typed while it works.
 - Hold `PermissionRequest` hook requests open until an app answers. If the terminal answers first, the hub sees the tool run and withdraws the card.
@@ -99,7 +100,7 @@ The hub has these jobs:
 - Write summaries and track which answers you have not read yet.
 - Read memory use and out-of-memory kills for each pane.
 
-The hub stores only what Claude Code and tmux do not: summaries, read state, and the list of project folders. It keeps them in one small file with a version field and writes it atomically, by writing a temporary file and renaming it.
+The hub stores only what Claude Code and tmux do not: summaries, read state, and the list of project folders. It keeps them in one small file with a version field and writes it atomically, by writing a temporary file and renaming it. That file and the per-session settings files have mode 0600, in directories with mode 0700.
 
 Sessions do not depend on the hub. If the hub is down, Claude keeps working, because a hook that fails defaults to continuing. When the hub comes back, it rebuilds each session's state from tmux and the transcripts.
 

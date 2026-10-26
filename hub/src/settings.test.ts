@@ -7,7 +7,8 @@ interface HookEntry {
 	timeout: number;
 }
 
-const settings = hookSettings(47380) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
+const SOCKET = '/run/user/0/orfoni/hooks.sock';
+const settings = hookSettings(SOCKET) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
 
 function entry(hook: string): HookEntry {
 	const groups = settings.hooks[hook];
@@ -32,15 +33,20 @@ describe('hookSettings', () => {
 		const { timeout, command } = entry('PermissionRequest');
 		expect(timeout).toBe(3600);
 		expect(command).toContain('-m 3600');
-		expect(command).toContain('http://127.0.0.1:47380/hook');
+		expect(command).toContain(`--unix-socket '${SOCKET}'`);
 		expect(command).toContain('X-Orfoni-Session: $ORFONI_SESSION');
 		expect(command.endsWith('|| true')).toBe(true);
 	});
 
-	it('runs exactly the curl command from the spike', () => {
+	it('posts to the hub through its Unix socket, never through a TCP port', () => {
 		expect(entry('Stop').command).toBe(
-			`curl -sS -m 5 --data-binary @- -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" http://127.0.0.1:47380/hook 2>/dev/null || true`,
+			`curl -sS -m 5 --unix-socket '${SOCKET}' --data-binary @- -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" http://localhost/hook 2>/dev/null || true`,
 		);
+	});
+
+	it('quotes a socket path that contains a quote or a space for the shell', () => {
+		const command = (hookSettings("/run/it's here/hooks.sock") as typeof settings).hooks.Stop![0]!.hooks[0]!.command;
+		expect(command).toContain(`--unix-socket '/run/it'\\''s here/hooks.sock'`);
 	});
 
 	it('gives MessageDisplay two seconds and every other hook but PermissionRequest five', () => {
@@ -53,8 +59,6 @@ describe('hookSettings', () => {
 	});
 
 	it('keeps $ORFONI_SESSION literal in the serialized JSON', () => {
-		const json = JSON.stringify(hookSettings(1234));
-		expect(json).toContain('X-Orfoni-Session: $ORFONI_SESSION');
-		expect(json).toContain('http://127.0.0.1:1234/hook');
+		expect(JSON.stringify(hookSettings(SOCKET))).toContain('X-Orfoni-Session: $ORFONI_SESSION');
 	});
 });

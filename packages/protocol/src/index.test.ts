@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseClientRequest, parseHubMessage, ProtocolError, type HubMessage } from './index.js';
+import { ClaudeSessionId, parseClientRequest, parseHubMessage, ProtocolError, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -33,6 +33,16 @@ describe('parseClientRequest', () => {
 
 	test('rejects send without text', () => {
 		expectBadMessage('{"id":1,"method":"send","sessionId":"s"}');
+	});
+});
+
+describe('ClaudeSessionId', () => {
+	test('accepts the UUID Claude Code gives a session', () => {
+		expect(ClaudeSessionId.safeParse('03e013df-1dd4-4168-8b32-2e3881a83f76').success).toBe(true);
+	});
+
+	test.each(['--mcp-config=/tmp/evil.json', '-p', 'abc123', ''])('rejects %j, which claude could read as an option', (forged) => {
+		expect(ClaudeSessionId.safeParse(forged).success).toBe(false);
 	});
 });
 

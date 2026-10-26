@@ -3,8 +3,8 @@ import { describe, expect, test } from 'vitest';
 import type { HookEvent } from '../hooks/events.js';
 import { emptySession, reduce, type SessionInput, type SessionModel } from './reduce.js';
 
-const first = ClaudeSessionId.parse('claude-1');
-const second = ClaudeSessionId.parse('claude-2');
+const first = ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76');
+const second = ClaudeSessionId.parse('7dc09cb7-52a0-432d-96d1-96f2f3904ec0');
 const req1 = RequestId.parse('req-1');
 const req2 = RequestId.parse('req-2');
 

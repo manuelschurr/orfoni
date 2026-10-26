@@ -13,7 +13,11 @@ const HOOK_TIMEOUTS = {
 	StopFailure: 5,
 } as const;
 
-export function hookSettings(port: number): object {
+function shellQuote(text: string): string {
+	return `'${text.replaceAll("'", `'\\''`)}'`;
+}
+
+export function hookSettings(socket: string): object {
 	const hooks = Object.fromEntries(
 		Object.entries(HOOK_TIMEOUTS).map(([hook, timeout]) => [
 			hook,
@@ -22,7 +26,7 @@ export function hookSettings(port: number): object {
 					hooks: [
 						{
 							type: 'command',
-							command: `curl -sS -m ${timeout} --data-binary @- -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" http://127.0.0.1:${port}/hook 2>/dev/null || true`,
+							command: `curl -sS -m ${timeout} --unix-socket ${shellQuote(socket)} --data-binary @- -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" http://localhost/hook 2>/dev/null || true`,
 							timeout,
 						},
 					],

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
@@ -15,6 +15,7 @@ import {
 	type SessionSummary,
 } from '@orfoni/protocol';
 import { z } from 'zod';
+import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, normalizeHistory } from './history.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
@@ -30,7 +31,7 @@ const PANE_CHECK_INTERVAL_MS = 5_000;
 
 export interface HubOptions {
 	tmux: Tmux;
-	hookPort: number;
+	hookSocket: string;
 	stateDir: string;
 	claudeConfigPath: string;
 	shell: string;
@@ -213,7 +214,7 @@ export class Hub {
 		const needsTrust = await this.needsTrust(request.projectDir);
 		this.sessions.set(session.id, session);
 		try {
-			await this.launch(session, ['--session-id', claudeSessionId], options);
+			await this.launch(session, [`--session-id=${claudeSessionId}`], options);
 		} catch (error) {
 			this.sessions.delete(session.id);
 			throw error;
@@ -234,8 +235,7 @@ export class Hub {
 
 	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
 		const settings = join(this.options.stateDir, 'settings', `${session.id}.json`);
-		await mkdir(dirname(settings), { recursive: true });
-		await writeFile(settings, `${JSON.stringify(hookSettings(this.options.hookPort), null, '\t')}\n`);
+		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket), null, '\t')}\n`);
 		session.sessionStartAt = null;
 		await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
 	}
@@ -269,7 +269,7 @@ export class Hub {
 		if (session.model.state === 'offline' && session.sessionStartAt !== null) {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
-			await this.launch(session, ['--resume', session.model.claudeSessionId], ['--', text]);
+			await this.launch(session, [`--resume=${session.model.claudeSessionId}`], ['--', text]);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude --resume did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
 		}

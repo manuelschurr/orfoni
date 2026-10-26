@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -8,7 +8,7 @@ import { Hub } from './hub.js';
 import { hookSettings } from './settings.js';
 import type { Tmux } from './tmux.js';
 
-const PORT = 47399;
+const SOCKET = '/run/user/0/orfoni/hooks.sock';
 const PROJECT = '/work/proj';
 const T0 = Date.parse('2026-10-26T11:00:00.000Z');
 
@@ -109,7 +109,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 	fake = tmux;
 	hub = await Hub.start({
 		tmux: fake.tmux,
-		hookPort: PORT,
+		hookSocket: SOCKET,
 		stateDir: dir,
 		claudeConfigPath: join(dir, 'claude.json'),
 		shell: '/bin/zsh',
@@ -158,10 +158,10 @@ describe('startSession', () => {
 				`orfoni-${id}`,
 				PROJECT,
 				{ ORFONI_SESSION: id },
-				['claude', '--session-id', claude, '--settings', settings, '--model', 'haiku', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
+				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
 			],
 		]);
-		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(PORT));
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET));
 		expect(started).toEqual({
 			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0 },
 			needsTrust: true,
@@ -169,10 +169,22 @@ describe('startSession', () => {
 		expect(claude).not.toBe(id);
 	});
 
+	test('the settings file and the state file are readable only by their owner, in directories only the owner can enter', async () => {
+		chmodSync(dir, 0o755);
+		mkdirSync(join(dir, 'settings'), { mode: 0o755 });
+		const client = await startHub();
+		const { id, settings } = await start(client);
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
+		expect(statSync(settings).mode & 0o777).toBe(0o600);
+		expect(statSync(join(dir, 'settings')).mode & 0o777).toBe(0o700);
+		expect(statSync(join(dir, 'state.json')).mode & 0o777).toBe(0o600);
+		expect(statSync(dir).mode & 0o777).toBe(0o700);
+	});
+
 	test('without options claude gets only its session ID and the settings', async () => {
 		const client = await startHub();
 		const { claude, settings } = await start(client);
-		expect(fake.of('newSession')[0]?.[3]).toEqual(['claude', '--session-id', claude, '--settings', settings]);
+		expect(fake.of('newSession')[0]?.[3]).toEqual(['claude', `--session-id=${claude}`, '--settings', settings]);
 	});
 
 	test('needsTrust is false for a folder Claude Code already trusts, and ~/.claude.json stays untouched', async () => {
@@ -268,7 +280,7 @@ describe('send', () => {
 		let response: Response | undefined;
 		void client.request('send', { sessionId: id, text: 'continue' }).then((r) => (response = r));
 		await untilRealTime(() => fake.of('newSession').length === 2);
-		expect(fake.of('newSession')[1]).toEqual([`orfoni-${id}`, PROJECT, { ORFONI_SESSION: id }, ['claude', '--resume', claude, '--settings', settings, '--', 'continue']]);
+		expect(fake.of('newSession')[1]).toEqual([`orfoni-${id}`, PROJECT, { ORFONI_SESSION: id }, ['claude', `--resume=${claude}`, '--settings', settings, '--', 'continue']]);
 		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
 		await untilRealTime(() => response !== undefined);
@@ -429,6 +441,21 @@ describe('hooks', () => {
 		expect(await hub.hook(header === 'known' ? id : header, makeBody())).toEqual({});
 		expect(client.messages.length).toBe(before);
 		expect(logs).toHaveLength(1);
+	});
+
+	test('a forged hook whose session_id is a claude option is dropped, and claude only ever gets the ID glued to its option', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await ready(client);
+		expect(await hub.hook(id, body('SessionStart', '--mcp-config=/tmp/evil.json', { source: 'clear' }))).toEqual({});
+		expect(logs).toHaveLength(1);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		fake.live.delete(`orfoni-${id}`);
+		void client.request('send', { sessionId: id, text: 'continue' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect(fake.of('newSession').map((call) => call[3])).toEqual([
+			['claude', `--session-id=${claude}`, '--settings', settings],
+			['claude', `--resume=${claude}`, '--settings', settings, '--', 'continue'],
+		]);
 	});
 
 	test('/clear gives the session a new Claude session ID and an empty chat, and the hub remembers it', async () => {

@@ -6,7 +6,7 @@ export type SessionId = z.infer<typeof SessionId>;
 export const RequestId = z.string().min(1).brand<'RequestId'>();
 export type RequestId = z.infer<typeof RequestId>;
 
-export const ClaudeSessionId = z.string().min(1).brand<'ClaudeSessionId'>();
+export const ClaudeSessionId = z.uuid().brand<'ClaudeSessionId'>();
 export type ClaudeSessionId = z.infer<typeof ClaudeSessionId>;
 
 export const SessionStateKind = z.enum(['offline', 'working', 'needs_approval', 'needs_answer', 'answered', 'idle', 'failed']);
