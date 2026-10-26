@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Lets the app's browser build reach the hub and tmux on this machine, for development and the Playwright checks only.
 import { spawn } from 'node:child_process';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import pty from 'node-pty';
@@ -12,6 +13,13 @@ const hubCommand = process.env.ORFONI_HUB_COMMAND ?? '"$HOME/.local/bin/orfoni-h
 const tmuxSocket = process.env.ORFONI_TMUX_SOCKET ?? 'orfoni';
 const origins = new Set((process.env.ORFONI_BRIDGE_ORIGINS ?? 'http://127.0.0.1:5173,http://localhost:5173').split(','));
 const TARGET = /^=orfoni-[0-9a-f-]+(-sh[0-9]+)?$/;
+// Any local account can reach 127.0.0.1, and a terminal here is a shell as this user, so each connection must carry this start's token.
+const token = Buffer.from(process.env.ORFONI_BRIDGE_TOKEN || randomBytes(32).toString('base64url'));
+
+function carriesToken(url) {
+	const given = Buffer.from(url.searchParams.get('token') ?? '');
+	return given.length === token.length && timingSafeEqual(given, token);
+}
 
 function size(value) {
 	const n = Number(value);
@@ -70,6 +78,7 @@ server.on('upgrade', (request, socket, head) => {
 	// Browsers always send Origin, so this keeps web pages other than the app from driving the hub and tmux.
 	if (request.headers.origin !== undefined && !origins.has(request.headers.origin)) return refuse('403 Forbidden');
 	const url = new URL(request.url ?? '/', `http://${HOST}`);
+	if (!carriesToken(url)) return refuse('401 Unauthorized');
 	if (url.pathname === '/hub') {
 		sockets.handleUpgrade(request, socket, head, relayHub);
 		return;
@@ -82,5 +91,8 @@ server.on('upgrade', (request, socket, head) => {
 	sockets.handleUpgrade(request, socket, head, (ws) => relayTerminal(ws, target, cols, rows));
 });
 
-server.listen(port, HOST, () => console.error(`orfoni dev bridge on ws://${HOST}:${port}`));
+server.listen(port, HOST, () => {
+	console.error(`orfoni dev bridge on ws://${HOST}:${port}`);
+	if (!process.env.ORFONI_BRIDGE_TOKEN) console.error(`open the app at http://127.0.0.1:5173/?transport=ws&token=${token}`);
+});
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));

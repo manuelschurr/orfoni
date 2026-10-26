@@ -104,11 +104,11 @@ test('sending while the socket is down fails instead of dropping the line', asyn
 	transport.close();
 });
 
-test('a terminal stream opens at the given size and relays bytes and resizes both ways', async () => {
-	const stream = await wsTerminalTransport(base).open('=orfoni-a1', 132, 43);
+test('a terminal stream opens at the given size with the bridge token and relays bytes and resizes both ways', async () => {
+	const stream = await wsTerminalTransport(base, 't0k').open('=orfoni-a1', 132, 43);
 	const { socket, url } = await until(() => connections[0]);
 	expect(new URL(url, base).pathname).toBe('/terminal');
-	expect(Object.fromEntries(new URL(url, base).searchParams)).toEqual({ target: '=orfoni-a1', cols: '132', rows: '43' });
+	expect(Object.fromEntries(new URL(url, base).searchParams)).toEqual({ target: '=orfoni-a1', cols: '132', rows: '43', token: 't0k' });
 
 	const chunks: number[][] = [];
 	stream.onData((data) => chunks.push([...data]));
@@ -128,7 +128,7 @@ test('a terminal stream opens at the given size and relays bytes and resizes bot
 });
 
 test('closing a terminal stream closes its socket', async () => {
-	const stream = await wsTerminalTransport(base).open('=orfoni-a1-sh1', 80, 24);
+	const stream = await wsTerminalTransport(base, 't0k').open('=orfoni-a1-sh1', 80, 24);
 	const { socket } = await until(() => connections[0]);
 	let closed = false;
 	socket.on('close', () => (closed = true));

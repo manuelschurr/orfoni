@@ -1,5 +1,5 @@
 import xterm from '@xterm/headless';
-import { BRIDGE } from './hub';
+import { BRIDGE, TOKEN } from './hub';
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,7 +14,7 @@ export class Screen {
 
 	static attach(target: string, bridge = BRIDGE, cols = 120, rows = 40): Promise<Screen> {
 		const term = new xterm.Terminal({ cols, rows, allowProposedApi: true });
-		const socket = new WebSocket(`${bridge}/terminal?${new URLSearchParams({ target, cols: String(cols), rows: String(rows) })}`);
+		const socket = new WebSocket(`${bridge}/terminal?${new URLSearchParams({ target, cols: String(cols), rows: String(rows), token: TOKEN })}`);
 		socket.binaryType = 'arraybuffer';
 		socket.onmessage = (event) => {
 			if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));

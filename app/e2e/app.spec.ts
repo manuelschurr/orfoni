@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import type { PermissionMode, SessionSummary } from '@orfoni/protocol';
-import { Hub, newProjectDir } from './hub';
+import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
 
 const REPLY_MS = 120_000;
+const APP = `/?${new URLSearchParams({ transport: 'ws', token: TOKEN })}`;
 let hub: Hub;
 
 test.beforeEach(async () => {
@@ -25,8 +26,8 @@ async function startReady(params: { prompt?: string; title?: string; permissionM
 	return { ...session, dir };
 }
 
-async function openSession(page: Page, session: SessionSummary, query = '?transport=ws'): Promise<void> {
-	await page.goto(`/${query}`);
+async function openSession(page: Page, session: SessionSummary, url = APP): Promise<void> {
+	await page.goto(url);
 	await page.locator(`[data-session="${session.id}"]`).click();
 }
 
@@ -42,15 +43,30 @@ function shownState(page: Page, label: string) {
 	return page.getByRole('main').getByText(label, { exact: true });
 }
 
+test('the bridge refuses connections that lack its token', async () => {
+	const refused = (url: string) =>
+		new Promise<boolean>((resolve) => {
+			const socket = new WebSocket(url);
+			socket.onopen = () => {
+				socket.close();
+				resolve(false);
+			};
+			socket.onerror = () => resolve(true);
+		});
+	expect(await refused(`${BRIDGE}/hub`)).toBe(true);
+	expect(await refused(`${BRIDGE}/hub?token=wrong`)).toBe(true);
+	expect(await refused(`${BRIDGE}/terminal?${new URLSearchParams({ target: '=orfoni-0', cols: '80', rows: '24' })}`)).toBe(true);
+});
+
 test('the session list loads', async ({ page }) => {
 	await hub.start({ projectDir: newProjectDir(), title: 'list check' });
 	const sessions = await hub.sessions();
-	await page.goto('/?transport=ws');
+	await page.goto(APP);
 	for (const session of sessions) await expect(page.locator(`[data-session="${session.id}"]`)).toBeVisible();
 });
 
 test('start a session and see the reply as a bubble', async ({ page }) => {
-	await page.goto('/?transport=ws');
+	await page.goto(APP);
 	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
 	const dialog = page.getByRole('dialog', { name: 'New session' });
 	await dialog.getByLabel('Folder', { exact: true }).fill(newProjectDir());
@@ -182,7 +198,7 @@ test('reconnect after the bridge restarts without duplicated items', async ({ pa
 	let bridge = await startBridge();
 	try {
 		const session = await startReady({ prompt: 'Reply with exactly: one' });
-		await openSession(page, session, `?transport=ws&bridge=ws://127.0.0.1:${port}`);
+		await openSession(page, session, `${APP}&bridge=ws://127.0.0.1:${port}`);
 		await expect(claude(page)).toContainText('one', { timeout: REPLY_MS });
 		await expect(you(page)).toHaveCount(1);
 		await expect(claude(page)).toHaveCount(1);

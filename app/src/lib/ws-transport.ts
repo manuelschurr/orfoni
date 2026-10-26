@@ -79,10 +79,10 @@ export function wsHubTransport(url: string, backoffMs: number[] = BACKOFF_MS, se
 	};
 }
 
-export function wsTerminalTransport(base: string): TerminalTransport {
+export function wsTerminalTransport(base: string, token: string): TerminalTransport {
 	return {
 		open(target, cols, rows) {
-			const url = `${base}/terminal?${new URLSearchParams({ target, cols: String(cols), rows: String(rows) })}`;
+			const url = `${base}/terminal?${new URLSearchParams({ target, cols: String(cols), rows: String(rows), token })}`;
 			const ws = new WebSocket(url);
 			ws.binaryType = 'arraybuffer';
 			const dataListeners: ((data: Uint8Array) => void)[] = [];

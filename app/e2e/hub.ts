@@ -5,6 +5,7 @@ type Method = ClientRequest['method'];
 type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }>, 'id' | 'method'>;
 
 export const BRIDGE = 'ws://127.0.0.1:4790';
+export const TOKEN = process.env.ORFONI_BRIDGE_TOKEN ?? '';
 export const PROJECTS = '/var/tmp/claude-0/orfoni-app-e2e';
 
 export function newProjectDir(): string {
@@ -40,7 +41,7 @@ export class Hub {
 
 	static connect(bridge = BRIDGE): Promise<Hub> {
 		return new Promise((resolve, reject) => {
-			const socket = new WebSocket(`${bridge}/hub`);
+			const socket = new WebSocket(`${bridge}/hub?${new URLSearchParams({ token: TOKEN })}`);
 			socket.onopen = () => resolve(new Hub(socket));
 			socket.onerror = () => reject(new Error(`could not reach the bridge at ${bridge}`));
 		});

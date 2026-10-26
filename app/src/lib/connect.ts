@@ -11,7 +11,8 @@ export function createTransports(): Transports {
 	const query = new URLSearchParams(window.location.search);
 	if (query.get('transport') === 'ws') {
 		const bridge = query.get('bridge') ?? 'ws://127.0.0.1:4790';
-		return { kind: 'bridge', hub: wsHubTransport(`${bridge}/hub`), terminal: wsTerminalTransport(bridge) };
+		const token = query.get('token') ?? '';
+		return { kind: 'bridge', hub: wsHubTransport(`${bridge}/hub?${new URLSearchParams({ token })}`), terminal: wsTerminalTransport(bridge, token) };
 	}
 	throw new Error('This page runs inside the orfoni app. Open it with ?transport=ws to use the development bridge.');
 }

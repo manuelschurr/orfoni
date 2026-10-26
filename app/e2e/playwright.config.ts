@@ -1,4 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
+
+// The bridge refuses connections without this token. Workers inherit it, and a bridge that already runs needs its own token exported here.
+process.env.ORFONI_BRIDGE_TOKEN ||= randomBytes(32).toString('base64url');
 
 export default defineConfig({
 	testDir: '.',
@@ -13,7 +17,7 @@ export default defineConfig({
 		trace: 'retain-on-failure',
 	},
 	webServer: [
-		{ command: 'node ../../tools/dev-bridge/bridge.mjs', url: 'http://127.0.0.1:4790/', reuseExistingServer: true },
+		{ command: 'node ../../tools/dev-bridge/bridge.mjs', url: 'http://127.0.0.1:4790/', reuseExistingServer: true, env: { ORFONI_BRIDGE_TOKEN: process.env.ORFONI_BRIDGE_TOKEN } },
 		{ command: 'npx vite --port 5173 --strictPort', cwd: '..', url: 'http://127.0.0.1:5173/', reuseExistingServer: true },
 	],
 });
