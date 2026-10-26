@@ -52,21 +52,32 @@ impl AppState {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConnectOutcome {
     Connected,
-    Failed { error: String },
-    HostKeyUnknown { fingerprint: String },
-    HostKeyChanged { expected: String, found: String },
+    Failed {
+        error: String,
+    },
+    HostKeyUnknown {
+        fingerprint: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    HostKeyChanged {
+        expected: String,
+        found: String,
+        known_hosts_file: String,
+    },
     PassphraseNeeded,
 }
 
-impl From<SshError> for ConnectOutcome {
-    fn from(error: SshError) -> ConnectOutcome {
+impl ConnectOutcome {
+    fn from_error(error: SshError, known_hosts: &Path) -> ConnectOutcome {
         match error {
             SshError::HostKeyUnknown { fingerprint } => {
                 ConnectOutcome::HostKeyUnknown { fingerprint }
             }
-            SshError::HostKeyChanged { expected, found } => {
-                ConnectOutcome::HostKeyChanged { expected, found }
-            }
+            SshError::HostKeyChanged { expected, found } => ConnectOutcome::HostKeyChanged {
+                expected,
+                found,
+                known_hosts_file: known_hosts.display().to_string(),
+            },
             SshError::PassphraseNeeded => ConnectOutcome::PassphraseNeeded,
             other => ConnectOutcome::Failed {
                 error: other.to_string(),
@@ -97,7 +108,7 @@ pub async fn connect(
             *state.link.lock().unwrap() = Some(link);
             Ok(ConnectOutcome::Connected)
         }
-        Err(error) => Ok(error.into()),
+        Err(error) => Ok(ConnectOutcome::from_error(error, &state.known_hosts_path)),
     }
 }
 
@@ -204,4 +215,29 @@ pub fn debug_log(state: State<'_, AppState>, message: String) -> bool {
         eprintln!("orfoni-debug: {message}");
     }
     state.debug
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_host_key_names_the_file_that_holds_the_trusted_key() {
+        let outcome = ConnectOutcome::from_error(
+            SshError::HostKeyChanged {
+                expected: "SHA256:old".into(),
+                found: "SHA256:new".into(),
+            },
+            Path::new("/data/known-hosts.json"),
+        );
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            serde_json::json!({
+                "kind": "hostKeyChanged",
+                "expected": "SHA256:old",
+                "found": "SHA256:new",
+                "knownHostsFile": "/data/known-hosts.json",
+            })
+        );
+    }
 }

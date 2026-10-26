@@ -113,45 +113,9 @@
 </dialog>
 
 <style>
-	.dialog {
-		width: min(36rem, calc(100vw - 2rem));
-		padding: 1.4rem 1.5rem 1.3rem;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-card);
-		background: var(--surface);
-		color: var(--text);
-		box-shadow: 0 18px 50px rgb(0 0 0 / 0.25);
-	}
-
-	.dialog::backdrop {
-		background: rgb(0 0 0 / 0.35);
-	}
-
-	form {
-		display: grid;
-		gap: 0.9rem;
-	}
-
-	h2 {
-		margin: 0 0 0.2rem;
-		font-size: 1.15rem;
-	}
-
-	.row {
-		display: grid;
-		gap: 0.3rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-	}
-
 	.row textarea {
 		resize: vertical;
 		font-weight: 400;
-	}
-
-	.mono {
-		font-family: var(--font-mono);
-		font-size: 0.875rem;
 	}
 
 	.recent {
@@ -176,12 +140,5 @@
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 0.8rem;
-	}
-
-	.buttons {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-		margin-top: 0.3rem;
 	}
 </style>

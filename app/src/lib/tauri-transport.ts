@@ -13,7 +13,7 @@ export type ConnectOutcome =
 	| { kind: 'connected' }
 	| { kind: 'failed'; error: string }
 	| { kind: 'hostKeyUnknown'; fingerprint: string }
-	| { kind: 'hostKeyChanged'; expected: string; found: string }
+	| { kind: 'hostKeyChanged'; expected: string; found: string; knownHostsFile: string }
 	| { kind: 'passphraseNeeded' };
 
 type LinkEvent = { kind: 'line'; value: string } | { kind: 'status'; value: ConnectionStatus };
