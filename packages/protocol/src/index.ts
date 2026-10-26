@@ -90,6 +90,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		projectDir: z.string().min(1),
 		prompt: z.string().min(1).optional(),
 		title: z.string().min(1).optional(),
+		model: z.string().min(1).optional(),
 		permissionMode: PermissionMode.optional(),
 	}),
 	z.object({ id, method: z.literal('openSession'), sessionId: SessionId }),

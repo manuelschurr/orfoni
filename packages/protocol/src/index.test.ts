@@ -18,6 +18,11 @@ describe('parseClientRequest', () => {
 		expect(request).toEqual({ id: 1, method: 'send', sessionId: 's', text: 'hi' });
 	});
 
+	test('accepts startSession with a model and a permission mode', () => {
+		const request = parseClientRequest('{"id":2,"method":"startSession","projectDir":"/p","model":"haiku","permissionMode":"plan"}');
+		expect(request).toEqual({ id: 2, method: 'startSession', projectDir: '/p', model: 'haiku', permissionMode: 'plan' });
+	});
+
 	test('rejects text that is not JSON', () => {
 		expectBadMessage('not json');
 	});
