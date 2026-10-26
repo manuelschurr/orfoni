@@ -4,7 +4,7 @@
 	import SessionRow from './SessionRow.svelte';
 	import StatusBar from './StatusBar.svelte';
 
-	let { client, onnew }: { client: HubClient; onnew: () => void } = $props();
+	let { client, onnew, onsettings }: { client: HubClient; onnew: () => void; onsettings?: () => void } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -57,7 +57,7 @@
 			{/if}
 		{/each}
 	</div>
-	<StatusBar {client} />
+	<StatusBar {client} {onsettings} />
 </nav>
 
 <style>

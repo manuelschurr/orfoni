@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { HubClient } from '../hub-client.svelte';
 
-	let { client }: { client: HubClient } = $props();
+	let { client, onsettings }: { client: HubClient; onsettings?: () => void } = $props();
 	const text = $derived.by(() => {
 		const { status } = client;
 		switch (status.kind) {
@@ -18,7 +18,19 @@
 </script>
 
 <div class="status" role="status" data-kind={client.status.kind}>
-	<p class="line"><span class="light" aria-hidden="true"></span>{text}</p>
+	<div class="line">
+		<span class="light" aria-hidden="true"></span>
+		<p>{text}</p>
+		{#if onsettings}
+			<button class="settings" aria-label="Connection settings" title="Connection settings" onclick={onsettings}>
+				<svg viewBox="0 0 16 16" aria-hidden="true">
+					<path d="M2.5 4.5h6M12 4.5h1.5M2.5 11.5h1.5M7.5 11.5h6" />
+					<circle cx="10.25" cy="4.5" r="1.75" />
+					<circle cx="5.75" cy="11.5" r="1.75" />
+				</svg>
+			</button>
+		{/if}
+	</div>
 	{#if client.problem}<p class="problem">{client.problem}</p>{/if}
 </div>
 
@@ -34,7 +46,40 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
+	}
+
+	.line p {
+		flex: 1;
+		min-width: 0;
 		margin: 0;
+	}
+
+	.settings {
+		display: grid;
+		flex: none;
+		place-items: center;
+		width: 1.75rem;
+		height: 1.75rem;
+		margin: -0.3rem -0.4rem -0.3rem 0;
+		border: 0;
+		border-radius: var(--radius-control);
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+	}
+
+	.settings:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.settings svg {
+		width: 1rem;
+		height: 1rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.4;
+		stroke-linecap: round;
 	}
 
 	.light {

@@ -3,12 +3,17 @@
 	import { onMount } from 'svelte';
 	import { createTransports } from './lib/connect';
 	import { HubClient } from './lib/hub-client.svelte';
+	import { Setup } from './lib/setup.svelte';
+	import { loadSettings, saveSettings } from './lib/tauri-transport';
 	import type { TerminalTransport } from './lib/transport';
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
 	import { folderName, sessionTitle } from './lib/ui/format';
+	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
+	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
 	import SessionHeader from './lib/ui/SessionHeader.svelte';
+	import SettingsView from './lib/ui/SettingsView.svelte';
 	import Sidebar from './lib/ui/Sidebar.svelte';
 	import TerminalPanel from './lib/ui/TerminalPanel.svelte';
 
@@ -19,6 +24,7 @@
 
 	let client = $state<HubClient | null>(null);
 	let terminalTransport = $state.raw<TerminalTransport | null>(null);
+	let setup = $state.raw<Setup | null>(null);
 	let failure = $state<string | null>(null);
 	let creating = $state(false);
 	let untrusted = $state<SessionId[]>([]);
@@ -28,18 +34,26 @@
 	const panels: Record<string, TerminalPanel> = $state({});
 	const session = $derived(client?.selected ? client.sessions.get(client.selected) : undefined);
 	const trustHint = $derived(session !== undefined && untrusted.includes(session.id) && (client?.chats.get(session.id)?.length ?? 0) === 0);
+	const step = $derived(setup?.step);
+	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
 
 	onMount(() => {
-		let hub: HubClient | null = null;
-		createTransports().then(
-			(transports) => {
-				hub = new HubClient(transports.hub);
-				terminalTransport = transports.terminal;
-				client = hub;
-			},
-			(error: Error) => (failure = error.message),
-		);
-		return () => hub?.close();
+		let transports;
+		try {
+			transports = createTransports();
+		} catch (error) {
+			failure = (error as Error).message;
+			return;
+		}
+		const hub = new HubClient(transports.hub);
+		terminalTransport = transports.terminal;
+		client = hub;
+		if (transports.kind === 'tauri') {
+			const link = transports.hub;
+			setup = new Setup({ loadSettings, saveSettings, connect: (passphrase) => link.connect(passphrase), trustHost: (fingerprint) => link.trustHost(fingerprint) });
+			void setup.start();
+		}
+		return () => hub.close();
 	});
 
 	function started(created: SessionSummary, needsTrust: boolean): void {
@@ -75,9 +89,9 @@
 
 <svelte:window onkeydown={switchPane} />
 
-{#if client}
+{#if client && ready}
 	<div class="app" class:split={terminals.length > 0}>
-		<Sidebar {client} onnew={() => (creating = true)} />
+		<Sidebar {client} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
 		<main>
 			{#if session}
 				{#key session.id}
@@ -129,8 +143,25 @@
 {:else}
 	<div class="boot">
 		<h1>orfoni</h1>
-		<p>{failure ?? 'Starting'}</p>
+		{#if step?.kind === 'failed'}
+			<p class="failed" role="alert">Not connected: {step.error}</p>
+			<div class="actions">
+				<button class="btn" onclick={() => void setup?.edit()}>Settings</button>
+				<button class="btn btn-primary" onclick={() => void setup?.start()}>Try again</button>
+			</div>
+		{:else if step === undefined || step.kind === 'connecting'}
+			<p>{failure ?? (step ? 'Connecting to the VPS' : 'Starting')}</p>
+		{/if}
 	</div>
+{/if}
+{#if setup && step}
+	{#if step.kind === 'settings'}
+		<SettingsView settings={step.settings} cancellable={step.cancellable} error={step.error} onsave={(next) => void setup?.save(next)} oncancel={() => setup?.cancelEdit()} />
+	{:else if step.kind === 'hostKeyUnknown' || step.kind === 'hostKeyChanged'}
+		<HostKeyDialog question={step} ontrust={() => void setup?.trust()} oncancel={() => void setup?.edit()} />
+	{:else if step.kind === 'passphrase'}
+		<PassphraseDialog rejected={step.rejected} onunlock={(passphrase) => void setup?.unlock(passphrase)} oncancel={() => void setup?.edit()} />
+	{/if}
 {/if}
 
 <style>
@@ -171,6 +202,17 @@
 		margin: 0;
 		color: var(--text);
 		font-size: 1.6rem;
+	}
+
+	.boot .failed {
+		max-width: 36rem;
+		color: var(--text);
+		text-align: center;
+	}
+
+	.actions {
+		display: flex;
+		gap: 0.5rem;
 	}
 
 	.trust {
