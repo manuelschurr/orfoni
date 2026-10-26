@@ -83,9 +83,9 @@
 					});
 					term.focus();
 				},
-				(e: Error) => {
+				(e: unknown) => {
 					phase = 'failed';
-					error = e.message;
+					error = e instanceof Error ? e.message : String(e);
 				},
 			);
 		}

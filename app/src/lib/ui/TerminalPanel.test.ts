@@ -61,3 +61,12 @@ test('the panel opens its stream at the size the fit add-on measured, and closin
 	panel.unmount();
 	expect(streams.map((s) => s.closed)).toEqual([true]);
 });
+
+test('a terminal that cannot open shows the reason even when the transport rejects with plain text', async () => {
+	const transport: TerminalTransport = {
+		open: () => Promise.reject("can't find session: =orfoni-gone"),
+	};
+	const panel = render(TerminalPanel, { props: { transport, target: '=orfoni-gone' } });
+	await waitFor(() => expect(panel.container.textContent).toContain("can't find session: =orfoni-gone"));
+	expect(panel.container.textContent).not.toContain('undefined');
+});
