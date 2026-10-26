@@ -1,0 +1,366 @@
+:root {
+	color-scheme: light dark;
+	--font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+	--font-reply: Charter, 'Bitstream Charter', 'Sitka Text', 'Iowan Old Style', Cambria, Georgia, serif;
+	--font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'JetBrains Mono', 'DejaVu Sans Mono', ui-monospace, monospace;
+
+	--page: #faf9f5;
+	--sidebar: #f3f1ea;
+	--surface: #ffffff;
+	--surface-sunk: #f5f3ed;
+	--user-bubble: #eeebe2;
+	--text: #2b2a27;
+	--muted: #6f6b62;
+	--faint: #9a968b;
+	--border: #e3dfd4;
+	--border-strong: #cfc9bb;
+	--accent: #c15f3c;
+	--accent-hover: #a94f2f;
+	--on-accent: #ffffff;
+	--hover: rgb(43 42 39 / 0.06);
+	--selected: rgb(43 42 39 / 0.09);
+	--danger: #b83a32;
+	--code-bg: #f3f0e8;
+
+	--state-working: #2f78cf;
+	--state-needs: #c98316;
+	--state-answered: #2c9356;
+	--state-failed: #c93a31;
+	--state-idle: #aaa598;
+
+	--radius-bubble: 18px;
+	--radius-card: 12px;
+	--radius-control: 8px;
+	--chat-width: 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--page: #262624;
+		--sidebar: #1f1e1d;
+		--surface: #30302e;
+		--surface-sunk: #2b2b29;
+		--user-bubble: #3b3a37;
+		--text: #f3f1ea;
+		--muted: #b0aca1;
+		--faint: #85827a;
+		--border: #3e3d39;
+		--border-strong: #55534d;
+		--accent: #d97757;
+		--accent-hover: #e48b6d;
+		--on-accent: #1f1e1d;
+		--hover: rgb(243 241 234 / 0.06);
+		--selected: rgb(243 241 234 / 0.1);
+		--danger: #ef6b62;
+		--code-bg: #22221f;
+
+		--state-working: #64a6f2;
+		--state-needs: #eaa83c;
+		--state-answered: #52c482;
+		--state-failed: #ef6b62;
+		--state-idle: #7b786f;
+	}
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background: var(--page);
+	color: var(--text);
+	font-family: var(--font-ui);
+	font-size: 16px;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+#app {
+	height: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+	padding: 0.4rem 0.85rem;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-control);
+	background: transparent;
+	font-size: 0.875rem;
+	font-weight: 500;
+	line-height: 1.3;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.btn-primary {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+	border-color: var(--accent-hover);
+	background: var(--accent-hover);
+}
+
+.btn-danger {
+	color: var(--danger);
+}
+
+.btn-quiet {
+	border-color: transparent;
+}
+
+.field {
+	width: 100%;
+	padding: 0.55rem 0.7rem;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-control);
+	background: var(--surface);
+}
+
+.error {
+	margin: 0.4rem 0 0;
+	color: var(--danger);
+	font-size: 0.875rem;
+}
+
+.dot {
+	flex: none;
+	width: 0.6rem;
+	height: 0.6rem;
+	border-radius: 50%;
+	background: var(--state-idle);
+}
+
+.dot[data-state='working'] {
+	background: var(--state-working);
+	animation: pulse 1.6s ease-in-out infinite;
+}
+
+.dot[data-state='needs_approval'],
+.dot[data-state='needs_answer'] {
+	background: var(--state-needs);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-needs) 25%, transparent);
+}
+
+.dot[data-state='answered'] {
+	background: var(--state-answered);
+}
+
+.dot[data-state='failed'] {
+	background: var(--state-failed);
+}
+
+.dot[data-state='offline'] {
+	background: transparent;
+	box-shadow: inset 0 0 0 1.5px var(--state-idle);
+}
+
+@keyframes pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation: none !important;
+		transition: none !important;
+	}
+}
+
+.markdown {
+	overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+	margin-top: 0;
+}
+
+.markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown table {
+	margin: 0 0 0.85em;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+	margin: 1.2em 0 0.5em;
+	font-family: var(--font-ui);
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.markdown h1 {
+	font-size: 1.3em;
+}
+
+.markdown h2 {
+	font-size: 1.15em;
+}
+
+.markdown h3,
+.markdown h4 {
+	font-size: 1em;
+}
+
+.markdown ul,
+.markdown ol {
+	padding-left: 1.4em;
+}
+
+.markdown li + li {
+	margin-top: 0.25em;
+}
+
+.markdown a {
+	color: var(--accent);
+}
+
+.markdown code {
+	padding: 0.1em 0.35em;
+	border-radius: 5px;
+	background: var(--code-bg);
+	font-family: var(--font-mono);
+	font-size: 0.86em;
+}
+
+.markdown pre {
+	padding: 0.85rem 1rem;
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--code-bg);
+	line-height: 1.5;
+}
+
+.markdown pre code {
+	padding: 0;
+	background: none;
+	font-size: 0.82em;
+}
+
+.markdown blockquote {
+	padding-left: 1em;
+	border-left: 3px solid var(--border-strong);
+	color: var(--muted);
+}
+
+.markdown table {
+	border-collapse: collapse;
+	font-family: var(--font-ui);
+	font-size: 0.9em;
+}
+
+.markdown th,
+.markdown td {
+	padding: 0.35em 0.7em;
+	border: 1px solid var(--border);
+	text-align: left;
+}
+
+.markdown hr {
+	border: 0;
+	border-top: 1px solid var(--border);
+}
+
+.request {
+	display: grid;
+	gap: 0.75rem;
+	padding: 0.9rem 1rem 1rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-card);
+	background: var(--surface);
+}
+
+.request[data-pending='true'] {
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.request-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 1rem;
+	margin: 0;
+	font-size: 0.9375rem;
+	font-weight: 600;
+}
+
+.request-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.outcome {
+	flex: none;
+	color: var(--muted);
+	font-size: 0.8125rem;
+	font-weight: 500;
+}
+
+.outcome[data-outcome='allowed'],
+.outcome[data-outcome='answered'],
+.outcome[data-outcome='approved'] {
+	color: var(--state-answered);
+}
+
+.outcome[data-outcome='denied'],
+.outcome[data-outcome='rejected'] {
+	color: var(--danger);
+}

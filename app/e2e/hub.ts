@@ -62,8 +62,12 @@ export class Hub {
 		return started;
 	}
 
-	waitFor(matches: (message: HubMessage) => boolean, timeoutMs = 120_000): Promise<HubMessage> {
-		const earlier = this.seen.find(matches);
+	mark(): number {
+		return this.seen.length;
+	}
+
+	waitFor(matches: (message: HubMessage) => boolean, since = 0, timeoutMs = 120_000): Promise<HubMessage> {
+		const earlier = this.seen.slice(since).find(matches);
 		if (earlier) return Promise.resolve(earlier);
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => reject(new Error('timed out waiting for a hub message')), timeoutMs);
@@ -71,14 +75,14 @@ export class Hub {
 		});
 	}
 
-	async waitForChat(sessionId: SessionId, matches: (item: ChatItem) => boolean, timeoutMs?: number): Promise<ChatItem> {
-		const message = await this.waitFor((m) => m.type === 'chatItem' && m.sessionId === sessionId && matches(m.item), timeoutMs);
+	async waitForChat(sessionId: SessionId, matches: (item: ChatItem) => boolean, since?: number, timeoutMs?: number): Promise<ChatItem> {
+		const message = await this.waitFor((m) => m.type === 'chatItem' && m.sessionId === sessionId && matches(m.item), since, timeoutMs);
 		if (message.type !== 'chatItem') throw new Error('unreachable');
 		return message.item;
 	}
 
-	async waitForSession(sessionId: SessionId, matches: (session: SessionSummary) => boolean, timeoutMs?: number): Promise<SessionSummary> {
-		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && matches(m.session), timeoutMs);
+	async waitForSession(sessionId: SessionId, matches: (session: SessionSummary) => boolean, since?: number, timeoutMs?: number): Promise<SessionSummary> {
+		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && matches(m.session), since, timeoutMs);
 		if (message.type !== 'sessionUpdated') throw new Error('unreachable');
 		return message.session;
 	}
