@@ -27,7 +27,7 @@ describe('parseArgs', () => {
 
 	test('parses the session subcommands', () => {
 		expect(parseArgs(['send', '0b9', 'hello there'], cwd)).toEqual({ ok: true, via: null, command: { name: 'send', session: '0b9', text: 'hello there' } });
-		for (const name of ['watch', 'interrupt', 'stop', 'shell'] as const) {
+		for (const name of ['watch', 'interrupt', 'stop', 'shell', 'rm'] as const) {
 			expect(parseArgs([name, '0b9'], cwd)).toEqual({ ok: true, via: null, command: { name, session: '0b9' } });
 		}
 	});
@@ -59,6 +59,7 @@ describe('parseArgs', () => {
 		[['answer', 'r1', '=label'], 'answer =label is not <question>=<label>'],
 		[['answer', 'r1', 'Q=a', 'Q=b'], 'answer Q given twice'],
 		[['start', ''], 'start needs <dir> [prompt]'],
+		[['rm'], 'rm needs <session>'],
 	])('rejects %j', (argv, error) => {
 		expect(parseArgs(argv, cwd)).toEqual({ ok: false, error });
 	});

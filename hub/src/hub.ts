@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -10,6 +10,7 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
+	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
 	type SessionStateKind,
@@ -35,6 +36,7 @@ export interface HubOptions {
 	hookSocket: string;
 	stateDir: string;
 	claudeConfigPath: string;
+	home: string;
 	shell: string;
 	readHistory(claudeSessionId: ClaudeSessionId, projectDir: string): Promise<SessionMessage[]>;
 	log(line: string): void;
@@ -99,6 +101,15 @@ async function stateAfterRestart(options: HubOptions, { claudeSessionId, project
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
 		return 'working';
+	}
+}
+
+async function subfolders(parent: string): Promise<string[]> {
+	try {
+		return (await readdir(parent, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => join(parent, entry.name));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+		throw error;
 	}
 }
 
@@ -207,6 +218,11 @@ export class Hub {
 				return {};
 			case 'openShell':
 				return { target: sessionTarget(await this.openShell(this.session(request.sessionId))) };
+			case 'listProjectDirs':
+				return { dirs: await this.listProjectDirs() };
+			case 'removeSession':
+				await this.remove(this.session(request.sessionId));
+				return {};
 		}
 	}
 
@@ -255,8 +271,12 @@ export class Hub {
 		}
 	}
 
+	private settingsPath(id: SessionId): string {
+		return join(this.options.stateDir, 'settings', `${id}.json`);
+	}
+
 	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
-		const settings = join(this.options.stateDir, 'settings', `${session.id}.json`);
+		const settings = this.settingsPath(session.id);
 		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		try {
@@ -362,6 +382,23 @@ export class Hub {
 	private async stop(session: Session): Promise<void> {
 		await this.killTmux((name) => name === tmuxName(session.id) || name.startsWith(`${tmuxName(session.id)}-sh`));
 		this.paneExited(session);
+	}
+
+	private async remove(session: Session): Promise<void> {
+		await this.stop(session);
+		this.sessions.delete(session.id);
+		await rm(this.settingsPath(session.id), { force: true });
+		this.save();
+		this.broadcast({ type: 'sessionRemoved', sessionId: session.id });
+	}
+
+	private async listProjectDirs(): Promise<ProjectDir[]> {
+		const lastActive = new Map<string, number | null>();
+		for (const root of ['projects', 'code']) for (const path of await subfolders(join(this.options.home, root))) lastActive.set(path, null);
+		for (const { projectDir, model } of this.sessions.values()) lastActive.set(projectDir, Math.max(lastActive.get(projectDir) ?? 0, model.stateSince));
+		return [...lastActive]
+			.map(([path, lastActive]) => ({ path, lastActive }))
+			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0) || a.path.localeCompare(b.path));
 	}
 
 	private async killTmux(matches: (name: string) => boolean): Promise<void> {
