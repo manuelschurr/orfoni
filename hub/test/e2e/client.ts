@@ -16,14 +16,13 @@ export class HubClient {
 	private readonly pending = new Map<number, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
 	private readonly seen: HubMessage[] = [];
 	private waiters: Waiter[] = [];
+	private failure: Error | null = null;
 
 	private constructor(private readonly child: ChildProcessWithoutNullStreams) {
 		createInterface({ input: child.stdout }).on('line', (line) => this.receive(parseHubMessage(line)));
 		child.on('exit', () => this.fail(new Error('hub connection closed')));
 		child.on('error', (error) => this.fail(error));
 	}
-
-	private failure: Error | null = null;
 
 	private fail(error: Error): void {
 		this.failure ??= error;

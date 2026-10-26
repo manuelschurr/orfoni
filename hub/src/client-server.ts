@@ -13,7 +13,7 @@ export async function listenClients(hub: Pick<Hub, 'connect'>, path: string): Pr
 function lineId(line: string): number {
 	try {
 		const raw: unknown = JSON.parse(line);
-		return typeof raw === 'object' && raw !== null && 'id' in raw && Number.isInteger(raw.id) ? (raw.id as number) : 0;
+		return typeof raw === 'object' && raw !== null && 'id' in raw && typeof raw.id === 'number' && Number.isInteger(raw.id) ? raw.id : 0;
 	} catch {
 		return 0;
 	}

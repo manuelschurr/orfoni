@@ -4,13 +4,7 @@ import type { Hub } from './hub.js';
 import { listenOnSocket } from './socket.js';
 
 export async function listenHooks(hub: Pick<Hub, 'hook'>, path: string, log: (line: string) => void): Promise<Server> {
-	const server = hookServer(hub, log);
-	await listenOnSocket(server, path);
-	return server;
-}
-
-function hookServer(hub: Pick<Hub, 'hook'>, log: (line: string) => void): Server {
-	return createServer((request, response) => {
+	const server = createServer((request, response) => {
 		if (request.method !== 'POST' || request.url !== '/hook') {
 			response.writeHead(404).end();
 			return;
@@ -45,4 +39,6 @@ function hookServer(hub: Pick<Hub, 'hook'>, log: (line: string) => void): Server
 			);
 		});
 	});
+	await listenOnSocket(server, path);
+	return server;
 }
