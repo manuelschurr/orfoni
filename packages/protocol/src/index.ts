@@ -22,6 +22,9 @@ export const SessionSummary = z.object({
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
+export const ProjectDir = z.object({ path: z.string(), lastActive: z.number().nullable() });
+export type ProjectDir = z.infer<typeof ProjectDir>;
+
 export const Question = z.object({
 	question: z.string(),
 	header: z.string().optional(),
@@ -99,6 +102,8 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('interrupt'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('stopSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('openShell'), sessionId: SessionId }),
+	z.object({ id, method: z.literal('listProjectDirs') }),
+	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 ]);
 export type ClientRequest = z.infer<typeof ClientRequest>;
 

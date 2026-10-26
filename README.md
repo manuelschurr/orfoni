@@ -36,10 +36,12 @@ orfoni allow <request>
 From another machine, pass the SSH command:
 
 ```sh
-orfoni --via "ssh my-server orfoni-hub connect" list
+orfoni --via 'ssh my-server "\$HOME/.local/bin/orfoni-hub" connect' list
 ```
 
-Run `orfoni` without arguments for every command. A session argument accepts any unique prefix of the session ID.
+The command needs the full path because ssh runs it in a non-interactive shell, which does not have `~/.local/bin` on its `PATH`. The backslash keeps `$HOME` from being expanded on your machine, since orfoni runs the `--via` command through `sh`, so the server's shell expands it to the server's home.
+
+Run `orfoni` without arguments for every command. A session argument accepts any unique prefix of the session ID. `orfoni stop` ends a session's Claude Code and keeps the session, so a later message resumes it. `orfoni rm` stops it and removes it from the hub.
 
 To open a session's terminal on the server, run `tmux -L orfoni attach -t =orfoni-<session>`. The `=` makes tmux match the name exactly, so it never attaches to one of the session's shells instead.
 

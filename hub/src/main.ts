@@ -19,6 +19,7 @@ async function daemon(): Promise<void> {
 		hookSocket,
 		stateDir: join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni'),
 		claudeConfigPath: join(homedir(), '.claude.json'),
+		home: homedir(),
 		shell: process.env.SHELL ?? '/bin/bash',
 		readHistory: (claudeSessionId, projectDir) => getSessionMessages(claudeSessionId, { dir: projectDir, includeSystemMessages: true }),
 		log,

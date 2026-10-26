@@ -127,6 +127,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 		hookSocket: SOCKET,
 		stateDir: dir,
 		claudeConfigPath: join(dir, 'claude.json'),
+		home: join(dir, 'home'),
 		shell: '/bin/zsh',
 		readHistory: async (claudeSessionId, projectDir) => {
 			history.push({ claudeSessionId, projectDir });
@@ -658,6 +659,81 @@ describe('restart', () => {
 		await untilRealTime(() => fake.of('submit').length === 1);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'still there?' }));
 		expect(await sent).toMatchObject({ ok: true });
+	});
+});
+
+describe('listProjectDirs', () => {
+	test('lists the folders under ~/projects and ~/code and every session folder once, newest session first, then by path', async () => {
+		const home = join(dir, 'home');
+		const alpha = join(home, 'projects', 'alpha');
+		for (const folder of [alpha, join(home, 'projects', 'gamma'), join(home, 'code', 'beta')]) mkdirSync(folder, { recursive: true });
+		writeFileSync(join(home, 'projects', 'notes.txt'), 'not a folder');
+		const client = await startHub();
+		const first = await start(client, { projectDir: alpha });
+		vi.setSystemTime(T0 + 1000);
+		await start(client, { projectDir: alpha });
+		vi.setSystemTime(T0 + 2000);
+		await start(client);
+		vi.setSystemTime(T0 + 3000);
+		await client.ok('stopSession', { sessionId: first.id });
+		expect(await client.ok('listProjectDirs', {})).toEqual({
+			dirs: [
+				{ path: alpha, lastActive: T0 + 3000 },
+				{ path: PROJECT, lastActive: T0 + 2000 },
+				{ path: join(home, 'code', 'beta'), lastActive: null },
+				{ path: join(home, 'projects', 'gamma'), lastActive: null },
+			],
+		});
+	});
+
+	test('a home without ~/projects or ~/code lists only the session folders', async () => {
+		const client = await startHub();
+		await start(client);
+		expect(await client.ok('listProjectDirs', {})).toEqual({ dirs: [{ path: PROJECT, lastActive: T0 }] });
+	});
+});
+
+describe('removeSession', () => {
+	test('ends the session and its shells, tells every client, and forgets it in listSessions, state.json, and its settings file', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude, settings } = await ready(client);
+		const kept = await start(client);
+		await client.ok('openShell', { sessionId: id });
+		const held = hub.hook(id, body('PermissionRequest', claude));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(kept.id));
+
+		expect(await client.ok('removeSession', { sessionId: id })).toEqual({});
+		expect(fake.of('killSession').flat().sort()).toEqual([`orfoni-${id}`, `orfoni-${id}-sh1`]);
+		expect(fake.live.has(`orfoni-${kept.id}`)).toBe(true);
+		expect(await held).toEqual({});
+		for (const observer of [client, other]) expect(observer.messages.at(-1)).toEqual({ type: 'sessionRemoved', sessionId: id });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id: kept.id })]);
+		expect(existsSync(settings)).toBe(false);
+		expect(existsSync(kept.settings)).toBe(true);
+		await untilRealTime(() => !readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
+		expect(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).sessions).toEqual([expect.objectContaining({ id: kept.id })]);
+	});
+
+	test('a removed session is not_found for every later request and its hooks are dropped', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await client.ok('removeSession', { sessionId: id });
+		expect(await client.request('removeSession', { sessionId: id })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(await client.request('send', { sessionId: id, text: 'hi' })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		const before = client.messages.length;
+		expect(await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }))).toEqual({});
+		expect(client.messages.length).toBe(before);
+	});
+
+	test('a session removed while a client has it open stays gone after the client disconnects', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		await client.ok('openSession', { sessionId: id });
+		await client.ok('removeSession', { sessionId: id });
+		client.close();
+		const after = new TestClient(hub);
+		expect(await after.ok('listSessions', {})).toEqual([]);
 	});
 });
 

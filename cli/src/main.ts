@@ -133,6 +133,9 @@ async function run(hub: Connection, command: Command): Promise<void> {
 		case 'stop':
 			await hub.request('stopSession', { sessionId: await findSession(hub, command.session) });
 			return;
+		case 'rm':
+			await hub.request('removeSession', { sessionId: await findSession(hub, command.session) });
+			return;
 		case 'shell':
 			console.log(JSON.stringify(await hub.request('openShell', { sessionId: await findSession(hub, command.session) })));
 			return;

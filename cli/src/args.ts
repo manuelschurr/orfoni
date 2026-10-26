@@ -5,10 +5,12 @@ export type Command =
 	| { name: 'list' }
 	| { name: 'start'; dir: string; prompt?: string }
 	| { name: 'send'; session: string; text: string }
-	| { name: 'watch' | 'interrupt' | 'stop' | 'shell'; session: string }
+	| { name: SessionCommand; session: string }
 	| { name: 'allow' | 'approve-plan'; requestId: RequestId }
 	| { name: 'deny'; requestId: RequestId; message?: string }
 	| { name: 'answer'; requestId: RequestId; answers: Record<string, string> };
+
+type SessionCommand = 'watch' | 'interrupt' | 'stop' | 'rm' | 'shell';
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -30,7 +32,7 @@ function ok(command: Command): Result<{ command: Command }> {
 	return { ok: true, command };
 }
 
-function session(name: 'watch' | 'interrupt' | 'stop' | 'shell'): Subcommand {
+function session(name: SessionCommand): Subcommand {
 	return { usage: '<session>', min: 1, max: 1, build: ([s]) => ok({ name, session: s! }) };
 }
 
@@ -62,6 +64,7 @@ const subcommands: Record<Command['name'], Subcommand> = {
 	watch: session('watch'),
 	interrupt: session('interrupt'),
 	stop: session('stop'),
+	rm: session('rm'),
 	shell: session('shell'),
 	allow: request('allow'),
 	'approve-plan': request('approve-plan'),
