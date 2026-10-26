@@ -71,6 +71,19 @@ export function itemKey(item: ChatItem): string {
 	}
 }
 
+// The hub's join of transcript and live items can list one tool call twice, and a keyed list cannot show the same key twice.
+function collapse(chat: ChatItem[]): ChatItem[] {
+	const positions = new Map<string, number>();
+	const result: ChatItem[] = [];
+	for (const item of chat) {
+		const key = itemKey(item);
+		const at = positions.get(key);
+		if (at === undefined) positions.set(key, result.push(item) - 1);
+		else result[at] = item;
+	}
+	return result;
+}
+
 function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	const key = itemKey(item);
 	const index = chat.findIndex((existing) => itemKey(existing) === key);
@@ -198,7 +211,7 @@ export class HubClient {
 			if (!known) this.sessions = new Map(this.sessions).set(sessionId, session);
 			const current = !known || known.claudeSessionId === session.claudeSessionId;
 			const since = loading.items.slice(Math.max(start, loading.clearedAt));
-			this.chats = new Map(this.chats).set(sessionId, since.reduce(upsert, current ? chat : []));
+			this.chats = new Map(this.chats).set(sessionId, since.reduce(upsert, current ? collapse(chat) : []));
 		} catch (error) {
 			if (this.selected === sessionId) this.openError = (error as Error).message;
 			throw error;

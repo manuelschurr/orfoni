@@ -146,6 +146,14 @@ describe('HubClient', () => {
 		expect(client.chats.get(a1.id)).toEqual([user('u2', 'fresh start')]);
 	});
 
+	test('a loaded chat that holds the same tool call twice shows it once, in its first place, with its latest state', async () => {
+		await connect();
+		const running: ChatItem = { kind: 'tool', toolUseId: 't1', name: 'Bash', input: { command: 'make' }, status: 'running' };
+		const finished: ChatItem = { ...running, status: 'done', output: 'ok' };
+		await open(a1, [running, user('u1', 'next'), finished]);
+		expect(client.chats.get(a1.id)).toEqual([finished, user('u1', 'next')]);
+	});
+
 	test('a removed session leaves the list, its chat, and the selection', async () => {
 		await connect();
 		await open(a1, [user('u1', 'hello')]);
