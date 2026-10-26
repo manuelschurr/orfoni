@@ -93,7 +93,6 @@ function body(name: string, claudeSessionId: string, fields: Record<string, unkn
 }
 
 async function until(check: () => boolean): Promise<void> {
-	// performance.now() and setImmediate stay real under the fake timers, so file writes on the thread pool get 2 s of real time.
 	const deadline = performance.now() + 2000;
 	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
 	if (!check()) throw new Error('condition never became true');
@@ -392,7 +391,6 @@ describe('openSession', () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		const prompt = 'Count from 1 to 12, one number per line, then reply with exactly: counted';
-		// The transcript stamps this prompt at 11:13:37.436, a moment before its hook reaches the hub.
 		vi.setSystemTime(Date.parse('2026-10-26T11:13:37.600Z'));
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt, prompt_id: 'p9' }));
 		const opened = (await client.ok('openSession', { sessionId: id })) as { session: SessionSummary; chat: ChatItem[] };

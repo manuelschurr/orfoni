@@ -149,8 +149,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				openRequests,
 				chat: model.chat.map((item) =>
 					'requestId' in item && item.requestId === input.requestId
-						? // PendingRequests only yields outcomes that are valid statuses for the item's kind.
-							({ ...item, status: input.outcome } as ChatItem)
+						? ({ ...item, status: input.outcome } as ChatItem)
 						: item,
 				),
 			};

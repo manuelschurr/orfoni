@@ -276,7 +276,6 @@ export class Hub {
 		if (session.sessionStartAt === null && !(await this.waitForHook(session, (event) => event.type === 'session_start', STARTUP_TIMEOUT_MS))) {
 			throw new HubError('not_ready', `Claude Code did not start within ${STARTUP_TIMEOUT_MS / 1000} s`);
 		}
-		// A paste that arrives before the input box is ready is lost.
 		const untilInputReady = (session.sessionStartAt ?? 0) + INPUT_READY_DELAY_MS - Date.now();
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);

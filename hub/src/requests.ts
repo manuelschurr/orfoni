@@ -68,7 +68,6 @@ function respond(request: OpenRequest, decision: Decision): { outcome: RequestOu
 		case 'deny':
 			return { outcome: 'denied', decision: { behavior: 'deny', message: decision.message } };
 		case 'answer':
-			// toItem parsed a question's input as an object, and updatedInput must carry every field Claude Code sent.
 			return { outcome: 'answered', decision: { behavior: 'allow', updatedInput: { ...(request.input as object), answers: decision.answers } } };
 		case 'approve_plan':
 			return { outcome: 'approved', decision: { behavior: 'allow', updatedInput: request.input } };
