@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { Question, RequestId, type ChatItem, type Decision, type ErrorCode, type RequestOutcome, type SessionId } from '@orfoni/protocol';
 import { z } from 'zod';
 import { HookParseError, type HookEvent } from './hooks/events.js';
@@ -20,6 +21,13 @@ export class RequestError extends Error {
 type PermissionRequest = Extract<HookEvent, { type: 'permission_request' }>;
 type RequestKind = 'approval' | 'question' | 'plan';
 type RequestItem = Extract<ChatItem, { kind: RequestKind }>;
+
+interface RunningTool {
+	toolUseId: string;
+	name: string;
+	input: unknown;
+	linked: boolean;
+}
 
 interface OpenRequest {
 	sessionId: SessionId;
@@ -79,18 +87,17 @@ function respond(request: OpenRequest, decision: Decision): { outcome: RequestOu
 export class PendingRequests {
 	private readonly pending = new Map<RequestId, OpenRequest>();
 	private readonly closed = new Set<RequestId>();
+	private readonly running = new Map<SessionId, RunningTool[]>();
 
-	open(
-		sessionId: SessionId,
-		event: PermissionRequest,
-		lastToolStart: { toolUseId: string } | null,
-	): { requestId: RequestId; item: ChatItem; response: Promise<HookResponse> } {
+	open(sessionId: SessionId, event: PermissionRequest): { requestId: RequestId; item: ChatItem; response: Promise<HookResponse> } {
 		const requestId = RequestId.parse(randomUUID());
 		const item = toItem(requestId, event);
+		const tool = this.running.get(sessionId)?.find((call) => !call.linked && call.name === event.name && isDeepStrictEqual(call.input, event.input));
+		if (tool) tool.linked = true;
 		const response = new Promise<HookResponse>((resolve) => {
 			this.pending.set(requestId, {
 				sessionId,
-				toolUseId: lastToolStart?.toolUseId ?? null,
+				toolUseId: tool?.toolUseId ?? null,
 				kind: item.kind,
 				input: event.input,
 				suggestions: event.suggestions,
@@ -114,14 +121,19 @@ export class PendingRequests {
 		return outcome;
 	}
 
-	withdrawFor(sessionId: SessionId, event: HookEvent): RequestId[] {
+	observe(sessionId: SessionId, event: HookEvent): RequestId[] {
 		switch (event.type) {
+			case 'tool_start':
+				this.running.set(sessionId, [...(this.running.get(sessionId) ?? []), { toolUseId: event.toolUseId, name: event.name, input: event.input, linked: false }]);
+				return [];
 			case 'tool_end':
 			case 'tool_failed':
+				this.forgetTool(sessionId, event.toolUseId);
 				return this.withdraw((request) => request.sessionId === sessionId && request.toolUseId === event.toolUseId);
+			case 'prompt':
+				return this.withdraw((request) => request.sessionId === sessionId);
 			case 'stop':
 			case 'stop_failure':
-			case 'prompt':
 			case 'session_end':
 				return this.withdrawSession(sessionId);
 			default:
@@ -130,13 +142,21 @@ export class PendingRequests {
 	}
 
 	cancel(requestId: RequestId): boolean {
-		if (!this.pending.has(requestId)) return false;
+		const request = this.pending.get(requestId);
+		if (!request) return false;
+		// The terminal refused the tool, so it never runs and no PostToolUse removes it.
+		if (request.toolUseId !== null) this.forgetTool(request.sessionId, request.toolUseId);
 		this.close(requestId, {});
 		return true;
 	}
 
 	withdrawSession(sessionId: SessionId): RequestId[] {
+		this.running.delete(sessionId);
 		return this.withdraw((request) => request.sessionId === sessionId);
+	}
+
+	private forgetTool(sessionId: SessionId, toolUseId: string): void {
+		this.running.set(sessionId, (this.running.get(sessionId) ?? []).filter((call) => call.toolUseId !== toolUseId));
 	}
 
 	private withdraw(matches: (request: OpenRequest) => boolean): RequestId[] {

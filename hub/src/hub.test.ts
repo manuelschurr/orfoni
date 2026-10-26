@@ -93,6 +93,8 @@ function recordedConversation(): SessionMessage[] {
 	return JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
 }
 
+const writeInput = { file_path: '/var/tmp/claude-0/orfoni-spike-tui/a.txt', content: 'hi' };
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function body(name: string, claudeSessionId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
@@ -383,7 +385,7 @@ describe('requests', () => {
 	test('an approval answered in the terminal is withdrawn when its tool finishes', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('PreToolUse', claude));
+		await hub.hook(id, body('PreToolUse', claude, { tool_input: writeInput }));
 		const held = hub.hook(id, body('PermissionRequest', claude));
 		await hub.hook(id, body('PostToolUse', claude));
 		expect(await held).toEqual({});
@@ -420,6 +422,46 @@ describe('requests', () => {
 		connection.abort();
 		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'approval', status: 'allowed' });
 		expect(client.state(id)).toBe('working');
+	});
+
+	test('a request from a subagent is withdrawn when that subagent tool finishes, though subagent tools stay out of the chat', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const subagent = { agent_id: 'agent-7', tool_use_id: 'toolu_sub', tool_input: writeInput };
+		await hub.hook(id, body('PreToolUse', claude, subagent));
+		const held = hub.hook(id, body('PermissionRequest', claude));
+		await hub.hook(id, body('PostToolUse', claude, subagent));
+		expect(await held).toEqual({});
+		expect(client.chat(id).findLast((item) => item.kind === 'approval')).toMatchObject({ status: 'withdrawn' });
+		expect(client.chat(id).some((item) => item.kind === 'tool')).toBe(false);
+	});
+
+	test('parallel calls of one tool link each request to the call with the same input', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('PreToolUse', claude, { tool_use_id: 'toolu_a', tool_input: writeInput }));
+		await hub.hook(id, body('PreToolUse', claude, { tool_use_id: 'toolu_b', tool_input: { ...writeInput, content: 'other' } }));
+		void hub.hook(id, body('PermissionRequest', claude));
+		await hub.hook(id, body('PostToolUse', claude, { tool_use_id: 'toolu_b' }));
+		expect(client.chat(id).findLast((item) => item.kind === 'approval')).toMatchObject({ status: 'pending' });
+		await hub.hook(id, body('PostToolUse', claude, { tool_use_id: 'toolu_a' }));
+		expect(client.chat(id).findLast((item) => item.kind === 'approval')).toMatchObject({ status: 'withdrawn' });
+	});
+
+	test('requests for two identical calls link to the oldest call that has no request yet', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('PreToolUse', claude, { tool_use_id: 'toolu_a', tool_input: writeInput }));
+		await hub.hook(id, body('PreToolUse', claude, { tool_use_id: 'toolu_b', tool_input: writeInput }));
+		const first = hub.hook(id, body('PermissionRequest', claude));
+		const second = hub.hook(id, body('PermissionRequest', claude));
+		const [a, b] = client.chat(id).filter((item) => item.kind === 'approval');
+		await hub.hook(id, body('PostToolUse', claude, { tool_use_id: 'toolu_a' }));
+		expect(await first).toEqual({});
+		expect(client.chat(id).filter((item) => item.kind === 'approval').at(-1)).toEqual({ ...a, status: 'withdrawn' });
+		await hub.hook(id, body('PostToolUse', claude, { tool_use_id: 'toolu_b' }));
+		expect(await second).toEqual({});
+		expect(client.chat(id).filter((item) => item.kind === 'approval').at(-1)).toEqual({ ...b, status: 'withdrawn' });
 	});
 
 	test('a question and a plan need an answer', async () => {

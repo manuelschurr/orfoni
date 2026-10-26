@@ -73,7 +73,6 @@ interface Waiter {
 
 type Send = (message: HubMessage) => void;
 type PermissionRequest = Extract<HookEvent, { type: 'permission_request' }>;
-type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
 const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
@@ -387,10 +386,9 @@ export class Hub {
 	}
 
 	private openRequest(session: Session, event: PermissionRequest, closed: AbortSignal | undefined): Promise<HookResponse> {
-		const tool = session.model.chat.findLast((item): item is ToolItem => item.kind === 'tool' && item.name === event.name && item.status === 'running');
 		let opened: ReturnType<PendingRequests['open']>;
 		try {
-			opened = this.requests.open(session.id, event, tool ? { toolUseId: tool.toolUseId } : null);
+			opened = this.requests.open(session.id, event);
 		} catch (error) {
 			if (!(error instanceof HookParseError)) throw error;
 			this.options.log(`orfoni-hub: left a request of session ${session.id} to the terminal: ${error.message}`);
@@ -407,7 +405,7 @@ export class Hub {
 
 	private receive(session: Session, event: HookEvent): void {
 		const at = Date.now();
-		for (const requestId of this.requests.withdrawFor(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
+		for (const requestId of this.requests.observe(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 		this.apply(session, { kind: 'hook', event, at });
 		if (event.type === 'session_start' && session.claude.kind === 'launching') session.claude = { kind: 'running', inputReadyAt: at + INPUT_READY_DELAY_MS };
 		if (endsSession(event)) session.claude = { kind: 'exited' };
