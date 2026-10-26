@@ -94,6 +94,16 @@ test('the link asks the hub for an answer, and a silent hub counts as connected 
 	transport.close();
 });
 
+test('sending while the socket is down fails instead of dropping the line', async () => {
+	server.on('connection', (socket) => socket.close());
+	const transport = wsHubTransport(`${base}/hub`, [60_000]);
+	const statuses: ConnectionStatus[] = [];
+	transport.onStatus((status) => statuses.push(status));
+	await until(() => statuses.length === 1);
+	await expect(transport.send('{"id":1,"method":"listSessions"}')).rejects.toThrow('not connected');
+	transport.close();
+});
+
 test('a terminal stream opens at the given size and relays bytes and resizes both ways', async () => {
 	const stream = await wsTerminalTransport(base).open('=orfoni-a1', 132, 43);
 	const { socket, url } = await until(() => connections[0]);

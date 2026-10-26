@@ -128,7 +128,10 @@ export class HubClient {
 		const id = this.nextId++;
 		return new Promise((resolve, reject) => {
 			this.pending.set(id, { method, resolve: resolve as (result: unknown) => void, reject });
-			this.transport.send(JSON.stringify({ id, method, ...params }));
+			this.transport.send(JSON.stringify({ id, method, ...params })).catch((error: unknown) => {
+				if (!this.pending.delete(id)) return;
+				reject(new HubRequestError('disconnected', `Could not reach the hub: ${error instanceof Error ? error.message : String(error)}`));
+			});
 		});
 	}
 
@@ -180,7 +183,8 @@ export class HubClient {
 		this.status = status;
 		if (status.kind === 'connected') {
 			this.refresh().catch((error: Error) => {
-				if (!(error instanceof HubRequestError && error.code === 'disconnected')) this.problem = `Loading the sessions failed: ${error.message}`;
+				// A lost link loads again when it comes back, so only a failure while still connected would leave the list empty for good.
+				if (this.status.kind === 'connected') this.problem = `Loading the sessions failed: ${error.message}`;
 			});
 			return;
 		}
@@ -191,6 +195,7 @@ export class HubClient {
 
 	private async refresh(): Promise<void> {
 		const sessions = await this.request('listSessions', {});
+		this.problem = null;
 		this.sessions = new Map(sessions.map((session) => [session.id, session]));
 		const { selected } = this;
 		// Chats of other sessions may have missed items while the connection was down.

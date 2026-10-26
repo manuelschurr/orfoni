@@ -35,6 +35,40 @@ impl AppState {
         }
     }
 
+    pub async fn connect<F>(
+        &self,
+        passphrase: Option<String>,
+        on_event: F,
+    ) -> Result<ConnectOutcome, String>
+    where
+        F: Fn(LinkEvent) + Send + Sync + 'static,
+    {
+        self.disconnect();
+        let settings = Settings::load(&self.settings_path).map_err(describe)?;
+        let known_hosts = KnownHosts::load(&self.known_hosts_path).map_err(describe)?;
+        let opening = {
+            // Held while the link starts, so a hub_send prompted by its first Connected waits until the link is stored.
+            let mut slot = self.link.lock().unwrap();
+            let (link, opening) = HubLink::start(settings, passphrase, known_hosts, on_event);
+            *slot = Some(link);
+            opening
+        };
+        match opening.await {
+            Ok(Ok(())) => Ok(ConnectOutcome::Connected),
+            Ok(Err(error)) => Ok(ConnectOutcome::from_error(error, &self.known_hosts_path)),
+            Err(_) => Ok(ConnectOutcome::Failed {
+                error: "a newer connection attempt replaced this one".into(),
+            }),
+        }
+    }
+
+    pub fn hub_send(&self, line: String) -> Result<(), String> {
+        match self.link.lock().unwrap().as_ref() {
+            Some(link) => link.send(line).map_err(describe),
+            None => Err("not connected".into()),
+        }
+    }
+
     fn disconnect(&self) {
         let link = self.link.lock().unwrap().take();
         drop(link);
@@ -96,20 +130,11 @@ pub async fn connect(
     passphrase: Option<String>,
     events: Channel<LinkEvent>,
 ) -> Result<ConnectOutcome, String> {
-    state.disconnect();
-    let settings = Settings::load(&state.settings_path).map_err(describe)?;
-    let known_hosts = KnownHosts::load(&state.known_hosts_path).map_err(describe)?;
-    let started = HubLink::start(settings, passphrase, known_hosts, move |event| {
-        let _ = events.send(event);
-    })
-    .await;
-    match started {
-        Ok(link) => {
-            *state.link.lock().unwrap() = Some(link);
-            Ok(ConnectOutcome::Connected)
-        }
-        Err(error) => Ok(ConnectOutcome::from_error(error, &state.known_hosts_path)),
-    }
+    state
+        .connect(passphrase, move |event| {
+            let _ = events.send(event);
+        })
+        .await
 }
 
 #[tauri::command]
@@ -128,10 +153,7 @@ pub fn trust_host(state: State<'_, AppState>, fingerprint: String) -> Result<(),
 
 #[tauri::command]
 pub fn hub_send(state: State<'_, AppState>, line: String) -> Result<(), String> {
-    match state.link.lock().unwrap().as_ref() {
-        Some(link) => link.send(line).map_err(describe),
-        None => Err("not connected".into()),
-    }
+    state.hub_send(line)
 }
 
 #[tauri::command]

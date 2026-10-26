@@ -2,8 +2,10 @@
 
 mod sshd;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use orfoni_lib::commands::{AppState, ConnectOutcome};
 use orfoni_lib::known_hosts::KnownHosts;
 use orfoni_lib::link::{HubLink, LinkEvent, Status};
 use orfoni_lib::ssh::{Connection, SshError};
@@ -262,11 +264,10 @@ async fn a_dropped_link_reconnects_with_backoff_and_relays_again() {
     let mut sshd = PrivateSshd::start();
     let known_hosts = trusted(&sshd).await;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let link = HubLink::start(sshd.settings("cat"), None, known_hosts, move |event| {
+    let (link, opening) = HubLink::start(sshd.settings("cat"), None, known_hosts, move |event| {
         let _ = tx.send(event);
-    })
-    .await
-    .unwrap();
+    });
+    opening.await.unwrap().unwrap();
     assert_eq!(
         next(&mut events).await,
         LinkEvent::Status(Status::Connecting)
@@ -307,11 +308,10 @@ async fn a_changed_host_key_during_a_reconnect_fails_the_link() {
     let mut sshd = PrivateSshd::start();
     let known_hosts = trusted(&sshd).await;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let _link = HubLink::start(sshd.settings("cat"), None, known_hosts, move |event| {
+    let (_link, opening) = HubLink::start(sshd.settings("cat"), None, known_hosts, move |event| {
         let _ = tx.send(event);
-    })
-    .await
-    .unwrap();
+    });
+    opening.await.unwrap().unwrap();
 
     sshd.replace_host_key();
     let failed = timeout(Duration::from_secs(20), async {
@@ -334,11 +334,11 @@ async fn a_hub_that_exits_at_once_is_never_reported_connected_and_backs_off() {
     let sshd = PrivateSshd::start();
     let known_hosts = trusted(&sshd).await;
     let (tx, mut events) = mpsc::unbounded_channel();
-    let _link = HubLink::start(sshd.settings("exit 1"), None, known_hosts, move |event| {
-        let _ = tx.send(event);
-    })
-    .await
-    .unwrap();
+    let (_link, opening) =
+        HubLink::start(sshd.settings("exit 1"), None, known_hosts, move |event| {
+            let _ = tx.send(event);
+        });
+    opening.await.unwrap().unwrap();
 
     let mut statuses = Vec::new();
     let _ = timeout(Duration::from_millis(5500), async {
@@ -368,4 +368,49 @@ async fn a_hub_that_exits_at_once_is_never_reported_connected_and_backs_off() {
     );
     let logins = sshd.log().matches("Accepted publickey").count();
     assert_eq!(logins, 3, "{}", sshd.log());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_takes_hub_lines_as_soon_as_its_link_reports_connected() {
+    let sshd = PrivateSshd::start();
+    let data = tempfile::tempdir().unwrap();
+    sshd.settings("cat")
+        .save(&data.path().join("settings.json"))
+        .unwrap();
+    KnownHosts::load(&data.path().join("known-hosts.json"))
+        .unwrap()
+        .trust("127.0.0.1", sshd.port, &sshd.host_fingerprint())
+        .unwrap();
+    let state = Arc::new(AppState::new(data.path(), false));
+    let (tx, mut seen) = mpsc::unbounded_channel();
+    let app = Arc::downgrade(&state);
+
+    let outcome = state
+        .connect(None, move |event| match event {
+            LinkEvent::Status(Status::Connected) => {
+                let sent = app.upgrade().unwrap().hub_send("ping".into());
+                let _ = tx.send(format!("hub_send when connected: {sent:?}"));
+            }
+            LinkEvent::Line(line) => {
+                let _ = tx.send(format!("line {line}"));
+            }
+            LinkEvent::Status(_) => {}
+        })
+        .await;
+
+    assert!(matches!(outcome, Ok(ConnectOutcome::Connected)));
+    let first = timeout(WAIT, seen.recv()).await.unwrap().unwrap();
+    assert_eq!(first, "hub_send when connected: Ok(())");
+    let echoed = timeout(WAIT, async {
+        while let Some(entry) = seen.recv().await {
+            if entry == "line ping" {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        echoed.is_ok(),
+        "the line sent when connected never came back"
+    );
 }

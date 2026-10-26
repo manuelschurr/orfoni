@@ -6,12 +6,19 @@ type Method = ClientRequest['method'];
 export class FakeTransport implements HubTransport {
 	readonly sent: ClientRequest[] = [];
 	closed = false;
+	private sendError: string | null = null;
 	private readonly answered = new Set<number>();
 	private readonly lineListeners: ((line: string) => void)[] = [];
 	private readonly statusListeners: ((status: ConnectionStatus) => void)[] = [];
 
-	send(line: string): void {
+	send(line: string): Promise<void> {
+		if (this.sendError !== null) return Promise.reject(this.sendError);
 		this.sent.push(parseClientRequest(line));
+		return Promise.resolve();
+	}
+
+	failSends(error: string | null): void {
+		this.sendError = error;
 	}
 
 	onLine(listener: (line: string) => void): void {

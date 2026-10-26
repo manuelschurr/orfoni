@@ -70,6 +70,37 @@ test('send hands the line to hub_send', () => {
 	expect(calls).toEqual([{ cmd: 'hub_send', args: { line: '{"id":1,"method":"listSessions"}' }, headers: undefined }]);
 });
 
+test('a line hub_send refuses makes send fail', async () => {
+	answer = (cmd) => {
+		if (cmd === 'hub_send') throw 'not connected';
+		return null;
+	};
+
+	await expect(new TauriHubTransport().send('{"id":1,"method":"listSessions"}')).rejects.toBe('not connected');
+});
+
+test('events from an earlier link are dropped once a new connect replaces it or the transport closes', async () => {
+	answer = (cmd) => (cmd === 'connect' ? { kind: 'connected' } : null);
+	const hub = new TauriHubTransport();
+	const statuses: ConnectionStatus[] = [];
+	const lines: string[] = [];
+	hub.onStatus((status) => statuses.push(status));
+	hub.onLine((line) => lines.push(line));
+
+	await hub.connect();
+	const earlier = channelOf(calls[0], 'events');
+	await hub.connect();
+	const current = channelOf(calls[1], 'events');
+	earlier({ kind: 'status', value: { kind: 'reconnecting', attempt: 3, error: 'the old link' } });
+	earlier({ kind: 'line', value: '{"from":"the old link"}' });
+	current({ kind: 'status', value: { kind: 'connected' } });
+	hub.close();
+	current({ kind: 'line', value: '{"after":"close"}' });
+
+	expect(statuses).toEqual([{ kind: 'connected' }]);
+	expect(lines).toEqual([]);
+});
+
 test('terminal output that arrives before onData is attached is not lost', async () => {
 	const transport = new TauriTerminalTransport();
 	let push: (message: unknown) => void = () => {};

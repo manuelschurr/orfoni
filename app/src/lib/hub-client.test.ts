@@ -106,6 +106,22 @@ describe('HubClient', () => {
 		await sending;
 	});
 
+	test('a request whose line cannot reach the hub fails, a failed load while connected is shown, and the next good load clears it', async () => {
+		transport.failSends('not connected');
+		transport.status({ kind: 'connected' });
+		await settle();
+		expect(client.problem).toBe('Loading the sessions failed: Could not reach the hub: not connected');
+		await expect(client.listProjectDirs()).rejects.toMatchObject({ code: 'disconnected', message: 'Could not reach the hub: not connected' });
+
+		transport.failSends(null);
+		transport.status({ kind: 'reconnecting', attempt: 1, error: 'socket closed' });
+		transport.status({ kind: 'connected' });
+		transport.respond('listSessions', [a1]);
+		await settle();
+		expect(client.problem).toBeNull();
+		expect([...client.sessions.keys()]).toEqual(['a1']);
+	});
+
 	test('after a reconnect the client lists the sessions again and reopens the selected one without duplicating its chat', async () => {
 		await connect();
 		await open(a1, [user('u1', 'hello'), assistant('m1', 'hi', true)]);

@@ -5,7 +5,7 @@ export type ConnectionStatus =
 	| { kind: 'failed'; error: string };
 
 export interface HubTransport {
-	send(line: string): void;
+	send(line: string): Promise<void>;
 	onLine(listener: (line: string) => void): void;
 	onStatus(listener: (status: ConnectionStatus) => void): void;
 	close(): void;

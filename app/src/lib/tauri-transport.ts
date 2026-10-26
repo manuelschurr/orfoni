@@ -29,12 +29,16 @@ export function saveSettings(settings: Settings): Promise<void> {
 export class TauriHubTransport implements HubTransport {
 	#lineListeners: ((line: string) => void)[] = [];
 	#statusListeners: ((status: ConnectionStatus) => void)[] = [];
+	#events: Channel<LinkEvent> | null = null;
 
 	connect(passphrase?: string): Promise<ConnectOutcome> {
-		const events = new Channel<LinkEvent>((event) => {
+		// A link that Rust replaced can still deliver a late event, which must not overwrite what the new link reports.
+		const events: Channel<LinkEvent> = new Channel<LinkEvent>((event) => {
+			if (events !== this.#events) return;
 			if (event.kind === 'line') for (const listener of this.#lineListeners) listener(event.value);
 			else for (const listener of this.#statusListeners) listener(event.value);
 		});
+		this.#events = events;
 		return invoke('connect', { passphrase, events });
 	}
 
@@ -42,9 +46,8 @@ export class TauriHubTransport implements HubTransport {
 		return invoke('trust_host', { fingerprint });
 	}
 
-	send(line: string): void {
-		// It fails only while the link is down, which the status listeners already hear about.
-		invoke('hub_send', { line }).catch((error: unknown) => console.warn('hub_send', error));
+	send(line: string): Promise<void> {
+		return invoke('hub_send', { line });
 	}
 
 	onLine(listener: (line: string) => void): void {
@@ -56,6 +59,7 @@ export class TauriHubTransport implements HubTransport {
 	}
 
 	close(): void {
+		this.#events = null;
 		void invoke('disconnect');
 	}
 }

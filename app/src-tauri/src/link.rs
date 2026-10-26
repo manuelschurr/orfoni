@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::known_hosts::KnownHosts;
@@ -50,13 +50,16 @@ pub struct HubLink {
     task: JoinHandle<()>,
 }
 
+pub type Opening = oneshot::Receiver<Result<(), SshError>>;
+
 impl HubLink {
-    pub async fn start<F>(
+    /// Returns before the first login, so the caller can store the link before it reports anything but Connecting. `Opening` resolves with that login's result.
+    pub fn start<F>(
         settings: Settings,
         passphrase: Option<String>,
         known_hosts: KnownHosts,
         on_event: F,
-    ) -> Result<HubLink, SshError>
+    ) -> (HubLink, Opening)
     where
         F: Fn(LinkEvent) + Send + Sync + 'static,
     {
@@ -65,24 +68,16 @@ impl HubLink {
             passphrase,
             known_hosts,
         };
-        on_event(LinkEvent::Status(Status::Connecting));
-        let (connection, hub) = match login.open().await {
-            Ok(opened) => opened,
-            Err(error) => {
-                on_event(LinkEvent::Status(Status::Failed {
-                    error: error.to_string(),
-                }));
-                return Err(error);
-            }
-        };
         let (outgoing, queue) = mpsc::unbounded_channel();
-        let (current, connection) = watch::channel(Some(connection));
-        let task = tokio::spawn(supervise(login, hub, queue, current, on_event));
-        Ok(HubLink {
+        let (current, connection) = watch::channel(None);
+        let (opened, opening) = oneshot::channel();
+        let task = tokio::spawn(supervise(login, queue, current, on_event, opened));
+        let link = HubLink {
             outgoing,
             connection,
             task,
-        })
+        };
+        (link, opening)
     }
 
     pub fn send(&self, line: String) -> Result<(), SshError> {
@@ -149,11 +144,26 @@ async fn relay(
 
 async fn supervise(
     login: Login,
-    mut hub: HubChannel,
     mut queue: mpsc::UnboundedReceiver<String>,
     current: watch::Sender<Option<Arc<Connection>>>,
     on_event: impl Fn(LinkEvent),
+    opened: oneshot::Sender<Result<(), SshError>>,
 ) {
+    on_event(LinkEvent::Status(Status::Connecting));
+    let mut hub = match login.open().await {
+        Ok((connection, hub)) => {
+            current.send_replace(Some(connection));
+            let _ = opened.send(Ok(()));
+            hub
+        }
+        Err(error) => {
+            on_event(LinkEvent::Status(Status::Failed {
+                error: error.to_string(),
+            }));
+            let _ = opened.send(Err(error));
+            return;
+        }
+    };
     let mut attempt = 0;
     loop {
         let mut error = match confirm(&mut hub).await {

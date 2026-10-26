@@ -61,7 +61,9 @@ export function wsHubTransport(url: string, backoffMs: number[] = BACKOFF_MS, se
 	connect();
 	return {
 		send(line) {
-			if (socket?.readyState === WebSocket.OPEN) socket.send(`${line}\n`);
+			if (socket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error('not connected to the bridge'));
+			socket.send(`${line}\n`);
+			return Promise.resolve();
 		},
 		onLine(listener) {
 			lineListeners.push(listener);

@@ -1,4 +1,4 @@
-mod commands;
+pub mod commands;
 mod files;
 pub mod known_hosts;
 pub mod link;
