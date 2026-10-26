@@ -184,7 +184,7 @@ describe('PendingRequests.withdrawFor', () => {
 	test.each<HookEvent>([
 		{ type: 'stop', claudeSessionId: claude, lastAssistantMessage: null },
 		{ type: 'stop_failure', claudeSessionId: claude, error: 'overloaded', lastAssistantMessage: null },
-		{ type: 'prompt', claudeSessionId: claude, text: 'never mind', promptId: 'p9' },
+		{ type: 'prompt', claudeSessionId: claude, text: 'never mind' },
 		{ type: 'session_end', claudeSessionId: claude, reason: 'prompt_input_exit' },
 	])('$type withdraws every open request of the session and no other', async (event) => {
 		const requests = new PendingRequests();

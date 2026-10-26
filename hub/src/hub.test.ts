@@ -358,13 +358,13 @@ describe('viewing', () => {
 		const client = await startHub();
 		const first = await ready(client);
 		await client.ok('openSession', { sessionId: first.id });
-		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'one', prompt_id: 'p1' }));
+		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'one' }));
 		await hub.hook(first.id, body('Stop', first.claude));
 		expect(client.state(first.id)).toBe('idle');
 
 		const second = await start(client);
 		await client.ok('openSession', { sessionId: second.id });
-		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'two', prompt_id: 'p2' }));
+		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'two' }));
 		await hub.hook(first.id, body('Stop', first.claude));
 		expect(client.state(first.id)).toBe('answered');
 	});
@@ -373,13 +373,13 @@ describe('viewing', () => {
 		const client = await startHub();
 		const watcher = new TestClient(hub);
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'one', prompt_id: 'p1' }));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'one' }));
 		await hub.hook(id, body('Stop', claude));
 		expect(watcher.state(id)).toBe('answered');
 		await client.ok('openSession', { sessionId: id });
 		expect(watcher.state(id)).toBe('idle');
 		client.close();
-		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'two', prompt_id: 'p2' }));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'two' }));
 		await hub.hook(id, body('Stop', claude));
 		expect(watcher.state(id)).toBe('answered');
 	});
@@ -393,12 +393,12 @@ describe('openSession', () => {
 		const prompt = 'Count from 1 to 12, one number per line, then reply with exactly: counted';
 		const hookArrivalAfterTranscriptStamp = Date.parse('2026-10-26T11:13:37.600Z');
 		vi.setSystemTime(hookArrivalAfterTranscriptStamp);
-		await hub.hook(id, body('UserPromptSubmit', claude, { prompt, prompt_id: 'p9' }));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt }));
 		const opened = (await client.ok('openSession', { sessionId: id })) as { session: SessionSummary; chat: ChatItem[] };
 		expect(history).toEqual([{ claudeSessionId: claude, projectDir: PROJECT }]);
 		expect(opened.session).toMatchObject({ id, state: 'working' });
 		expect(opened.chat.map((item) => item.kind)).toEqual(['notice', 'user', 'tool', 'assistant', 'user']);
-		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: 'user-p9', text: prompt, at: hookArrivalAfterTranscriptStamp });
+		expect(opened.chat.at(-1)).toEqual({ kind: 'user', id: expect.stringMatching(/^user-./), text: prompt, at: hookArrivalAfterTranscriptStamp });
 	});
 
 	test('an unknown session fails with not_found', async () => {
@@ -412,7 +412,7 @@ describe('hooks', () => {
 		const client = await startHub();
 		const other = new TestClient(hub);
 		const { id, claude } = await ready(client);
-		expect(await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi', prompt_id: 'p1' }))).toEqual({});
+		expect(await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }))).toEqual({});
 		expect(await hub.hook(id, body('MessageDisplay', claude))).toEqual({});
 		expect(other.chat(id).map((item) => item.kind)).toEqual(['user', 'assistant']);
 	});
@@ -434,7 +434,7 @@ describe('hooks', () => {
 	test('/clear gives the session a new Claude session ID and an empty chat, and the hub remembers it', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi', prompt_id: 'p1' }));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
 		const next = '9b0c5d0e-0000-4000-8000-000000000001';
 		await hub.hook(id, body('SessionEnd', claude, { reason: 'clear' }));

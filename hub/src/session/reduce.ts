@@ -63,7 +63,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				}
 				case 'prompt':
 					return enter(
-						{ ...model, chat: [...model.chat, { kind: 'user', id: `user-${event.promptId}`, text: event.text, at }] },
+						{ ...model, chat: [...model.chat, { kind: 'user', id: `user-${randomUUID()}`, text: event.text, at }] },
 						'working',
 						at,
 					);

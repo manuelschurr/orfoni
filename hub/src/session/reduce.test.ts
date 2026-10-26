@@ -19,7 +19,7 @@ function run(...inputs: SessionInput[]): SessionModel {
 }
 
 const started = hook('session_start', { source: 'startup' }, 1);
-const prompted = hook('prompt', { text: 'hi', promptId: 'p1' }, 2);
+const prompted = hook('prompt', { text: 'hi' }, 2);
 
 function approval(requestId: RequestId): ChatItem {
 	return { kind: 'approval', requestId, toolName: 'Write', input: { file_path: 'a.txt' }, status: 'pending' };
@@ -52,21 +52,28 @@ describe('reduce', () => {
 		expect(model.state).toBe('working');
 	});
 
-	test('prompt appends a user item named after the prompt ID and starts working', () => {
+	test('prompt appends a user item and starts working', () => {
 		const model = run(started, prompted);
-		expect(model.chat).toEqual([{ kind: 'user', id: 'user-p1', text: 'hi', at: 2 }]);
+		expect(model.chat).toEqual([{ kind: 'user', id: expect.stringMatching(/^user-./), text: 'hi', at: 2 }]);
 		expect(model.state).toBe('working');
 		expect(model.stateSince).toBe(2);
 	});
 
 	test('two prompts give user items with different IDs', () => {
-		const model = run(started, prompted, hook('stop', { lastAssistantMessage: null }, 3), hook('prompt', { text: 'again', promptId: 'p2' }, 4));
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: null }, 3), hook('prompt', { text: 'again' }, 4));
 		const ids = model.chat.map((item) => (item.kind === 'user' ? item.id : null));
 		expect(new Set(ids).size).toBe(2);
 	});
 
+	test('a message queued during a turn gets its own user item ID, although Claude Code repeats the prompt_id of the turn', () => {
+		const model = run(started, prompted, hook('prompt', { text: 'queued' }, 3));
+		const ids = model.chat.map((item) => (item.kind === 'user' ? item.id : null));
+		expect(ids).toHaveLength(2);
+		expect(new Set(ids).size).toBe(2);
+	});
+
 	test('a state that does not change keeps its stateSince', () => {
-		const model = run(started, prompted, hook('prompt', { text: 'queued', promptId: 'p2' }, 3));
+		const model = run(started, prompted, hook('prompt', { text: 'queued' }, 3));
 		expect(model.state).toBe('working');
 		expect(model.stateSince).toBe(2);
 	});
@@ -230,7 +237,7 @@ describe('reduce', () => {
 	});
 
 	test('a prompt after a failure starts working again', () => {
-		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3), hook('prompt', { text: 'retry', promptId: 'p2' }, 4));
+		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3), hook('prompt', { text: 'retry' }, 4));
 		expect(model.state).toBe('working');
 	});
 
@@ -286,7 +293,7 @@ describe('reduce', () => {
 			prompted,
 			{ kind: 'view_changed', viewing: true, at: 3 },
 			hook('stop', { lastAssistantMessage: 'done' }, 4),
-			hook('prompt', { text: 'more', promptId: 'p2' }, 5),
+			hook('prompt', { text: 'more' }, 5),
 			hook('stop', { lastAssistantMessage: 'done again' }, 6),
 		);
 		expect(model.viewing).toBe(true);
@@ -296,7 +303,7 @@ describe('reduce', () => {
 	test('notices keep distinct IDs across /clear', () => {
 		const failed = hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3);
 		const before = run(started, prompted, failed);
-		const after = run(started, prompted, failed, hook('session_start', { source: 'clear' }, 4, second), hook('prompt', { text: 'x', promptId: 'p2' }, 5), failed);
+		const after = run(started, prompted, failed, hook('session_start', { source: 'clear' }, 4, second), hook('prompt', { text: 'x' }, 5), failed);
 		const noticeIds = [...before.chat, ...after.chat].flatMap((item) => (item.kind === 'notice' ? [item.id] : []));
 		expect(noticeIds).toHaveLength(2);
 		expect(new Set(noticeIds).size).toBe(2);
@@ -326,7 +333,7 @@ describe('reduce', () => {
 	test('chatStartedAt restarts with the conversation after /clear', () => {
 		const cleared = run(started, prompted, hook('session_start', { source: 'clear' }, 3, second));
 		expect(cleared.chatStartedAt).toBeNull();
-		expect(reduce(cleared, hook('prompt', { text: 'new', promptId: 'p2' }, 4, second)).chatStartedAt).toBe(4);
+		expect(reduce(cleared, hook('prompt', { text: 'new' }, 4, second)).chatStartedAt).toBe(4);
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {

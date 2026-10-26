@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { ClaudeSessionId } from '@orfoni/protocol';
 import { z } from 'zod';
 
@@ -7,7 +6,7 @@ type Event<T extends string, F> = { type: T; claudeSessionId: ClaudeSessionId } 
 export type HookEvent =
 	| Event<'session_start', { source: 'startup' | 'resume' | 'clear' | 'compact' | 'fork' }>
 	| Event<'session_end', { reason: string }>
-	| Event<'prompt', { text: string; promptId: string }>
+	| Event<'prompt', { text: string }>
 	| Event<'assistant_text', { messageId: string; index: number; final: boolean; delta: string }>
 	| Event<'tool_start', { toolUseId: string; name: string; input: unknown; agentId?: string }>
 	| Event<'tool_end', { toolUseId: string; name: string; output: unknown; agentId?: string }>
@@ -42,12 +41,7 @@ const schemas = {
 		source: b.source,
 	})),
 	SessionEnd: hook({ reason: z.string() }, (b) => ({ type: 'session_end', claudeSessionId: b.session_id, reason: b.reason })),
-	UserPromptSubmit: hook({ prompt: z.string(), prompt_id: z.string().default(() => randomUUID()) }, (b) => ({
-		type: 'prompt',
-		claudeSessionId: b.session_id,
-		text: b.prompt,
-		promptId: b.prompt_id,
-	})),
+	UserPromptSubmit: hook({ prompt: z.string() }, (b) => ({ type: 'prompt', claudeSessionId: b.session_id, text: b.prompt })),
 	MessageDisplay: hook(
 		{ message_id: z.string(), index: z.number().int(), final: z.boolean(), delta: z.string() },
 		(b) => ({
