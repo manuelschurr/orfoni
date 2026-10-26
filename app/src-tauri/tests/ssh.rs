@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(10);
+// The `cat` hub echoes the request the link sends to learn that the hub runs.
+const PROBE: &str = r#"{"id":0,"method":"listSessions"}"#;
 
 async fn trusted(sshd: &PrivateSshd) -> KnownHosts {
     let mut known_hosts = KnownHosts::load(&sshd.path("known-hosts.json")).unwrap();
@@ -273,6 +275,7 @@ async fn a_dropped_link_reconnects_with_backoff_and_relays_again() {
         next(&mut events).await,
         LinkEvent::Status(Status::Connected)
     );
+    assert_eq!(next(&mut events).await, LinkEvent::Line(PROBE.into()));
     link.send("before".into()).unwrap();
     assert_eq!(next(&mut events).await, LinkEvent::Line("before".into()));
 
@@ -293,6 +296,7 @@ async fn a_dropped_link_reconnects_with_backoff_and_relays_again() {
         next(&mut events).await,
         LinkEvent::Status(Status::Connected)
     );
+    assert_eq!(next(&mut events).await, LinkEvent::Line(PROBE.into()));
 
     link.send("after".into()).unwrap();
     assert_eq!(next(&mut events).await, LinkEvent::Line("after".into()));
@@ -323,4 +327,45 @@ async fn a_changed_host_key_during_a_reconnect_fails_the_link() {
     .unwrap();
 
     assert!(failed.contains(&sshd.host_fingerprint()), "{failed}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_that_exits_at_once_is_never_reported_connected_and_backs_off() {
+    let sshd = PrivateSshd::start();
+    let known_hosts = trusted(&sshd).await;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let _link = HubLink::start(sshd.settings("exit 1"), None, known_hosts, move |event| {
+        let _ = tx.send(event);
+    })
+    .await
+    .unwrap();
+
+    let mut statuses = Vec::new();
+    let _ = timeout(Duration::from_millis(5500), async {
+        while let Some(event) = events.recv().await {
+            if let LinkEvent::Status(status) = event {
+                statuses.push(status);
+            }
+        }
+    })
+    .await;
+
+    let shown: Vec<String> = statuses
+        .iter()
+        .map(|status| match status {
+            Status::Reconnecting { attempt, .. } => format!("reconnecting {attempt}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "Connecting",
+            "reconnecting 1",
+            "reconnecting 2",
+            "reconnecting 3"
+        ]
+    );
+    let logins = sshd.log().matches("Accepted publickey").count();
+    assert_eq!(logins, 3, "{}", sshd.log());
 }

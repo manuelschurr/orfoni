@@ -35,6 +35,9 @@ async function until<T>(check: () => T | undefined, timeoutMs = 2000): Promise<T
 	}
 }
 
+const PROBE = '{"id":0,"method":"listSessions"}\n';
+const shown = (statuses: ConnectionStatus[]) => statuses.map((status) => (status.kind === 'reconnecting' ? `reconnecting ${status.attempt}` : status.kind));
+
 test('hub lines arrive whole however the socket splits and joins them, and sent lines end in a newline', async () => {
 	const transport = wsHubTransport(`${base}/hub`);
 	const lines: string[] = [];
@@ -46,9 +49,9 @@ test('hub lines arrive whole however the socket splits and joins them, and sent 
 	await until(() => lines.length === 3);
 	expect(lines).toEqual(['{"type":"sessionRemoved","sessionId":"a1"}', '{"n":1}', '{"n":2}']);
 	await until(() => connections[0]?.socket.readyState === 1);
-	transport.send('{"id":1,"method":"listSessions"}');
-	await until(() => received.length === 1);
-	expect(received).toEqual(['{"id":1,"method":"listSessions"}\n']);
+	await transport.send('{"id":1,"method":"listSessions"}');
+	await until(() => received.length === 2);
+	expect(received).toEqual([PROBE, '{"id":1,"method":"listSessions"}\n']);
 	transport.close();
 });
 
@@ -58,16 +61,36 @@ test('a dropped socket reports reconnecting, reconnects, and drops the half line
 	const lines: string[] = [];
 	transport.onStatus((status) => statuses.push(status));
 	transport.onLine((line) => lines.push(line));
+	(await until(() => connections[0])).socket.send('{"half":');
 	await until(() => statuses.length === 1);
-	connections[0]?.socket.send('{"half":');
-	await new Promise((resolve) => setTimeout(resolve, 20));
 	connections[0]?.socket.terminate();
-	await until(() => connections.length === 2 && statuses.length === 3);
-	expect(statuses.map((status) => status.kind)).toEqual(['connected', 'reconnecting', 'connected']);
-	expect(statuses[1]).toMatchObject({ kind: 'reconnecting', attempt: 1 });
-	connections[1]?.socket.send('{"whole":true}\n');
-	await until(() => lines.length === 1);
+	(await until(() => connections[1])).socket.send('{"whole":true}\n');
+	await until(() => statuses.length === 3 && lines.length === 1);
+	expect(shown(statuses)).toEqual(['connected', 'reconnecting 1', 'connected']);
 	expect(lines).toEqual(['{"whole":true}']);
+	transport.close();
+});
+
+test('a hub that exits at once is never reported connected, and the waits between attempts grow', async () => {
+	server.on('connection', (socket) => socket.close(1011, 'the hub command exited with 1'));
+	const transport = wsHubTransport(`${base}/hub`, [20, 40, 80, 60_000]);
+	const statuses: ConnectionStatus[] = [];
+	transport.onStatus((status) => statuses.push(status));
+	await until(() => statuses.filter((status) => status.kind === 'reconnecting').length === 4);
+	expect(shown(statuses)).toEqual(['reconnecting 1', 'reconnecting 2', 'reconnecting 3', 'reconnecting 4']);
+	expect(connections).toHaveLength(4);
+	transport.close();
+});
+
+test('the link asks the hub for an answer, and a silent hub counts as connected once the link has stayed up long enough', async () => {
+	const transport = wsHubTransport(`${base}/hub`, [10], 150);
+	const statuses: ConnectionStatus[] = [];
+	transport.onStatus((status) => statuses.push(status));
+	await until(() => received.length === 1);
+	expect(received).toEqual([PROBE]);
+	expect(statuses).toEqual([]);
+	await until(() => statuses.length === 1);
+	expect(statuses).toEqual([{ kind: 'connected' }]);
 	transport.close();
 });
 

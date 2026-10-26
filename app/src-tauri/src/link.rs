@@ -75,7 +75,6 @@ impl HubLink {
                 return Err(error);
             }
         };
-        on_event(LinkEvent::Status(Status::Connected));
         let (outgoing, queue) = mpsc::unbounded_channel();
         let (current, connection) = watch::channel(Some(connection));
         let task = tokio::spawn(supervise(login, hub, queue, current, on_event));
@@ -116,6 +115,18 @@ pub fn backoff(attempt: u32) -> Duration {
     })
 }
 
+// A hub command that exits at once still gets its exec accepted, so the link counts as up only once the hub answers this probe or the channel stays open for SETTLE. HubClient numbers its requests from 1 and ignores the answer.
+pub const PROBE: &str = r#"{"id":0,"method":"listSessions"}"#;
+const SETTLE: Duration = Duration::from_secs(30);
+
+async fn confirm(hub: &mut HubChannel) -> Result<Option<String>, SshError> {
+    hub.send(PROBE).await?;
+    match tokio::time::timeout(SETTLE, hub.next_line()).await {
+        Ok(line) => line.map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 async fn relay(
     hub: &mut HubChannel,
     queue: &mut mpsc::UnboundedReceiver<String>,
@@ -143,10 +154,20 @@ async fn supervise(
     current: watch::Sender<Option<Arc<Connection>>>,
     on_event: impl Fn(LinkEvent),
 ) {
+    let mut attempt = 0;
     loop {
-        let mut error = relay(&mut hub, &mut queue, &on_event).await;
+        let mut error = match confirm(&mut hub).await {
+            Ok(first) => {
+                attempt = 0;
+                on_event(LinkEvent::Status(Status::Connected));
+                if let Some(line) = first {
+                    on_event(LinkEvent::Line(line));
+                }
+                relay(&mut hub, &mut queue, &on_event).await
+            }
+            Err(error) => error,
+        };
         current.send_replace(None);
-        let mut attempt = 0;
         hub = loop {
             attempt += 1;
             on_event(LinkEvent::Status(Status::Reconnecting {
@@ -158,7 +179,6 @@ async fn supervise(
                 Ok((connection, hub)) => {
                     while queue.try_recv().is_ok() {}
                     current.send_replace(Some(connection));
-                    on_event(LinkEvent::Status(Status::Connected));
                     break hub;
                 }
                 Err(retry @ (SshError::Io(_) | SshError::Closed(_))) => error = retry,

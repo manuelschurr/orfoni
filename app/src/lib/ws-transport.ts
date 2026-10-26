@@ -1,13 +1,17 @@
 import type { ConnectionStatus, HubTransport, TerminalStream, TerminalTransport } from './transport';
 
 export const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000];
+export const SETTLE_MS = 30_000;
+// The hub speaks only when asked, and HubClient numbers its requests from 1, so it ignores the answer to this one.
+const PROBE = JSON.stringify({ id: 0, method: 'listSessions' });
 
 function closeReason(event: CloseEvent, opened: boolean, url: string): string {
 	if (!opened) return `could not connect to ${url}`;
 	return `the connection closed${event.reason ? `: ${event.reason}` : ''} (code ${event.code})`;
 }
 
-export function wsHubTransport(url: string, backoffMs: number[] = BACKOFF_MS): HubTransport {
+// A hub command that exits at once still opens the socket, so the link counts as up only once the hub answered or the socket stayed open for settleMs.
+export function wsHubTransport(url: string, backoffMs: number[] = BACKOFF_MS, settleMs = SETTLE_MS): HubTransport {
 	const lineListeners: ((line: string) => void)[] = [];
 	const statusListeners: ((status: ConnectionStatus) => void)[] = [];
 	const emit = (status: ConnectionStatus) => {
@@ -21,21 +25,32 @@ export function wsHubTransport(url: string, backoffMs: number[] = BACKOFF_MS): H
 	function connect(): void {
 		const ws = new WebSocket(url);
 		let opened = false;
+		let up = false;
+		let settle: ReturnType<typeof setTimeout> | undefined;
 		let partial = '';
 		socket = ws;
-		ws.onopen = () => {
-			opened = true;
+		const confirm = () => {
+			if (up) return;
+			up = true;
+			clearTimeout(settle);
 			attempt = 0;
 			emit({ kind: 'connected' });
 		};
+		ws.onopen = () => {
+			opened = true;
+			ws.send(`${PROBE}\n`);
+			settle = setTimeout(confirm, settleMs);
+		};
 		ws.onmessage = (event: MessageEvent) => {
 			if (typeof event.data !== 'string') return;
+			confirm();
 			const lines = (partial + event.data).split('\n');
 			partial = lines.pop() ?? '';
 			for (const line of lines) if (line !== '') for (const listener of lineListeners) listener(line);
 		};
 		ws.onclose = (event) => {
 			socket = null;
+			clearTimeout(settle);
 			if (closed) return;
 			attempt++;
 			emit({ kind: 'reconnecting', attempt, error: closeReason(event, opened, url) });
