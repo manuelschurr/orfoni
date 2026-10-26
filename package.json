@@ -2,10 +2,15 @@
 	"name": "orfoni",
 	"private": true,
 	"type": "module",
-	"workspaces": ["packages/*", "hub", "cli"],
+	"workspaces": [
+		"packages/*",
+		"hub",
+		"cli"
+	],
 	"scripts": {
 		"test": "vitest run",
-		"build": "tsc -b"
+		"build": "tsc -b",
+		"test:e2e": "vitest run -c vitest.e2e.config.ts"
 	},
 	"devDependencies": {
 		"@types/node": "22.20.5",
