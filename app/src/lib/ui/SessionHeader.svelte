@@ -3,7 +3,12 @@
 	import type { HubClient } from '../hub-client.svelte';
 	import { sessionTitle, stateLabel } from './format';
 
-	let { client, session }: { client: HubClient; session: SessionSummary } = $props();
+	let {
+		client,
+		session,
+		onterminal,
+		onshell,
+	}: { client: HubClient; session: SessionSummary; onterminal: () => void; onshell: (target: string) => void } = $props();
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let confirm: HTMLDialogElement | undefined = $state();
@@ -36,6 +41,15 @@
 		</p>
 	</div>
 	<div class="actions">
+		<button class="btn" onclick={onterminal}>Terminal</button>
+		<button
+			class="btn"
+			disabled={busy}
+			onclick={() =>
+				act(async () => {
+					onshell(await client.openShell(session.id));
+				})}>New shell</button
+		>
 		{#if session.state === 'working'}
 			<button class="btn" disabled={busy} onclick={() => act(() => client.interrupt(session.id))}>Interrupt</button>
 		{/if}

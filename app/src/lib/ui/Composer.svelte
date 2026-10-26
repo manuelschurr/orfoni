@@ -51,7 +51,7 @@
 		<button class="send btn btn-primary" type="submit" disabled={sending || text.trim() === ''}>{sending ? 'Sending' : 'Send'}</button>
 	</div>
 	{#if error}<p class="error" id="composer-error" role="alert">{error}</p>{/if}
-	<p class="hint">Enter sends, Shift+Enter adds a line. A message that starts with ! runs as a shell command in the session.</p>
+	<p class="hint">Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.</p>
 </form>
 
 <style>

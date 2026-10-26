@@ -42,7 +42,7 @@ function relayTerminal(ws, target, cols, rows) {
 	const env = { ...process.env, TERM: 'xterm-256color' };
 	// tmux refuses to attach from inside another tmux client.
 	delete env.TMUX;
-	const term = pty.spawn('tmux', ['-L', tmuxSocket, 'attach', '-t', target], { name: 'xterm-256color', cols, rows, cwd: homedir(), env, encoding: null });
+	const term = pty.spawn('tmux', ['-u', '-L', tmuxSocket, 'attach', '-t', target], { name: 'xterm-256color', cols, rows, cwd: homedir(), env, encoding: null });
 	term.onData((data) => ws.send(data));
 	term.onExit(({ exitCode }) => ws.close(1000, reason(`tmux exited with ${exitCode}`)));
 	ws.on('message', (data, isBinary) => {
