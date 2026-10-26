@@ -1,0 +1,13 @@
+{
+	"name": "@orfoni/cli",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"orfoni": "bin/orfoni.js"
+	},
+	"dependencies": {
+		"@orfoni/protocol": "*",
+		"zod": "4.6.7"
+	}
+}
