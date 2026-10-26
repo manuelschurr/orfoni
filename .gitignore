@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 .claude/worktrees/
+app/src-tauri/target/
+app/dist/

@@ -5,7 +5,8 @@
 	"workspaces": [
 		"packages/*",
 		"hub",
-		"cli"
+		"cli",
+		"app"
 	],
 	"scripts": {
 		"test": "vitest run",
