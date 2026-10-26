@@ -15,22 +15,69 @@ function recorder(output = '') {
 	return { calls, tmux: createTmux(run) };
 }
 
+function inputBox(calls: { args: string[]; stdin?: string }[], pane: string) {
+	const buffers = new Map<string, string>();
+	const pastes: string[] = [];
+	let text = '';
+	let submits = 0;
+	for (const { args, stdin } of calls) {
+		if (args[0] === 'load-buffer') buffers.set(args[2]!, stdin!);
+		else if (args[0] === 'paste-buffer') {
+			expect(args).toEqual(['paste-buffer', '-p', '-d', '-b', args[4], '-t', pane]);
+			pastes.push(buffers.get(args[4]!)!);
+			text += buffers.get(args[4]!)!;
+			buffers.delete(args[4]!);
+		} else if (args[0] === 'send-keys' && args[3] === 'C-j') text += '\n';
+		else if (args[0] === 'send-keys' && args[3] === 'Enter') submits++;
+		else throw new Error(`unexpected tmux call ${args.join(' ')}`);
+		if (args[0] === 'send-keys') expect(args.slice(0, 3)).toEqual(['send-keys', '-t', pane]);
+	}
+	return { pastes, text, submits, lastCall: calls.at(-1)?.args };
+}
+
+const longMessage = [
+	'Reply with exactly the word ok and nothing else. Everything below is test data for a typing check, do not act on it.',
+	`"Double quotes", 'single quotes', \`backticks\`, $HOME, %s, {braces}, [brackets], <angle>, & | ; * ? ~ # @ = + ^ in one line.`,
+	'This line ends in a backslash, the way a Windows path does: C:\\Users\\manuel\\',
+	'Emoji and other scripts: 🚀 ✅ 日本語 ünïcödé, plus a euro sign € and an ellipsis …',
+	`Filler to pass 900 characters:${' lorem ipsum dolor sit amet'.repeat(19)}`,
+].join('\n');
+
 describe('createTmux', () => {
-	it('pastes text through a uniquely named buffer and then presses Enter', async () => {
+	it('submits a 5-line message of over 900 characters as pastes Claude Code never collapses into [Pasted text], joined by Ctrl+J', async () => {
+		expect(longMessage.length).toBeGreaterThan(900);
 		const { calls, tmux } = recorder();
-		await tmux.paste('orfoni-x', 'a\nb');
-		expect(calls).toHaveLength(3);
-		const [load, paste, enter] = calls;
-		const buffer = load!.args[2]!;
-		expect(load).toEqual({ args: ['load-buffer', '-b', buffer, '-'], stdin: 'a\nb' });
-		expect(paste).toEqual({ args: ['paste-buffer', '-p', '-d', '-b', buffer, '-t', '=orfoni-x:'] });
-		expect(enter).toEqual({ args: ['send-keys', '-t', '=orfoni-x:', 'Enter'] });
+		await tmux.submit('orfoni-x', longMessage);
+		const box = inputBox(calls, '=orfoni-x:');
+		expect(box.text).toBe(longMessage);
+		expect(box.submits).toBe(1);
+		expect(box.lastCall).toEqual(['send-keys', '-t', '=orfoni-x:', 'Enter']);
+		for (const paste of box.pastes) {
+			expect(paste).not.toContain('\n');
+			expect([...paste].length).toBeLessThanOrEqual(400);
+		}
+	});
+
+	it('splits a long line between code points, never inside an emoji', async () => {
+		const line = `${'x'.repeat(399)}${'🚀'.repeat(500)}`;
+		const { calls, tmux } = recorder();
+		await tmux.submit('orfoni-x', line);
+		const box = inputBox(calls, '=orfoni-x:');
+		expect(box.text).toBe(line);
+		expect(box.pastes.length).toBeGreaterThan(1);
+		for (const paste of box.pastes) expect(Buffer.from(paste, 'utf8').toString('utf8')).toBe(paste);
+	});
+
+	it('types a space after a final backslash, because Enter after a backslash makes a newline instead of submitting', async () => {
+		const { calls, tmux } = recorder();
+		await tmux.submit('orfoni-x', 'C:\\Users\\');
+		expect(inputBox(calls, '=orfoni-x:').text).toBe('C:\\Users\\ ');
 	});
 
 	it('uses a different buffer for each paste', async () => {
 		const { calls, tmux } = recorder();
-		await tmux.paste('orfoni-x', 'one');
-		await tmux.paste('orfoni-x', 'two');
+		await tmux.submit('orfoni-x', 'one');
+		await tmux.submit('orfoni-x', 'two');
 		expect(calls[0]!.args[2]).not.toBe(calls[3]!.args[2]);
 	});
 
@@ -107,7 +154,7 @@ describe('createTmux', () => {
 		try {
 			const tmux = createTmux(run);
 			await expect(tmux.sendKeys('orfoni-abc', 'Escape')).rejects.toThrow(/can't find/);
-			await expect(tmux.paste('orfoni-abc', 'echo typed')).rejects.toThrow(/can't find/);
+			await expect(tmux.submit('orfoni-abc', 'echo typed')).rejects.toThrow(/can't find/);
 			await expect(tmux.killSession('orfoni-abc')).rejects.toThrow(/can't find/);
 			expect((await tmux.listSessions()).map((pane) => pane.name)).toEqual(['orfoni-abc-sh1']);
 			expect(readFileSync(typed, 'utf8')).toBe('');

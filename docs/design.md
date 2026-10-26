@@ -62,11 +62,11 @@ The app stores nothing. All state lives on the VPS, so the desktop and the phone
 
 ## What the spikes showed
 
-Two spikes on 2026-10-26 tested the assumptions this design depends on. All numbers are measured.
+Three spikes on 2026-10-26 tested the assumptions this design depends on. All numbers are measured.
 
 Interactive session in tmux, with hooks that log every event:
 
-- Text pasted into the session with `tmux paste-buffer -p` and submitted with Enter arrived as one prompt. The `UserPromptSubmit` hook received the exact text.
+- Text pasted into the session with `tmux paste-buffer -p` and submitted with Enter arrived as one prompt. The `UserPromptSubmit` hook received the exact text. That held for a two-line message. Longer ones behave differently, as the next spike shows.
 - When Claude asked to write a file, the permission dialog appeared in the terminal while the `PermissionRequest` hook was still waiting. When the hook answered after 15 s, the dialog closed and the file was written in the same second.
 - In a second run, the terminal answered the dialog while the hook was still waiting. The file was written immediately, and the hook's late answer changed nothing. The first answer wins, from either side.
 - A pasted `! echo ... > bm.txt` ran as a shell command inside the session. The file appeared, the output showed in the session, and Claude saw it.
@@ -81,6 +81,16 @@ Memory caps:
 
 - tmux already puts every pane into its own systemd scope. All 9 panes running at the time had `MemoryMax=8589934592`, `MemorySwapMax=6442450944`, and `OOMPolicy=continue`.
 
+A third spike, after the final review on 2026-10-26, tested how long messages arrive. It used Claude Code 2.1.310, `claude --model haiku` in a scratch tmux server, and a hook that logged the `UserPromptSubmit` input. The test message had 5 lines and 914 characters, with quotes, backticks, an emoji, Japanese text, and one line that ends in a backslash.
+
+- Pasting the whole message in one bracketed paste collapsed it to `[Pasted text #1 +4 lines]` in the input box, and the hook received `\n\n<pasted_content id="565c">\n` before the text and `\n</pasted_content id="565c">\n` after it. Claude Code does this for a paste of more than 3 lines or more than 800 characters, and tells Claude that pasted content may contain instructions the user did not write.
+- Typing each line with `send-keys -l` and a backslash plus Enter between lines did not arrive exactly. One typed backslash stayed in the text, and the first Enter did not submit.
+- Typing each line with `send-keys -l` and Ctrl+J between lines arrived exactly in 5 of 5 runs. A message with a 5,100-character line did not. Typed in one piece or in 400-character pieces, part of it arrived wrapped in `<pasted_content>` once the input arrived faster than Claude Code read it.
+- Pasting each line in newline-free bracketed pastes of at most 400 characters, with Ctrl+J between lines, arrived exactly in 6 of 6 runs of the 914-character message and 6 of 6 runs of a 5,176-character message. A 66,854-character message with 61 lines arrived exactly in 5 of 6 runs. In the other run one 59-character piece was missing. A pasted `! echo bm-$((6*7))` ran in bash mode and printed `bm-42`, and a pasted `/clear` cleared the conversation.
+- Claude Code removes trailing whitespace from every prompt, and keeps leading whitespace.
+- Enter after a final backslash inserts a newline instead of submitting, with every input method. A space after the backslash makes Enter submit, and the trim removes the space again.
+- A tab is lost when typed, because Tab is a key binding, and turns into four spaces when pasted.
+
 ## The hub
 
 `orfoni-hub` is one Node program written in TypeScript. TypeScript fits because the app's UI is TypeScript, so both sides share one package of message types, and because the Agent SDK's session readers are TypeScript. It runs as a systemd user service.
@@ -91,7 +101,7 @@ The hub has these jobs:
 - Receive Claude Code's hook events on a Unix socket in the hub's runtime directory, `$XDG_RUNTIME_DIR/orfoni/hooks.sock`. The directory has mode 0700, so no other account on the VPS can post hooks. Each hook is a short `curl --unix-socket` command that posts the event with the orfoni session ID as a header, so the hub knows which session sent it.
 - Accept a Claude session ID only as a UUID, from hooks and from the state file, and pass it to `claude` only glued to its option, as `--resume=<id>`. The ID arrives in hook input, so without both rules a forged hook could add options to `claude`'s arguments.
 - Turn hook events into session states and chat messages, and forward both to connected apps.
-- Send your chat messages into the session with `tmux paste-buffer -p` followed by Enter, only while the session is waiting for input or working. Claude Code queues a message typed while it works.
+- Send your chat messages into the session as bracketed pastes of at most 400 characters without a newline, with Ctrl+J between lines and Enter at the end, only while the session is waiting for input or working. Claude Code queues a message typed while it works. Pastes that small stay plain text, while one paste of a long message would reach Claude as untrusted pasted content (spike, 2026-10-26).
 - Hold `PermissionRequest` hook requests open until an app answers. If the terminal answers first, the hub sees the tool run and withdraws the card.
 - Answer questions from `AskUserQuestion` and plan approvals from `ExitPlanMode` the same way. The hooks docs describe answering both through `updatedInput`.
 - Interrupt a turn by sending Escape to the pane.
@@ -188,7 +198,8 @@ Each milestone ends with a check on the real thing, not only tests.
 
 - Answering `AskUserQuestion` and `ExitPlanMode` from the app is documented for `PreToolUse` hooks but untested here. A `PreToolUse` hook that waits for the app may also hold back the terminal's dialog, unlike `PermissionRequest`. Test both before building the cards.
 - A message pasted while you type in the terminal mixes with your typing. The app warns when the terminal for that session is attached and the prompt is not empty, or the hub waits until the prompt is empty.
-- Typing into the session depends on Claude Code's input box accepting a bracketed paste followed by Enter. A self-test on hub start catches a change in that behaviour.
+- Typing into the session depends on undocumented behaviour of Claude Code's input box: a paste of at most 3 lines and 800 characters stays plain text, Ctrl+J inserts a newline, and trailing whitespace is trimmed. A change in any of them makes `send` report `not_delivered` for messages that arrived changed. A self-test on hub start would catch it.
+- Messages lose their tabs, which turn into four spaces. In one of six runs a 66,854-character message lost one 59-character piece, and `send` then reports `not_delivered`. Messages of a few thousand characters arrived exactly every time.
 - A `PermissionRequest` hook has a 600 s timeout by default. After that the app can no longer answer, and the request stays open in the terminal. Raise the timeout, or show the request as "answer in the terminal".
 - The hooks go into the user settings, which changes every Claude session on the VPS. Hooks that fail do no harm, but each session sends events to the hub.
 - `getSessionMessages()` returns the conversation since the last compaction. A compacted session returned 4 messages from a transcript with 41 user entries. The chat shows the compaction summary as a collapsed card.

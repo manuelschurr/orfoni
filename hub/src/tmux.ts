@@ -13,7 +13,7 @@ export interface Tmux {
 	newSession(name: string, cwd: string, env: Record<string, string>, command: string[]): Promise<void>;
 	killSession(name: string): Promise<void>;
 	listSessions(): Promise<Pane[]>;
-	paste(session: string, text: string): Promise<void>;
+	submit(session: string, text: string): Promise<void>;
 	sendKeys(session: string, ...keys: string[]): Promise<void>;
 }
 
@@ -24,6 +24,15 @@ export function sessionTarget(name: string): string {
 
 function paneTarget(name: string): string {
 	return `=${name}:`;
+}
+
+const PASTE_LIMIT = 400;
+
+function pieces(line: string): string[] {
+	const points = [...line];
+	const result: string[] = [];
+	for (let start = 0; start < points.length; start += PASTE_LIMIT) result.push(points.slice(start, start + PASTE_LIMIT).join(''));
+	return result;
 }
 
 export function runTmux(socket: string): Run {
@@ -63,10 +72,17 @@ export function createTmux(run: Run): Tmux {
 					return { name, panePid: Number(pid), paneDead: dead === '1' };
 				});
 		},
-		async paste(session, text) {
-			const buffer = `orfoni-${randomUUID()}`;
-			await run(['load-buffer', '-b', buffer, '-'], text);
-			await run(['paste-buffer', '-p', '-d', '-b', buffer, '-t', paneTarget(session)]);
+		// Claude Code collapses a paste of more than 3 lines or 800 characters into [Pasted text #N] and tells Claude its content may not come from the user, so each line goes in as small newline-free pastes, with Ctrl+J between lines. Enter right after a backslash inserts a newline instead of submitting, and Claude Code trims the space added after one.
+		async submit(session, text) {
+			const lines = (text.endsWith('\\') ? `${text} ` : text).split('\n');
+			for (const [index, line] of lines.entries()) {
+				if (index > 0) await run(['send-keys', '-t', paneTarget(session), 'C-j']);
+				for (const piece of pieces(line)) {
+					const buffer = `orfoni-${randomUUID()}`;
+					await run(['load-buffer', '-b', buffer, '-'], piece);
+					await run(['paste-buffer', '-p', '-d', '-b', buffer, '-t', paneTarget(session)]);
+				}
+			}
 			await run(['send-keys', '-t', paneTarget(session), 'Enter']);
 		},
 		async sendKeys(session, ...keys) {

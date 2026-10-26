@@ -263,8 +263,8 @@ export class Hub {
 	private async send(session: Session, text: string): Promise<void> {
 		// Slash commands and bash mode do not always fire UserPromptSubmit, so only plain text waits for it.
 		const confirmable = !text.startsWith('/') && !text.startsWith('!');
-		const delivery = (timeoutMs: number) =>
-			confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && event.text === text, timeoutMs) : Promise.resolve(true);
+		const delivery = (timeoutMs: number, typing?: Promise<void>) =>
+			confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && event.text === text.trimEnd(), timeoutMs, typing) : Promise.resolve(true);
 		this.assertTakesInput(session);
 		if (session.model.state === 'offline' && session.sessionStartAt !== null) {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
@@ -279,8 +279,9 @@ export class Hub {
 		const untilInputReady = (session.sessionStartAt ?? 0) + INPUT_READY_DELAY_MS - Date.now();
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);
-		const delivered = delivery(DELIVERY_TIMEOUT_MS);
-		await this.options.tmux.paste(tmuxName(session.id), text);
+		const typing = this.options.tmux.submit(tmuxName(session.id), text);
+		const delivered = delivery(DELIVERY_TIMEOUT_MS, typing);
+		await typing;
 		if (!(await delivered)) throw new HubError('not_delivered', `Claude Code did not confirm the message within ${DELIVERY_TIMEOUT_MS / 1000} s`);
 	}
 
@@ -290,12 +291,9 @@ export class Hub {
 		}
 	}
 
-	private waitForHook(session: Session, matches: (event: HookEvent) => boolean, timeoutMs: number): Promise<boolean> {
+	private waitForHook(session: Session, matches: (event: HookEvent) => boolean, timeoutMs: number, clockStarts: Promise<unknown> = Promise.resolve()): Promise<boolean> {
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
-				this.waiters.delete(waiter);
-				resolve(false);
-			}, timeoutMs);
+			let timer: NodeJS.Timeout | undefined;
 			const waiter: Waiter = {
 				session,
 				matches,
@@ -305,6 +303,14 @@ export class Hub {
 				},
 			};
 			this.waiters.add(waiter);
+			const startClock = () => {
+				if (!this.waiters.has(waiter)) return;
+				timer = setTimeout(() => {
+					this.waiters.delete(waiter);
+					resolve(false);
+				}, timeoutMs);
+			};
+			clockStarts.then(startClock, startClock);
 		});
 	}
 

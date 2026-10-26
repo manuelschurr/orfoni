@@ -12,7 +12,7 @@ const SOCKET = '/run/user/0/orfoni/hooks.sock';
 const PROJECT = '/work/proj';
 const T0 = Date.parse('2026-10-26T11:00:00.000Z');
 
-function fakeTmux(running: string[] = []) {
+function fakeTmux(running: string[] = [], typingMs = 0) {
 	const calls: { method: keyof Tmux; args: unknown[] }[] = [];
 	const live = new Set(running);
 	const tmux: Tmux = {
@@ -27,8 +27,9 @@ function fakeTmux(running: string[] = []) {
 		async listSessions() {
 			return [...live].map((name, index) => ({ name, panePid: 1000 + index, paneDead: false }));
 		},
-		async paste(target, text) {
-			calls.push({ method: 'paste', args: [target, text] });
+		async submit(target, text) {
+			calls.push({ method: 'submit', args: [target, text] });
+			if (typingMs > 0) await new Promise((resolve) => setTimeout(resolve, typingMs));
 		},
 		async sendKeys(target, ...keys) {
 			calls.push({ method: 'sendKeys', args: [target, ...keys] });
@@ -213,14 +214,32 @@ describe('send', () => {
 		let response: Response | undefined;
 		void client.request('send', { sessionId: id, text: 'hello "there"\nline two' }).then((r) => (response = r));
 		await vi.advanceTimersByTimeAsync(1999);
-		expect(fake.of('paste')).toEqual([]);
+		expect(fake.of('submit')).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
-		expect(fake.of('paste')).toEqual([[`orfoni-${id}`, 'hello "there"\nline two']]);
+		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, 'hello "there"\nline two']]);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(response).toBeUndefined();
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hello "there"\nline two' }));
 		await untilRealTime(() => response !== undefined);
 		expect(response).toMatchObject({ ok: true });
+	});
+
+	test('resolves when the prompt hook carries the text without its trailing whitespace, which Claude Code trims', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const sent = client.request('send', { sessionId: id, text: '  keep the leading spaces\n\nbut not these  \n' });
+		await vi.advanceTimersByTimeAsync(0);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '  keep the leading spaces\n\nbut not these' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('gives Claude Code 5 s to confirm counted from the end of typing, however long a message takes to type', async () => {
+		const client = await startHub(fakeTmux([], 8000));
+		const { id, claude } = await ready(client);
+		const sent = client.request('send', { sessionId: id, text: 'a long message' });
+		await vi.advanceTimersByTimeAsync(12_000);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'a long message' }));
+		expect(await sent).toMatchObject({ ok: true });
 	});
 
 	test('waits for SessionStart and gives up with not_ready after 30 s', async () => {
@@ -229,7 +248,7 @@ describe('send', () => {
 		const sent = client.request('send', { sessionId: id, text: 'hello' });
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect(await sent).toMatchObject({ ok: false, error: { code: 'not_ready' } });
-		expect(fake.of('paste')).toEqual([]);
+		expect(fake.of('submit')).toEqual([]);
 	});
 
 	test('a SessionStart that arrives while send waits lets the paste go 2 s later', async () => {
@@ -239,9 +258,9 @@ describe('send', () => {
 		await vi.advanceTimersByTimeAsync(10_000);
 		await hub.hook(id, body('SessionStart', claude));
 		await vi.advanceTimersByTimeAsync(1999);
-		expect(fake.of('paste')).toEqual([]);
+		expect(fake.of('submit')).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
-		expect(fake.of('paste')).toEqual([[`orfoni-${id}`, 'hello']]);
+		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, 'hello']]);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hello' }));
 		expect(await sent).toMatchObject({ ok: true });
 	});
@@ -261,14 +280,14 @@ describe('send', () => {
 		const { id, claude } = await ready(client);
 		void hub.hook(id, body('PermissionRequest', claude));
 		expect(await client.request('send', { sessionId: id, text: 'hello' })).toMatchObject({ ok: false, error: { code: 'not_ready' } });
-		expect(fake.of('paste')).toEqual([]);
+		expect(fake.of('submit')).toEqual([]);
 	});
 
 	test.each(['/compact', '! echo bm-ok'])('%s resolves right after the paste, because it may fire no prompt hook', async (text) => {
 		const client = await startHub();
 		const { id } = await ready(client);
 		expect(await client.request('send', { sessionId: id, text })).toMatchObject({ ok: true });
-		expect(fake.of('paste')).toEqual([[`orfoni-${id}`, text]]);
+		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, text]]);
 	});
 
 	test('a message to an offline session resumes claude with the message as its prompt', async () => {
@@ -285,7 +304,7 @@ describe('send', () => {
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
 		await untilRealTime(() => response !== undefined);
 		expect(response).toMatchObject({ ok: true });
-		expect(fake.of('paste')).toEqual([]);
+		expect(fake.of('submit')).toEqual([]);
 	});
 
 	test('an unknown session fails with not_found', async () => {
@@ -496,7 +515,7 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${id}`]));
 		const sent = after.request('send', { sessionId: id, text: 'still there?' });
-		await untilRealTime(() => fake.of('paste').length === 1);
+		await untilRealTime(() => fake.of('submit').length === 1);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'still there?' }));
 		expect(await sent).toMatchObject({ ok: true });
 	});
