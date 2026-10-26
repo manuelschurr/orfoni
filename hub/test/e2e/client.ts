@@ -92,6 +92,10 @@ export function tmux(...args: string[]): string {
 	return execFileSync('tmux', ['-L', 'orfoni', ...args], { encoding: 'utf8' });
 }
 
+export function pane(sessionId: SessionId): string {
+	return `=orfoni-${sessionId}:`;
+}
+
 export function newProjectDir(): string {
 	const base = '/var/tmp/claude-0/orfoni-e2e';
 	mkdirSync(base, { recursive: true });
@@ -100,7 +104,7 @@ export function newProjectDir(): string {
 
 export async function acceptTrustPrompt(started: Started): Promise<void> {
 	if (!started.needsTrust) return;
-	const target = `orfoni-${started.session.id}`;
+	const target = pane(started.session.id);
 	for (let i = 0; i < 40; i++) {
 		if (tmux('capture-pane', '-p', '-t', target).includes('Yes, I trust this folder')) {
 			// The dialog drops keys that arrive in its first second, and Enter on the default choice exits Claude Code.

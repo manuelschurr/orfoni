@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ChatItem, SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, HubClient, newProjectDir, sleep, tmux, type Started } from './e2e/client.js';
+import { acceptTrustPrompt, HubClient, newProjectDir, pane, sleep, tmux, type Started } from './e2e/client.js';
 
 let client: HubClient;
 const started: SessionId[] = [];
@@ -41,7 +41,7 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const approval = await client.waitForChat(id, pendingApproval);
 		if (approval.kind !== 'approval') throw new Error('unreachable');
 		await sleep(1000);
-		tmux('send-keys', '-t', `orfoni-${id}`, 'Enter');
+		tmux('send-keys', '-t', pane(id), 'Enter');
 		await client.waitForChat(id, (item) => item.kind === 'approval' && item.requestId === approval.requestId && item.status === 'withdrawn');
 		await client.waitForSession(id, (s) => s.state === 'answered');
 		expect(readFileSync(`${dir}/a.txt`, 'utf8').trim()).toBe('hi');
@@ -84,7 +84,7 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		await client.waitForSession(id, (s) => s.state === 'answered');
 		await client.request('send', { sessionId: id, text: '! echo bm-ok' });
 		await sleep(3000);
-		expect(tmux('capture-pane', '-p', '-t', `orfoni-${id}`)).toContain('bm-ok');
+		expect(tmux('capture-pane', '-p', '-t', pane(id))).toContain('bm-ok');
 	});
 
 	test('hub restart keeps the session', async () => {
@@ -105,7 +105,7 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 
 	test('memory cap applies', async () => {
 		const { id } = await start();
-		const panePid = tmux('list-panes', '-t', `orfoni-${id}`, '-F', '#{pane_pid}').trim();
+		const panePid = tmux('list-panes', '-t', pane(id), '-F', '#{pane_pid}').trim();
 		const cgroup = readFileSync(`/proc/${panePid}/cgroup`, 'utf8').trim().split('/').pop() ?? '';
 		const memoryMax = execFileSync('systemctl', ['--user', 'show', cgroup, '-p', 'MemoryMax'], { encoding: 'utf8' }).trim();
 		expect(memoryMax).toBe('MemoryMax=8589934592');

@@ -21,7 +21,7 @@ import { PendingRequests, RequestError, type HookResponse } from './requests.js'
 import { emptySession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
 import { loadState, saveState } from './store.js';
-import type { Tmux } from './tmux.js';
+import { sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
@@ -76,7 +76,7 @@ const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
 });
 
-function target(id: SessionId): string {
+function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
 }
 
@@ -106,7 +106,7 @@ export class Hub {
 		const hub = new Hub(options);
 		const now = Date.now();
 		for (const { id, projectDir, title, claudeSessionId, createdAt } of state.sessions) {
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: running.has(target(id)) ? 'working' : 'offline' };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: running.has(tmuxName(id)) ? 'working' : 'offline' };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, sessionStartAt: 0 });
 		}
 		return hub;
@@ -176,14 +176,14 @@ export class Hub {
 			case 'interrupt': {
 				const session = this.session(request.sessionId);
 				if (session.model.state === 'offline') throw new HubError('not_ready', `session ${session.id} is offline`);
-				await this.options.tmux.sendKeys(target(session.id), 'Escape');
+				await this.options.tmux.sendKeys(tmuxName(session.id), 'Escape');
 				return {};
 			}
 			case 'stopSession':
 				await this.stop(this.session(request.sessionId));
 				return {};
 			case 'openShell':
-				return { target: await this.openShell(this.session(request.sessionId)) };
+				return { target: sessionTarget(await this.openShell(this.session(request.sessionId))) };
 		}
 	}
 
@@ -237,7 +237,7 @@ export class Hub {
 		await mkdir(dirname(settings), { recursive: true });
 		await writeFile(settings, `${JSON.stringify(hookSettings(this.options.hookPort), null, '\t')}\n`);
 		session.sessionStartAt = null;
-		await this.options.tmux.newSession(target(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
+		await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
 	}
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
@@ -268,7 +268,7 @@ export class Hub {
 		this.assertTakesInput(session);
 		if (session.model.state === 'offline' && session.sessionStartAt !== null) {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
-			await this.killTmux((name) => name === target(session.id));
+			await this.killTmux((name) => name === tmuxName(session.id));
 			await this.launch(session, ['--resume', session.model.claudeSessionId], ['--', text]);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude --resume did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
@@ -280,7 +280,7 @@ export class Hub {
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);
 		const delivered = delivery(DELIVERY_TIMEOUT_MS);
-		await this.options.tmux.paste(target(session.id), text);
+		await this.options.tmux.paste(tmuxName(session.id), text);
 		if (!(await delivered)) throw new HubError('not_delivered', `Claude Code did not confirm the message within ${DELIVERY_TIMEOUT_MS / 1000} s`);
 	}
 
@@ -316,7 +316,7 @@ export class Hub {
 	}
 
 	private async stop(session: Session): Promise<void> {
-		await this.killTmux((name) => name === target(session.id) || name.startsWith(`${target(session.id)}-sh`));
+		await this.killTmux((name) => name === tmuxName(session.id) || name.startsWith(`${tmuxName(session.id)}-sh`));
 		this.paneExited(session);
 	}
 
@@ -326,7 +326,7 @@ export class Hub {
 	}
 
 	private async openShell(session: Session): Promise<string> {
-		const prefix = `${target(session.id)}-sh`;
+		const prefix = `${tmuxName(session.id)}-sh`;
 		const numbers = (await this.options.tmux.listSessions()).flatMap((pane) => {
 			const n = pane.name.startsWith(prefix) ? Number(pane.name.slice(prefix.length)) : NaN;
 			return Number.isInteger(n) ? [n] : [];
@@ -340,7 +340,7 @@ export class Hub {
 		try {
 			const running = new Set((await this.options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
 			for (const session of this.sessions.values()) {
-				if (session.sessionStartAt !== null && session.model.state !== 'offline' && !running.has(target(session.id))) this.paneExited(session);
+				if (session.sessionStartAt !== null && session.model.state !== 'offline' && !running.has(tmuxName(session.id))) this.paneExited(session);
 			}
 		} catch (error) {
 			this.options.log(`orfoni-hub: listing tmux panes failed: ${(error as Error).message}`);

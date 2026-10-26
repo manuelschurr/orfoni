@@ -486,8 +486,8 @@ describe('session control', () => {
 	test('openShell starts numbered login shells in the session folder', async () => {
 		const client = await startHub();
 		const { id } = await ready(client);
-		expect(await client.ok('openShell', { sessionId: id })).toEqual({ target: `orfoni-${id}-sh1` });
-		expect(await client.ok('openShell', { sessionId: id })).toEqual({ target: `orfoni-${id}-sh2` });
+		expect(await client.ok('openShell', { sessionId: id })).toEqual({ target: `=orfoni-${id}-sh1` });
+		expect(await client.ok('openShell', { sessionId: id })).toEqual({ target: `=orfoni-${id}-sh2` });
 		expect(fake.of('newSession').slice(1)).toEqual([
 			[`orfoni-${id}-sh1`, PROJECT, {}, ['/bin/zsh', '-l']],
 			[`orfoni-${id}-sh2`, PROJECT, {}, ['/bin/zsh', '-l']],

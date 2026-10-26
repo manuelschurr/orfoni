@@ -41,7 +41,7 @@ orfoni --via "ssh my-server orfoni-hub connect" list
 
 Run `orfoni` without arguments for every command. A session argument accepts any unique prefix of the session ID.
 
-To open a session's terminal on the server, run `tmux -L orfoni attach -t orfoni-<session>`.
+To open a session's terminal on the server, run `tmux -L orfoni attach -t =orfoni-<session>`. The `=` makes tmux match the name exactly, so it never attaches to one of the session's shells instead.
 
 ## Develop
 

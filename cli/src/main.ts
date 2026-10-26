@@ -94,7 +94,7 @@ async function run(hub: Connection, command: Command): Promise<void> {
 			const { session, needsTrust } = Started.parse(await hub.request('startSession', { projectDir: command.dir, prompt: command.prompt }));
 			console.log(formatSession(session));
 			if (needsTrust) {
-				console.log(`Claude Code is waiting for you to trust ${session.projectDir}. Open the session's terminal with \`tmux -L orfoni attach -t orfoni-${session.id}\` and accept the prompt.`);
+				console.log(`Claude Code is waiting for you to trust ${session.projectDir}. Open the session's terminal with \`tmux -L orfoni attach -t =orfoni-${session.id}\` and accept the prompt.`);
 			}
 			return;
 		}

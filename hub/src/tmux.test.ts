@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTmux, runTmux } from './tmux.js';
@@ -22,8 +23,8 @@ describe('createTmux', () => {
 		const [load, paste, enter] = calls;
 		const buffer = load!.args[2]!;
 		expect(load).toEqual({ args: ['load-buffer', '-b', buffer, '-'], stdin: 'a\nb' });
-		expect(paste).toEqual({ args: ['paste-buffer', '-p', '-d', '-b', buffer, '-t', 'orfoni-x'] });
-		expect(enter).toEqual({ args: ['send-keys', '-t', 'orfoni-x', 'Enter'] });
+		expect(paste).toEqual({ args: ['paste-buffer', '-p', '-d', '-b', buffer, '-t', '=orfoni-x:'] });
+		expect(enter).toEqual({ args: ['send-keys', '-t', '=orfoni-x:', 'Enter'] });
 	});
 
 	it('uses a different buffer for each paste', async () => {
@@ -50,13 +51,13 @@ describe('createTmux', () => {
 	it('kills a session by name', async () => {
 		const { calls, tmux } = recorder();
 		await tmux.killSession('orfoni-x');
-		expect(calls).toEqual([{ args: ['kill-session', '-t', 'orfoni-x'] }]);
+		expect(calls).toEqual([{ args: ['kill-session', '-t', '=orfoni-x'] }]);
 	});
 
 	it('sends keys to a target', async () => {
 		const { calls, tmux } = recorder();
 		await tmux.sendKeys('orfoni-x', 'Escape', 'C-c');
-		expect(calls).toEqual([{ args: ['send-keys', '-t', 'orfoni-x', 'Escape', 'C-c'] }]);
+		expect(calls).toEqual([{ args: ['send-keys', '-t', '=orfoni-x:', 'Escape', 'C-c'] }]);
 	});
 
 	it('lists every pane with its session name, pid, and whether it is dead', async () => {
@@ -92,6 +93,24 @@ describe('createTmux', () => {
 		await run(['-f', fileURLToPath(new URL('../tmux.conf', import.meta.url)), 'start-server']);
 		try {
 			expect(await createTmux(run).listSessions()).toEqual([]);
+		} finally {
+			await run(['kill-server']);
+			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
+		}
+	});
+
+	it('never reaches a session whose name only starts with the target, as a shell named orfoni-<id>-sh1 does', async () => {
+		const socket = `orfoni-test-${randomUUID()}`;
+		const run = runTmux(socket);
+		const typed = join(mkdtempSync(join(tmpdir(), 'orfoni-tmux-')), 'typed');
+		await run(['new-session', '-d', '-s', 'orfoni-abc-sh1', '--', 'sh', '-c', `cat > ${typed}`]);
+		try {
+			const tmux = createTmux(run);
+			await expect(tmux.sendKeys('orfoni-abc', 'Escape')).rejects.toThrow(/can't find/);
+			await expect(tmux.paste('orfoni-abc', 'echo typed')).rejects.toThrow(/can't find/);
+			await expect(tmux.killSession('orfoni-abc')).rejects.toThrow(/can't find/);
+			expect((await tmux.listSessions()).map((pane) => pane.name)).toEqual(['orfoni-abc-sh1']);
+			expect(readFileSync(typed, 'utf8')).toBe('');
 		} finally {
 			await run(['kill-server']);
 			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
