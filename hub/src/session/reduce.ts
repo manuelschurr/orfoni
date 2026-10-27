@@ -12,6 +12,7 @@ export interface SessionModel {
 	viewing: boolean;
 	chatStartedAt: number | null;
 	summary: Summary | null;
+	tasks: Record<string, boolean>;
 }
 
 export type SessionInput =
@@ -32,7 +33,18 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {} };
+}
+
+export function taskProgress({ tasks }: SessionModel): { done: number; total: number } | null {
+	const done = Object.values(tasks);
+	return done.length === 0 ? null : { done: done.filter(Boolean).length, total: done.length };
+}
+
+function track(model: SessionModel, taskId: string, done: boolean): SessionModel {
+	const known = Object.hasOwn(model.tasks, taskId);
+	if (known && (model.tasks[taskId] || !done)) return model;
+	return { ...model, tasks: { ...model.tasks, [taskId]: done } };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
@@ -78,7 +90,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			switch (event.type) {
 				case 'session_start': {
 					const fresh = event.source === 'clear' || event.claudeSessionId !== model.claudeSessionId;
-					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null } : model;
+					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, tasks: {} } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt':
@@ -150,9 +162,11 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					return endsSession(event) ? enter(model, 'offline', at) : model;
 				case 'notification':
 					return event.kind === 'idle_prompt' && model.state === 'working' ? enter(model, model.viewing ? 'idle' : 'answered', at) : model;
-				case 'permission_request':
 				case 'task_created':
+					return track(model, event.taskId, false);
 				case 'task_completed':
+					return track(model, event.taskId, true);
+				case 'permission_request':
 					return model;
 			}
 		}

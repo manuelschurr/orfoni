@@ -599,6 +599,30 @@ describe('summaries', () => {
 	});
 });
 
+describe('task progress', () => {
+	test('a session that never creates a task shows no task progress', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		await hub.hook(id, body('Stop', claude));
+		expect(client.session(id)).toMatchObject({ state: 'answered', tasks: null });
+	});
+
+	test('every client sees the task hooks as done out of total, and /clear takes the progress away', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
+		expect(other.session(id)?.tasks).toEqual({ done: 0, total: 2 });
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1' }));
+		expect(other.session(id)?.tasks).toEqual({ done: 1, total: 2 });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, tasks: { done: 1, total: 2 } })]);
+		await hub.hook(id, body('SessionStart', '9b0c5d0e-0000-4000-8000-000000000001', { source: 'clear' }));
+		expect(other.session(id)?.tasks).toBeNull();
+	});
+});
+
 describe('openSession', () => {
 	test('returns the transcript up to the first live item, then the live items', async () => {
 		transcript = recordedConversation();

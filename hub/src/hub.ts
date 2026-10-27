@@ -21,7 +21,7 @@ import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, normalizeHistory, turnEnded } from './history.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { emptySession, endsSession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, reduce, taskProgress, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryClient, type SummaryInput } from './summaries.js';
@@ -89,10 +89,10 @@ function tmuxName(id: SessionId): string {
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: null, memory: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: null };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {

@@ -1,7 +1,7 @@
 import { ClaudeSessionId, RequestId, type ChatItem } from '@orfoni/protocol';
 import { describe, expect, test } from 'vitest';
 import type { HookEvent } from '../hooks/events.js';
-import { emptySession, reduce, type SessionInput, type SessionModel } from './reduce.js';
+import { emptySession, reduce, taskProgress, type SessionInput, type SessionModel } from './reduce.js';
 
 const first = ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76');
 const second = ClaudeSessionId.parse('7dc09cb7-52a0-432d-96d1-96f2f3904ec0');
@@ -26,17 +26,10 @@ function approval(requestId: RequestId): ChatItem {
 }
 
 describe('reduce', () => {
-	test('emptySession starts idle with no conversation', () => {
-		expect(emptySession(7, first)).toEqual({
-			state: 'idle',
-			stateSince: 7,
-			claudeSessionId: first,
-			chat: [],
-			openRequests: [],
-			viewing: false,
-			chatStartedAt: null,
-			summary: null,
-		});
+	test('emptySession starts idle with no conversation, no summary, and no task progress', () => {
+		const model = emptySession(7, first);
+		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null });
+		expect(taskProgress(model)).toBeNull();
 	});
 
 	test('session_start with source clear takes the new Claude session ID, empties the chat, and goes idle', () => {
@@ -335,6 +328,43 @@ describe('reduce', () => {
 		const cleared = run(started, prompted, hook('session_start', { source: 'clear' }, 3, second));
 		expect(cleared.chatStartedAt).toBeNull();
 		expect(reduce(cleared, hook('prompt', { text: 'new' }, 4, second)).chatStartedAt).toBe(4);
+	});
+
+	test('task progress is null until the conversation creates a task', () => {
+		expect(taskProgress(run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3)))).toBeNull();
+	});
+
+	test('task progress counts created tasks and the completed ones among them', () => {
+		const model = run(
+			started,
+			prompted,
+			hook('task_created', { taskId: '1', subject: 'Read' }, 3),
+			hook('task_created', { taskId: '2', subject: 'Write' }, 4),
+			hook('task_created', { taskId: '3', subject: 'Test' }, 5),
+			hook('task_completed', { taskId: '1', subject: 'Read' }, 6),
+		);
+		expect(taskProgress(model)).toEqual({ done: 1, total: 3 });
+	});
+
+	test('a hook that repeats a task counts it once', () => {
+		const model = run(
+			started,
+			hook('task_created', { taskId: '1', subject: 'Read' }, 2),
+			hook('task_completed', { taskId: '1', subject: 'Read' }, 3),
+			hook('task_created', { taskId: '1', subject: 'Read' }, 4),
+			hook('task_completed', { taskId: '1', subject: 'Read' }, 5),
+		);
+		expect(taskProgress(model)).toEqual({ done: 1, total: 1 });
+	});
+
+	test('a completed task whose creation the hub missed counts as created and done', () => {
+		expect(taskProgress(run(started, hook('task_completed', { taskId: '4', subject: 'Ship' }, 2)))).toEqual({ done: 1, total: 1 });
+	});
+
+	test('a new conversation after /clear starts task progress again at null, and compaction keeps it', () => {
+		const tasks = [hook('task_created', { taskId: '1', subject: 'Read' }, 3)];
+		expect(taskProgress(run(started, prompted, ...tasks, hook('session_start', { source: 'compact' }, 4)))).toEqual({ done: 0, total: 1 });
+		expect(taskProgress(run(started, prompted, ...tasks, hook('session_start', { source: 'clear' }, 4, second)))).toBeNull();
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {
