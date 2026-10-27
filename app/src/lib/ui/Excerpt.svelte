@@ -32,6 +32,7 @@
 	}
 
 	pre {
+		position: relative;
 		max-height: 32rem;
 		margin: 0;
 		padding: 0.6rem 0.8rem;

@@ -73,7 +73,9 @@
 </section>
 
 <style>
+	/* A pane that scrolls has to be the containing block of the screen reader text inside it, or that absolutely placed text stretches the page. */
 	.chat {
+		position: relative;
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;

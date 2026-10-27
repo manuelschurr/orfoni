@@ -299,3 +299,20 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 		outside.stop();
 	}
 });
+
+// Screen reader text is positioned absolutely, so a pane that scrolls without being its containing block lets that text stretch the page down to the pane's full content.
+test('the app scrolls inside its panes and never as a whole page', async ({ page }) => {
+	await page.setViewportSize({ width: 1400, height: 640 });
+	const session = await startReady({ prompt: 'Reply with a numbered markdown list of the numbers 1 to 40, one item per number, and nothing else.' });
+	await openSession(page, session);
+	await expect.poll(() => claude(page).last().locator('li').count(), { timeout: REPLY_MS }).toBeGreaterThanOrEqual(30);
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.fill('Use the Bash tool to run: echo done. Then reply with exactly: listed');
+	await box.press('Enter');
+	await expect(claude(page).last()).toContainText(/listed/i, { timeout: REPLY_MS });
+	await expect(page.getByRole('main').getByRole('button', { name: /echo done/ })).toBeVisible();
+	await claude(page).first().hover();
+	await page.mouse.wheel(0, -20_000);
+	await expect(page.getByRole('main').getByRole('button', { name: /echo done/ })).not.toBeInViewport();
+	expect(await page.evaluate(() => document.scrollingElement?.scrollHeight)).toBe(await page.evaluate(() => innerHeight));
+});

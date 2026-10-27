@@ -49,6 +49,7 @@
 
 <style>
 	.plan {
+		position: relative;
 		max-height: 36rem;
 		overflow: auto;
 		padding: 0.8rem 1rem;
