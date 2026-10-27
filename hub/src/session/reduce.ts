@@ -15,6 +15,8 @@ export interface SessionModel {
 	summary: Summary | null;
 	tasks: Record<string, boolean>;
 	memory: PaneMemory | null;
+	lastTurnEndedAt: number | null;
+	lastViewedAt: number | null;
 }
 
 export type SessionInput =
@@ -36,7 +38,15 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null, lastTurnEndedAt: null, lastViewedAt: null };
+}
+
+export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
+	return lastTurnEndedAt !== null && lastTurnEndedAt > (lastViewedAt ?? -Infinity);
+}
+
+function endTurn(model: SessionModel, at: number): SessionModel {
+	return enter({ ...model, lastTurnEndedAt: at, lastViewedAt: model.viewing ? at : model.lastViewedAt }, model.viewing ? 'idle' : 'answered', at);
 }
 
 const MEMORY_STEP_BYTES = 50 * 1024 * 1024;
@@ -167,7 +177,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'stop':
-					return enter(model, model.viewing ? 'idle' : 'answered', at);
+					return endTurn(model, at);
 				case 'stop_failure':
 					return enter(
 						{
@@ -180,7 +190,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				case 'session_end':
 					return endsSession(event) ? enter(model, 'offline', at) : model;
 				case 'notification':
-					return event.kind === 'idle_prompt' && model.state === 'working' ? enter(model, model.viewing ? 'idle' : 'answered', at) : model;
+					return event.kind === 'idle_prompt' && model.state === 'working' ? endTurn(model, at) : model;
 				case 'task_created':
 					return track(model, event.taskId, false);
 				case 'task_completed':
@@ -202,7 +212,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 		case 'request_cancelled':
 			return closeRequest(model, input.requestId, 'withdrawn', 'idle', at);
 		case 'view_changed':
-			return enter({ ...model, viewing: input.viewing }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
+			return enter({ ...model, viewing: input.viewing, lastViewedAt: at }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
 		case 'interrupted':
 			return model.state === 'offline' ? model : enter(model, 'idle', at);
 		case 'pane_exited':

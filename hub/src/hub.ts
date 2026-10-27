@@ -23,10 +23,10 @@ import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hook
 import { joinHistory, normalizeHistory, turnEnded } from './history.js';
 import { paneMemory, systemMemory } from './memory.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { emptySession, endsSession, reduce, taskProgress, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
 import { loadState, saveState, type StoredSession } from './store.js';
-import { Summarizer, type ApiKey, type SummaryClient, type SummaryInput } from './summaries.js';
+import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -97,7 +97,7 @@ function summary(session: Session): SessionSummary {
 }
 
 const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'tasks', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -116,9 +116,11 @@ function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
 	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
 }
 
-async function stateAfterRestart(options: HubOptions, { claudeSessionId, projectDir }: StoredSession): Promise<SessionStateKind> {
+async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<SessionStateKind> {
+	const { claudeSessionId, projectDir } = stored;
 	try {
-		return turnEnded(await options.readHistory(claudeSessionId, projectDir)) ? 'idle' : 'working';
+		if (!turnEnded(await options.readHistory(claudeSessionId, projectDir))) return 'working';
+		return unread(stored) ? 'answered' : 'idle';
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
 		return 'working';
@@ -148,7 +150,10 @@ export class Hub {
 	private readonly paneCheck = setInterval(() => void this.checkPanes(), PANE_CHECK_INTERVAL_MS);
 	private readonly summarizer: Summarizer;
 
-	private constructor(private readonly options: HubOptions) {
+	private constructor(
+		private readonly options: HubOptions,
+		budget: SummaryBudget | null,
+	) {
 		this.summarizer = new Summarizer({
 			...options.summaries,
 			input: (sessionId) => this.summaryInput(sessionId),
@@ -156,8 +161,8 @@ export class Hub {
 				const session = this.sessions.get(sessionId);
 				if (session) this.apply(session, { kind: 'summarized', summary, at: summary.at });
 			},
-			budget: undefined,
-			budgetChanged: () => {},
+			budget,
+			budgetChanged: () => this.save(),
 			log: options.log,
 		});
 	}
@@ -165,11 +170,11 @@ export class Hub {
 	static async start(options: HubOptions): Promise<Hub> {
 		const state = await loadState(join(options.stateDir, 'state.json'), options.log);
 		const running = new Set((await options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
-		const hub = new Hub(options);
+		const hub = new Hub(options, state.summaries);
 		const states = await Promise.all(state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : 'offline')));
 		const now = Date.now();
-		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt }, index) => {
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), state: states[index] ?? 'offline' };
+		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, tasks, lastTurnEndedAt, lastViewedAt }, index) => {
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, tasks, lastTurnEndedAt, lastViewedAt, state: states[index] ?? 'offline' };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -565,14 +570,19 @@ export class Hub {
 		this.saving = this.saving
 			.then(() =>
 				saveState(path, {
-					version: 1,
+					version: 2,
 					sessions: [...this.sessions.values()].map(({ id, projectDir, title, model, createdAt }) => ({
 						id,
 						projectDir,
 						title,
 						claudeSessionId: model.claudeSessionId,
 						createdAt,
+						summary: model.summary,
+						tasks: model.tasks,
+						lastTurnEndedAt: model.lastTurnEndedAt,
+						lastViewedAt: model.lastViewedAt,
 					})),
+					summaries: this.summarizer.budget,
 				}),
 			)
 			.catch((error: Error) => this.options.log(`orfoni-hub: saving ${path} failed: ${error.message}`));

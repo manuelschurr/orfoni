@@ -31,7 +31,7 @@ function client(apiKey: string): SummaryClient {
 		new Promise((resolve, reject) => calls.push({ apiKey, model, prompt, answer: (r) => (r instanceof Error ? reject(r) : resolve(r)) }));
 }
 
-function makeSummarizer(budget?: { day: string; requests: number; spentUsd: number }) {
+function makeSummarizer(budget: { day: string; requests: number; spentUsd: number } | null = null) {
 	summarizer = new Summarizer({
 		model: 'claude-haiku-5-5',
 		apiKey: async () => apiKey,

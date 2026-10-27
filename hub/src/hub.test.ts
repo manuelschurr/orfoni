@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -858,6 +858,112 @@ describe('restart', () => {
 		await untilRealTime(() => fake.of('submit').length === 1);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'still there?' }));
 		expect(await sent).toMatchObject({ ok: true });
+	});
+});
+
+describe('read state and the state file', () => {
+	const finished = () => [entry('user', 'hi'), entry('assistant', [{ type: 'text', text: 'done' }], 'end_turn')];
+
+	async function restart(running: string[]): Promise<TestClient> {
+		hub.close();
+		vi.setSystemTime(Date.now() + 60_000);
+		return startHub(fakeTmux(running));
+	}
+
+	async function saved(check: (state: { version: number; sessions: Record<string, unknown>[] }) => boolean): Promise<void> {
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && check(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))));
+	}
+
+	test('after a restart a session whose answer nobody opened is answered again, and one that was opened is idle', async () => {
+		const client = await startHub();
+		const watcher = new TestClient(hub);
+		const unread = await ready(client);
+		const read = await ready(client);
+		const watched = await ready(client);
+		await watcher.ok('openSession', { sessionId: watched.id });
+		for (const { id, claude } of [unread, read, watched]) {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+			vi.setSystemTime(Date.now() + 1000);
+			await hub.hook(id, body('Stop', claude));
+		}
+		vi.setSystemTime(Date.now() + 1000);
+		await client.ok('openSession', { sessionId: read.id });
+		client.close();
+		for (const { claude } of [unread, read, watched]) transcripts.set(claude, finished());
+		await saved((state) => state.sessions.every((session) => session.lastTurnEndedAt !== null));
+
+		const after = await restart([unread, read, watched].map(({ id }) => `orfoni-${id}`));
+		const states = Object.fromEntries(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => [session.id, session.state]));
+		expect(states).toEqual({ [unread.id]: 'answered', [read.id]: 'idle', [watched.id]: 'idle' });
+	});
+
+	test('an answered session opened after the restart turns idle and stays read through the next restart', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		await hub.hook(id, body('Stop', claude));
+		transcripts.set(claude, finished());
+		await saved((state) => state.sessions[0]?.lastTurnEndedAt !== null);
+		const after = await restart([`orfoni-${id}`]);
+		await after.ok('openSession', { sessionId: id });
+		expect(after.state(id)).toBe('idle');
+		after.close();
+		await saved((state) => state.sessions[0]?.lastViewedAt !== null);
+		const again = await restart([`orfoni-${id}`]);
+		expect(await again.ok('listSessions', {})).toEqual([expect.objectContaining({ id, state: 'idle' })]);
+	});
+
+	test('summaries and task progress survive a restart', async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '2' }));
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => client.session(id)?.summary !== null);
+		const { summary } = client.session(id)!;
+		await saved((state) => state.sessions[0]?.summary !== null);
+		const after = await restart([`orfoni-${id}`]);
+		expect(await after.ok('listSessions', {})).toEqual([expect.objectContaining({ id, summary, tasks: { done: 1, total: 2 } })]);
+	});
+
+	test("the day's summary spend survives a restart", async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => client.session(id)?.summary !== null);
+		const { summaries } = (await client.ok('hubStatus', {})) as { summaries: { spentTodayUsd: number } };
+		expect(summaries.spentTodayUsd).toBeGreaterThan(0);
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).summaries?.requests === 1);
+		const after = await restart([`orfoni-${id}`]);
+		expect(await after.ok('hubStatus', {})).toMatchObject({ summaries });
+	});
+
+	test('a version 1 state file from milestone 1 brings back every session, read', async () => {
+		const running = '9a6c5b1e-0000-4000-8000-00000000000a';
+		const stopped = '9a6c5b1e-0000-4000-8000-00000000000b';
+		writeFileSync(
+			join(dir, 'state.json'),
+			JSON.stringify({
+				version: 1,
+				sessions: [
+					{ id: 'm1-running', projectDir: PROJECT, title: 'kept running', claudeSessionId: running, createdAt: T0 - 86_400_000 },
+					{ id: 'm1-stopped', projectDir: PROJECT, title: null, claudeSessionId: stopped, createdAt: T0 - 3_600_000 },
+				],
+			}),
+		);
+		transcripts.set(running, finished());
+		const client = await startHub(fakeTmux(['orfoni-m1-running']));
+		expect(await client.ok('listSessions', {})).toEqual([
+			expect.objectContaining({ id: 'm1-running', title: 'kept running', claudeSessionId: running, state: 'idle', summary: null, tasks: null }),
+			expect.objectContaining({ id: 'm1-stopped', claudeSessionId: stopped, state: 'offline' }),
+		]);
+		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
+		await hub.hook('m1-running', body('UserPromptSubmit', running, { prompt: 'hi' }));
+		await hub.hook('m1-running', body('Stop', running));
+		await saved((state) => state.version === 2 && state.sessions.length === 2);
 	});
 });
 

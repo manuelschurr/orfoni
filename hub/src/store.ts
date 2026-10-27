@@ -1,22 +1,39 @@
 import { readFile, rename } from 'node:fs/promises';
-import { ClaudeSessionId, SessionId } from '@orfoni/protocol';
+import { ClaudeSessionId, SessionId, SessionSummary } from '@orfoni/protocol';
 import { z } from 'zod';
 import { writePrivate } from './files.js';
+import { SummaryBudget } from './summaries.js';
 
-const StoredSession = z.object({
+const StoredSessionV1 = z.object({
 	id: SessionId,
 	projectDir: z.string(),
 	title: z.string().nullable(),
 	claudeSessionId: ClaudeSessionId,
 	createdAt: z.number(),
 });
+
+const StoredSession = StoredSessionV1.extend({
+	summary: SessionSummary.shape.summary.unwrap(),
+	tasks: z.record(z.string(), z.boolean()),
+	lastTurnEndedAt: z.number().nullable(),
+	lastViewedAt: z.number().nullable(),
+});
 export type StoredSession = z.infer<typeof StoredSession>;
 
-const HubState = z.object({ version: z.literal(1), sessions: z.array(StoredSession) });
+const HubState = z.object({ version: z.literal(2), sessions: z.array(StoredSession), summaries: SummaryBudget.nullable() });
 export type HubState = z.infer<typeof HubState>;
 
+// Version 1 kept no read state, so its sessions come back as read.
+const HubStateV1 = z.object({ version: z.literal(1), sessions: z.array(StoredSessionV1) }).transform(
+	({ sessions }): HubState => ({
+		version: 2,
+		sessions: sessions.map((session) => ({ ...session, summary: null, tasks: {}, lastTurnEndedAt: null, lastViewedAt: null })),
+		summaries: null,
+	}),
+);
+
 function emptyState(): HubState {
-	return { version: 1, sessions: [] };
+	return { version: 2, sessions: [], summaries: null };
 }
 
 export async function loadState(path: string, log: (line: string) => void): Promise<HubState> {
@@ -33,11 +50,16 @@ export async function loadState(path: string, log: (line: string) => void): Prom
 	} catch {
 		raw = undefined;
 	}
-	const result = HubState.safeParse(raw);
-	if (result.success) return result.data;
+	const current = HubState.safeParse(raw);
+	if (current.success) return current.data;
+	const old = HubStateV1.safeParse(raw);
+	if (old.success) {
+		log(`orfoni-hub: migrated ${path} from version 1 to version 2`);
+		return old.data;
+	}
 	const broken = `${path}.broken-${Date.now()}`;
 	await rename(path, broken);
-	log(`orfoni-hub: ${path} is not a version 1 state file, moved it to ${broken} and started with no sessions`);
+	log(`orfoni-hub: ${path} is not a valid state file, moved it to ${broken} and started with no sessions`);
 	return emptyState();
 }
 

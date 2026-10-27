@@ -43,7 +43,7 @@ export interface SummarizerOptions {
 	client(apiKey: string): SummaryClient;
 	input(sessionId: SessionId): Promise<SummaryInput | null>;
 	summarized(sessionId: SessionId, summary: Summary): void;
-	budget: SummaryBudget | undefined;
+	budget: SummaryBudget | null;
 	budgetChanged(): void;
 	log(line: string): void;
 }
