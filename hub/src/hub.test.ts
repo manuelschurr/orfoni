@@ -908,6 +908,22 @@ describe('portSession', () => {
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
 	});
 
+	test('a session that exits on its own just before SIGTERM is still resumed', async () => {
+		runOther(4321);
+		const client = await startHub(fakeTmux(), {
+			kill: (pid, signal) => {
+				kills.push([pid, signal]);
+				endOther(pid);
+				throw Object.assign(new Error(`kill ESRCH`), { code: 'ESRCH' });
+			},
+		});
+		let response: Response | undefined;
+		void port(client, 4321).then((r) => (response = r));
+		await stepUntil(() => response !== undefined);
+		expect(response).toMatchObject({ ok: true, result: { session: { claudeSessionId: OTHER } } });
+		expect(fake.of('newSession')).toHaveLength(1);
+	});
+
 	test('a session that is still running 10 s after SIGTERM fails the port with internal, and orfoni starts nothing', async () => {
 		runOther(4321);
 		const client = await startHub(fakeTmux(), recordOnly);

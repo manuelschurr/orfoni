@@ -321,7 +321,12 @@ export class Hub {
 			const other = await this.other(pid);
 			if (other.session.claudeSessionId !== claudeSessionId) throw new HubError('not_found', `session ${pid} is on another conversation now`);
 			if (other.session.status === 'busy') throw new HubError('not_ready', `session ${pid} is busy`);
-			this.options.kill(pid, 'SIGTERM');
+			try {
+				this.options.kill(pid, 'SIGTERM');
+			} catch (error) {
+				// The session exited on its own after the check, so there is nothing left to end.
+				if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+			}
 			if (!(await this.exited(other))) throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing`);
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
 			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : []);
