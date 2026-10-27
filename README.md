@@ -2,7 +2,7 @@
 
 orfoni lets you run and follow Claude Code sessions on a remote machine from Windows or Android. Each session runs as an ordinary interactive `claude` in its own tmux session on the server. orfoni shows it as a chat and as a terminal at the same time, lets you answer Claude's approvals and questions from either one, and keeps every session running when no client is connected.
 
-Status: milestone 2 of 4. The server side, `orfoni-hub`, works with a command-line client, and the Windows app is in progress. The Android app comes later. The design is in [docs/design.md](docs/design.md).
+Status: milestone 3 of 4. The server side, `orfoni-hub`, and the Windows app work, and a command-line client covers the basics. The Android app comes later. The design is in [docs/design.md](docs/design.md).
 
 ## How it works
 
@@ -65,6 +65,8 @@ The key must be an OpenSSH private key file, the kind `ssh-keygen` writes. A PuT
 The first connection to a server shows the SHA-256 fingerprint of the server's host key and asks whether to trust it. The fingerprint identifies the server, so compare it with what the server itself reports, for example with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the server, before you trust it. The app stores the fingerprint in `known-hosts.json` in its data folder, `%APPDATA%\com.orfoni.app`, and refuses the connection if the server ever shows a different key, because that happens when the server was reinstalled and also when someone intercepts the connection. If you know why the key changed, remove the server's entry from that file and connect again.
 
 The settings button at the bottom of the session list opens the settings again. Saving them reconnects.
+
+Each session in the list shows its summary under the title, its task progress such as `3/7`, and its memory once that passes 1 GB or a process in it was killed for using too much. A bold title marks an answer you have not opened yet. The open session's header shows where it stands, a task bar, and its memory against the session's limit. The bar at the bottom of the list shows the server's free memory and whether summaries are on, with today's spend. The window title reads `orfoni (n)`, where n counts the sessions that wait on you or have an answer you have not opened.
 
 ## Develop
 
