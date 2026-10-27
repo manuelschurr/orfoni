@@ -13,6 +13,7 @@
 	import { bytes, folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
+	import OtherSessionView from './lib/ui/OtherSessionView.svelte';
 	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
 	import SessionHeader from './lib/ui/SessionHeader.svelte';
 	import SettingsView from './lib/ui/SettingsView.svelte';
@@ -131,6 +132,10 @@
 						{/snippet}
 					</ChatView>
 					<Composer bind:this={composer} {client} sessionId={session.id} />
+				{/key}
+			{:else if client.other}
+				{#key client.other.session.pid}
+					<OtherSessionView {client} onported={started} />
 				{/key}
 			{:else}
 				<div class="welcome">

@@ -40,6 +40,11 @@ export function otherPlace(other: OtherSession): string {
 	return other.tmux === null ? 'no tmux' : `tmux ${other.tmux}`;
 }
 
+export function otherEnding(other: OtherSession): string {
+	if (other.background) return 'orfoni ends this background session';
+	return other.tmux === null ? 'orfoni ends Claude Code in the terminal where it runs now' : `orfoni ends Claude Code in tmux session ${other.tmux}`;
+}
+
 export function folderName(dir: string): string {
 	return dir.replace(/\/+$/, '').split('/').pop() || dir;
 }
