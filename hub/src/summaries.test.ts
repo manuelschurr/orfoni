@@ -241,6 +241,40 @@ describe('Summarizer', () => {
 	});
 });
 
+describe('Summarizer with the Anthropic SDK', () => {
+	test.each([
+		[401, 'authentication_error', 'invalid x-api-key'],
+		[400, 'invalid_request_error', 'Your credit balance is too low to access the Anthropic API.'],
+	])('a %i %s from the API keeps the previous summary and logs one clear line without the key', async (status, type, message) => {
+		vi.useRealTimers();
+		let requests = 0;
+		const fetch = async () => {
+			requests += 1;
+			return new Response(JSON.stringify({ type: 'error', error: { type, message }, request_id: `req_${requests}` }), { status, headers: { 'content-type': 'application/json' } });
+		};
+		summarizer = new Summarizer({
+			model: 'claude-haiku-5-5',
+			apiKey: async () => ({ key: KEY }),
+			client: (key) => claudeClient(key, { fetch, maxRetries: 0 }),
+			input: async () => input(),
+			summarized: (sessionId, summary) => summaries.push({ sessionId, ...summary }),
+			budget: null,
+			budgetChanged: () => {},
+			log: (line) => logs.push(line),
+		});
+		summarizer.request(a);
+		summarizer.request(b);
+		const deadline = performance.now() + 2000;
+		while (requests < 2 && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(requests).toBe(2);
+		expect(summaries).toEqual([]);
+		expect(logs).toEqual([expect.stringContaining(message)]);
+		expect(logs[0]).toContain(`${status} ${type}`);
+		expect(logs[0]).not.toContain(KEY);
+	});
+});
+
 describe('readApiKey', () => {
 	let dir: string;
 	beforeEach(() => {
