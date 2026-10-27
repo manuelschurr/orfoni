@@ -283,6 +283,7 @@ export class Hub {
 			case 'listOtherSessions':
 				return (await this.refreshOthers()).map(({ session }) => session);
 			case 'openOtherSession':
+				this.view(client, null);
 				return this.openOther(request.pid);
 			case 'portSession':
 				return this.port(request);

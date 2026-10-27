@@ -858,6 +858,17 @@ describe('other sessions', () => {
 		expect(opened.chat.at(-1)).toMatchObject({ kind: 'assistant', text: '1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\ncounted' });
 	});
 
+	test('a turn that ends after the client moved on to an other session counts as answered', async () => {
+		runOther(4321);
+		const client = await startHub();
+		const first = await ready(client);
+		await client.ok('openSession', { sessionId: first.id });
+		await client.ok('openOtherSession', { pid: 4321 });
+		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'two' }));
+		await hub.hook(first.id, body('Stop', first.claude));
+		expect(client.state(first.id)).toBe('answered');
+	});
+
 	test('openOtherSession of a process that is not an other session fails with not_found', async () => {
 		const client = await startHub();
 		expect(await client.request('openOtherSession', { pid: 4321 })).toMatchObject({ ok: false, error: { code: 'not_found' } });
