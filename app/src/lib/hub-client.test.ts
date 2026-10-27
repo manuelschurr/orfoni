@@ -229,18 +229,21 @@ describe('HubClient with sessions outside orfoni', () => {
 		expect(client.selected).toBe(b1.id);
 	});
 
-	test('the shown session reloads its chat when its status changes, and not when another session changes', async () => {
+	// A reload reads the whole transcript on the hub, so it waits for a turn to end instead of following every status change.
+	test('the shown session reloads its chat when a turn in it ends, not when one starts or another session changes', async () => {
 		await connectWithOthers();
 		await openOther(swarm);
 		transport.push({ type: 'otherSessions', sessions: [swarm, { ...beta, status: 'busy', statusSince: 900 }] });
-		expect(transport.requests('openOtherSession')).toHaveLength(1);
-
 		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
 		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
 		expect(client.other).toEqual({ session: busy, chat: fromTmux, error: null });
+		expect(transport.requests('openOtherSession')).toHaveLength(1);
+
+		const ended: OtherSession = { ...swarm, statusSince: 1400 };
+		transport.push({ type: 'otherSessions', sessions: [ended, beta] });
 		expect(transport.requests('openOtherSession')).toHaveLength(2);
 		const next = [...fromTmux, user('u8', 'now the changelog')];
-		transport.respond('openOtherSession', { session: busy, chat: next });
+		transport.respond('openOtherSession', { session: ended, chat: next });
 		await settle();
 		expect(client.other?.chat).toEqual(next);
 	});
@@ -248,13 +251,13 @@ describe('HubClient with sessions outside orfoni', () => {
 	test('after /clear in the shown session its chat empties until the new conversation loads, and late answers for the old one are dropped', async () => {
 		await connectWithOthers();
 		await openOther(swarm);
-		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
-		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
+		const ended: OtherSession = { ...swarm, statusSince: 1200 };
+		transport.push({ type: 'otherSessions', sessions: [ended, beta] });
 		const cleared: OtherSession = { ...swarm, claudeSessionId: CLAUDE_2, statusSince: 1300 };
 		transport.push({ type: 'otherSessions', sessions: [cleared, beta] });
 		expect(client.other).toEqual({ session: cleared, chat: undefined, error: null });
 
-		transport.respond('openOtherSession', { session: busy, chat: [...fromTmux, user('u8', 'old conversation')] });
+		transport.respond('openOtherSession', { session: ended, chat: [...fromTmux, user('u8', 'old conversation')] });
 		await settle();
 		expect(client.other?.chat).toBeUndefined();
 		transport.respond('openOtherSession', { session: cleared, chat: [user('u9', 'a fresh start')] });
@@ -265,14 +268,14 @@ describe('HubClient with sessions outside orfoni', () => {
 	test('a slow answer to an earlier reload does not replace the answer to a newer one', async () => {
 		await connectWithOthers();
 		await openOther(swarm);
-		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
-		const idle: OtherSession = { ...swarm, statusSince: 1400 };
-		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
-		transport.push({ type: 'otherSessions', sessions: [idle, beta] });
+		const earlier: OtherSession = { ...swarm, statusSince: 1200 };
+		const later: OtherSession = { ...swarm, statusSince: 1400 };
+		transport.push({ type: 'otherSessions', sessions: [earlier, beta] });
+		transport.push({ type: 'otherSessions', sessions: [later, beta] });
 		const [, second, third] = transport.requests('openOtherSession');
 		const newest = [...fromTmux, user('u8', 'now the changelog'), assistant('m8', 'The changelog is done.', true)];
-		transport.push({ type: 'response', id: third?.id ?? 0, ok: true, result: { session: idle, chat: newest } });
-		transport.push({ type: 'response', id: second?.id ?? 0, ok: true, result: { session: busy, chat: [...fromTmux, user('u8', 'now the changelog')] } });
+		transport.push({ type: 'response', id: third?.id ?? 0, ok: true, result: { session: later, chat: newest } });
+		transport.push({ type: 'response', id: second?.id ?? 0, ok: true, result: { session: earlier, chat: [...fromTmux, user('u8', 'now the changelog')] } });
 		await settle();
 		expect(client.other?.chat).toEqual(newest);
 	});

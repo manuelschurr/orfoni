@@ -257,7 +257,7 @@ export class HubClient {
 		}
 	}
 
-	// The shown chat is read again when a turn starts or ends, after a /clear, and after a failed load.
+	// The shown chat is read again when a turn ends, after a /clear, and after a failed load. Each read parses the whole transcript on the hub, so a turn that starts or waits does not cause one.
 	private updateOthers(others: OtherSession[]): void {
 		this.others = others;
 		const view = this.other;
@@ -265,7 +265,8 @@ export class HubClient {
 		if (!view || !listed) return;
 		const sameConversation = listed.claudeSessionId === view.session.claudeSessionId;
 		this.other = { ...view, session: listed, chat: sameConversation ? view.chat : undefined };
-		if (!sameConversation || listed.statusSince !== view.session.statusSince || view.error !== null) this.loadOther().catch(() => {});
+		const turnEnded = listed.status === 'idle' && listed.statusSince !== view.session.statusSince;
+		if (!sameConversation || turnEnded || view.error !== null) this.loadOther().catch(() => {});
 	}
 
 	// Only the newest load may land, and only on the conversation still shown, since the hub answers requests in any order.
