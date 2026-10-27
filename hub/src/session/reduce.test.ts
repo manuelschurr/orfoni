@@ -1,6 +1,7 @@
 import { ClaudeSessionId, RequestId, type ChatItem } from '@orfoni/protocol';
 import { describe, expect, test } from 'vitest';
 import type { HookEvent } from '../hooks/events.js';
+import type { StatusLine } from '../status-line.js';
 import { emptySession, reduce, taskProgress, type SessionInput, type SessionModel } from './reduce.js';
 
 const first = ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76');
@@ -26,9 +27,9 @@ function approval(requestId: RequestId): ChatItem {
 }
 
 describe('reduce', () => {
-	test('emptySession starts idle with no conversation, no summary, and no task progress', () => {
+	test('emptySession starts idle with no conversation, no summary, no task progress, and no reported model', () => {
 		const model = emptySession(7, first);
-		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null });
+		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, statusLine: null });
 		expect(taskProgress(model)).toBeNull();
 	});
 
@@ -400,6 +401,25 @@ describe('reduce', () => {
 		expect(run(started, memoryRead(1000, 4)).chat).toEqual([]);
 		expect(run(started, memoryRead(1000, 4), memoryRead(null), memoryRead(1000, 5)).chat).toEqual([]);
 		expect(run(started, memoryRead(1000, 4), memoryRead(1000, 0)).chat).toEqual([]);
+	});
+
+	const haikuLow: StatusLine = { model: { id: 'claude-haiku-5-5', name: 'Haiku 5.5' }, effort: 'low' };
+	const report = (statusLine: StatusLine, at = 10): SessionInput => ({ kind: 'status_line', statusLine, at });
+
+	test('a status line report sets the model and effort, and one that repeats them leaves the model as it was', () => {
+		const model = run(started, report(haikuLow));
+		expect(model.statusLine).toEqual(haikuLow);
+		expect(reduce(model, report({ model: { id: 'claude-haiku-5-5', name: 'Haiku 5.5' }, effort: 'low' }, 11))).toBe(model);
+		expect(reduce(model, report({ ...haikuLow, effort: 'high' })).statusLine).toEqual({ ...haikuLow, effort: 'high' });
+		expect(reduce(model, report({ ...haikuLow, effort: null })).statusLine).toEqual({ ...haikuLow, effort: null });
+		expect(reduce(model, report({ ...haikuLow, model: { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' } })).statusLine?.model).toEqual({ id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' });
+		expect(reduce(model, report({ ...haikuLow, model: { id: 'claude-haiku-5-5', name: 'Haiku 5.5 (1M context)' } })).statusLine?.model.name).toBe('Haiku 5.5 (1M context)');
+	});
+
+	test('going offline drops the reported model and effort, since no Claude Code runs to report them, while /clear keeps them', () => {
+		expect(run(started, report(haikuLow), { kind: 'pane_exited', at: 11 }).statusLine).toBeNull();
+		expect(run(started, report(haikuLow), hook('session_end', { reason: 'prompt_input_exit' }, 11)).statusLine).toBeNull();
+		expect(run(started, report(haikuLow), hook('session_end', { reason: 'clear' }, 11), hook('session_start', { source: 'clear' }, 12, second)).statusLine).toEqual(haikuLow);
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {

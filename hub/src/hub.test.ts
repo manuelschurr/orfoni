@@ -107,6 +107,11 @@ const writeInput = { file_path: '/var/tmp/claude-0/orfoni-spike-tui/a.txt', cont
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+// A field set to undefined drops out, as effort does for a model that does not support it.
+function statusLine(fields: Record<string, unknown> = {}): string {
+	return JSON.stringify({ ...JSON.parse(readFileSync(new URL('../test/fixtures/status-line.json', import.meta.url), 'utf8')), ...fields });
+}
+
 function body(name: string, claudeSessionId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
 	return { ...fixture(name), session_id: claudeSessionId, ...fields };
 }
@@ -278,7 +283,7 @@ describe('startSession', () => {
 				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
 			],
 		]);
-		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET));
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(started).toEqual({
 			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null },
 			needsTrust: true,
@@ -781,6 +786,89 @@ describe('memory', () => {
 	});
 });
 
+describe('model and effort', () => {
+	const haiku = { id: 'claude-haiku-5-5', name: 'Haiku 5.5' };
+	const sonnet = { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' };
+
+	test("a session starts with a status line that wraps the one Claude Code would show in the session's folder", async () => {
+		mkdirSync(join(dir, 'home/.claude'), { recursive: true });
+		writeFileSync(join(dir, 'home/.claude/settings.json'), JSON.stringify({ statusLine: { type: 'command', command: '~/.claude/statusline.sh' } }));
+		const project = join(dir, 'project');
+		mkdirSync(join(project, '.claude'), { recursive: true });
+		writeFileSync(join(project, '.claude/settings.json'), JSON.stringify({ statusLine: { type: 'command', command: './status.sh' } }));
+		const client = await startHub();
+		const runs = async (projectDir: string) => (JSON.parse(readFileSync((await start(client, { projectDir })).settings, 'utf8')) as { statusLine?: { command: string } }).statusLine?.command;
+		expect(await runs(PROJECT)).toMatch(/\| eval '~\/\.claude\/statusline\.sh'$/);
+		expect(await runs(project)).toMatch(/\| eval '\.\/status\.sh'$/);
+	});
+
+	test('every client sees the model and effort the status line reports, and each change of them', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id } = await ready(client);
+		expect(other.session(id)).toMatchObject({ model: null, effort: null });
+		hub.status(id, statusLine());
+		expect(other.session(id)).toMatchObject({ model: haiku, effort: 'low' });
+		hub.status(id, statusLine({ effort: { level: 'high' } }));
+		expect(other.session(id)).toMatchObject({ model: haiku, effort: 'high' });
+		hub.status(id, statusLine({ model: { id: sonnet.id, display_name: sonnet.name }, effort: { level: 'high' } }));
+		expect(other.session(id)).toMatchObject({ model: sonnet, effort: 'high' });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, model: sonnet, effort: 'high' })]);
+	});
+
+	test('a status line that repeats the model and effort tells no client, whatever else in it changed', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		hub.status(id, statusLine());
+		const before = client.messages.length;
+		hub.status(id, statusLine());
+		hub.status(id, statusLine({ cost: { total_cost_usd: 0.42 }, exceeds_200k_tokens: true }));
+		expect(client.messages.length).toBe(before);
+	});
+
+	test('a model without effort support shows no effort', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		hub.status(id, statusLine({ model: { id: 'claude-haiku-4-5-20251001', display_name: 'Haiku 4.5' }, effort: undefined }));
+		expect(client.session(id)).toMatchObject({ model: { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5' }, effort: null });
+	});
+
+	test('a status line for an unknown session, or one orfoni cannot read, changes nothing and is logged once however often it comes', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		const before = client.messages.length;
+		for (let refresh = 0; refresh < 3; refresh++) {
+			hub.status(undefined, statusLine());
+			hub.status('not-a-session', statusLine());
+			hub.status(id, 'not json');
+			hub.status(id, statusLine({ model: 'opus' }));
+		}
+		expect(client.messages.length).toBe(before);
+		expect(logs).toHaveLength(4);
+	});
+
+	test('the model and effort are shown, not stored: after a hub restart they are unknown until the status line reports again', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		hub.status(id, statusLine());
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
+		hub.close();
+
+		const after = await startHub(fakeTmux([`orfoni-${id}`]));
+		expect(await after.ok('listSessions', {})).toEqual([expect.objectContaining({ id, model: null, effort: null })]);
+		hub.status(id, statusLine());
+		expect(after.session(id)).toMatchObject({ model: haiku, effort: 'low' });
+	});
+
+	test('a session that ends shows no model or effort, since no Claude Code runs to report them', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		hub.status(id, statusLine());
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		expect(client.session(id)).toMatchObject({ state: 'offline', model: null, effort: null });
+	});
+});
+
 describe('openSession', () => {
 	test('returns the transcript up to the first live item, then the live items', async () => {
 		transcript = recordedConversation();
@@ -911,7 +999,7 @@ describe('portSession', () => {
 		expect(fake.of('newSession')).toEqual([
 			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--permission-mode', 'auto']],
 		]);
-		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET));
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({
 			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null },
 			needsTrust: true,
