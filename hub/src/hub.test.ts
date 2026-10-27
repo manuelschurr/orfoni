@@ -944,10 +944,24 @@ describe('portSession', () => {
 		await step(9900);
 		expect(response).toBeUndefined();
 		await stepUntil(() => response !== undefined, 1000);
-		expect(response).toMatchObject({ ok: false, error: { code: 'internal' } });
+		expect(response).toMatchObject({ ok: false, error: { code: 'internal', message: expect.stringContaining(`claude --resume=${OTHER}`) } });
 		expect(fake.of('newSession')).toEqual([]);
 		expect(await client.ok('listSessions', {})).toEqual([]);
 	});
+
+	test('a launch that fails after the old process exited keeps the conversation as an offline orfoni session, and says how to start it', async () => {
+		runOther(4321);
+		const tmux = fakeTmux();
+		const client = await startHub(tmux);
+		tmux.tmux.newSession = async () => {
+			throw new Error('tmux: no server');
+		};
+		const response = await port(client, 4321);
+		expect(kills).toEqual([[4321, 'SIGTERM']]);
+		expect(response).toMatchObject({ ok: false, error: { code: 'internal', message: expect.stringContaining('send it a message') } });
+		expect(await client.ok('listSessions', {})).toEqual([expect.objectContaining({ claudeSessionId: OTHER, projectDir: OTHER_PROJECT, title: 'swarm-73', state: 'offline' })]);
+	});
+
 
 	test('a busy session is refused with not_ready and nothing is signalled', async () => {
 		runOther(4321, { status: 'busy' });

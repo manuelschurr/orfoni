@@ -328,9 +328,11 @@ export class Hub {
 				// The session exited on its own after the check, so there is nothing left to end.
 				if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
 			}
-			if (!(await this.exited(other))) throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing`);
+			if (!(await this.exited(other))) {
+				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
+			}
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : []);
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : [], 'keep');
 			await this.refreshOthers();
 			return ported;
 		} finally {
@@ -353,6 +355,7 @@ export class Hub {
 		claudeSessionId: ClaudeSessionId,
 		identity: string[],
 		options: string[],
+		onFailure: 'drop' | 'keep' = 'drop',
 	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const now = Date.now();
 		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' } };
@@ -361,8 +364,14 @@ export class Hub {
 		try {
 			await this.launch(session, identity, options);
 		} catch (error) {
-			this.sessions.delete(session.id);
-			throw error;
+			if (onFailure === 'drop') {
+				this.sessions.delete(session.id);
+				throw error;
+			}
+			// The old process has ended, so the conversation stays reachable as an offline session that a message resumes.
+			this.paneExited(session);
+			this.save();
+			throw new HubError('internal', `Claude Code did not start in orfoni (${(error as Error).message}). The conversation is kept as an offline orfoni session; send it a message to start it again.`);
 		}
 		this.save();
 		this.broadcast({ type: 'sessionUpdated', session: summary(session) });
