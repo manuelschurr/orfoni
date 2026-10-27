@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { sleep } from './terminal';
 
 const TARGET = 'outside';
@@ -48,6 +50,7 @@ export class OutsideSession {
 
 	stop(): void {
 		spawnSync('tmux', ['-L', this.socket, 'kill-server'], { stdio: 'ignore', env: ownEnv() });
+		rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, this.socket), { force: true });
 	}
 
 	private tmux(...args: string[]): string {

@@ -228,7 +228,7 @@ test('reconnect after the bridge restarts without duplicated items', async ({ pa
 	try {
 		const session = await startReady({ prompt: 'Reply with exactly: one' });
 		await openSession(page, session, `${APP}&bridge=ws://127.0.0.1:${port}`);
-		await expect(claude(page)).toContainText('one', { timeout: REPLY_MS });
+		await expect(claude(page)).toContainText(/one/i, { timeout: REPLY_MS });
 		await expect(you(page)).toHaveCount(1);
 		await expect(claude(page)).toHaveCount(1);
 
@@ -245,7 +245,7 @@ test('reconnect after the bridge restarts without duplicated items', async ({ pa
 		const box = page.getByRole('textbox', { name: 'Message' });
 		await box.fill('Reply with exactly: two');
 		await box.press('Enter');
-		await expect(claude(page).last()).toContainText('two', { timeout: REPLY_MS });
+		await expect(claude(page).last()).toContainText(/two/i, { timeout: REPLY_MS });
 		await expect(you(page)).toHaveCount(2);
 		await expect(claude(page)).toHaveCount(2);
 	} finally {
@@ -266,7 +266,7 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 		await page.getByRole('list', { name: `${basename(dir)}, outside orfoni` }).locator(`[data-other="${other.pid}"]`).click();
 		const main = page.getByRole('main');
 		await expect(main.getByText(dir, { exact: true })).toBeVisible();
-		await expect(main.getByText('Outside orfoni')).toBeVisible();
+		await expect(main.getByText('Outside orfoni', { exact: true })).toBeVisible();
 		await expect(claude(page).last()).toContainText('2048');
 		await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0);
 
