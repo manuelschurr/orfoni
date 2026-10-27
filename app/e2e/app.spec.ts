@@ -67,6 +67,7 @@ test('the session list loads', async ({ page }) => {
 
 test('start a session and see the reply as a bubble', async ({ page }) => {
 	await page.goto(APP);
+	await expect(page.getByRole('status').getByText('Connected', { exact: true })).toBeVisible();
 	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
 	const dialog = page.getByRole('dialog', { name: 'New session' });
 	await dialog.getByLabel('Folder', { exact: true }).fill(newProjectDir());
