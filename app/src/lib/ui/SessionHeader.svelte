@@ -61,7 +61,12 @@
 		{#if session.state === 'working'}
 			<button class="btn" disabled={busy} onclick={() => act(() => client.interrupt(session.id))}>Interrupt</button>
 		{/if}
-		<button class="btn" disabled={busy || session.state === 'offline'} onclick={() => act(() => client.stop(session.id))}>Stop</button>
+		<button
+			class="btn"
+			title="Ends Claude in this session, which also ends it on claude.ai. Send a message to start it again."
+			disabled={busy || session.state === 'offline'}
+			onclick={() => act(() => client.stop(session.id))}>Stop</button
+		>
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
 	{#if session.tasks || memory}

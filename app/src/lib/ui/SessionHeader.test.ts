@@ -52,3 +52,8 @@ test('memory with no limit shows the amount without a meter, and an out-of-memor
 	expect(screen.getByText('300 MB')).toBeTruthy();
 	expect(screen.getByText('killed for using too much memory once')).toBeTruthy();
 });
+
+test('Stop says that it ends Claude in this session, on claude.ai too, and how to start it again', async () => {
+	await header({});
+	expect(screen.getByRole('button', { name: 'Stop' }).title).toBe('Ends Claude in this session, which also ends it on claude.ai. Send a message to start it again.');
+});
