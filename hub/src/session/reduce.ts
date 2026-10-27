@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind } from '@orfoni/protocol';
 import type { HookEvent } from '../hooks/events.js';
+import type { Summary } from '../summaries.js';
 
 export interface SessionModel {
 	state: SessionStateKind;
@@ -10,6 +11,7 @@ export interface SessionModel {
 	openRequests: RequestId[];
 	viewing: boolean;
 	chatStartedAt: number | null;
+	summary: Summary | null;
 }
 
 export type SessionInput =
@@ -19,7 +21,8 @@ export type SessionInput =
 	| { kind: 'request_cancelled'; requestId: RequestId; at: number }
 	| { kind: 'view_changed'; viewing: boolean; at: number }
 	| { kind: 'interrupted'; at: number }
-	| { kind: 'pane_exited'; at: number };
+	| { kind: 'pane_exited'; at: number }
+	| { kind: 'summarized'; summary: Summary; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -29,7 +32,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
@@ -75,7 +78,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			switch (event.type) {
 				case 'session_start': {
 					const fresh = event.source === 'clear' || event.claudeSessionId !== model.claudeSessionId;
-					const next = { ...model, claudeSessionId: event.claudeSessionId, chat: fresh ? [] : model.chat };
+					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt':
@@ -171,5 +174,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return model.state === 'offline' ? model : enter(model, 'idle', at);
 		case 'pane_exited':
 			return enter(model, 'offline', at);
+		case 'summarized':
+			return { ...model, summary: input.summary };
 	}
 }

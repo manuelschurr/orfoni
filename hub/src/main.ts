@@ -5,6 +5,7 @@ import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { listenClients } from './client-server.js';
 import { listenHooks } from './hook-server.js';
 import { Hub } from './hub.js';
+import { claudeClient, readApiKey, SUMMARY_MODEL } from './summaries.js';
 import { createTmux, runTmux } from './tmux.js';
 
 function runtimePath(name: string): string {
@@ -22,6 +23,11 @@ async function daemon(): Promise<void> {
 		home: homedir(),
 		shell: process.env.SHELL ?? '/bin/bash',
 		readHistory: (claudeSessionId, projectDir) => getSessionMessages(claudeSessionId, { dir: projectDir, includeSystemMessages: true }),
+		summaries: {
+			model: process.env.ORFONI_SUMMARY_MODEL || SUMMARY_MODEL,
+			apiKey: () => readApiKey(join(homedir(), '.config/orfoni/anthropic-api-key'), process.env.ANTHROPIC_API_KEY),
+			client: (apiKey) => claudeClient(apiKey),
+		},
 		log,
 	});
 	await listenHooks(hub, hookSocket, log);

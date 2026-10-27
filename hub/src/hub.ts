@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
@@ -24,6 +24,7 @@ import { PendingRequests, RequestError, type HookResponse } from './requests.js'
 import { emptySession, endsSession, reduce, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
 import { loadState, saveState, type StoredSession } from './store.js';
+import { Summarizer, type ApiKey, type SummaryClient, type SummaryInput } from './summaries.js';
 import { sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -39,6 +40,7 @@ export interface HubOptions {
 	home: string;
 	shell: string;
 	readHistory(claudeSessionId: ClaudeSessionId, projectDir: string): Promise<SessionMessage[]>;
+	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
 	log(line: string): void;
 }
 
@@ -87,7 +89,22 @@ function tmuxName(id: SessionId): string {
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: null, tasks: null, memory: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: null, memory: null };
+}
+
+const SHOWN = ['state', 'claudeSessionId', 'summary'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId'] as const satisfies (keyof SessionModel)[];
+
+function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
+	return fields.some((field) => before[field] !== after[field]);
+}
+
+function waitsOnYou(state: SessionStateKind): boolean {
+	return state === 'needs_approval' || state === 'needs_answer';
+}
+
+function wantsSummary(before: SessionModel, after: SessionModel, input: SessionInput): boolean {
+	return (input.kind === 'hook' && input.event.type === 'stop') || (waitsOnYou(after.state) && !waitsOnYou(before.state));
 }
 
 function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
@@ -125,8 +142,21 @@ export class Hub {
 	private readonly waiters = new Set<Waiter>();
 	private saving = Promise.resolve();
 	private readonly paneCheck = setInterval(() => void this.checkPanes(), PANE_CHECK_INTERVAL_MS);
+	private readonly summarizer: Summarizer;
 
-	private constructor(private readonly options: HubOptions) {}
+	private constructor(private readonly options: HubOptions) {
+		this.summarizer = new Summarizer({
+			...options.summaries,
+			input: (sessionId) => this.summaryInput(sessionId),
+			summarized: (sessionId, summary) => {
+				const session = this.sessions.get(sessionId);
+				if (session) this.apply(session, { kind: 'summarized', summary, at: summary.at });
+			},
+			budget: undefined,
+			budgetChanged: () => {},
+			log: options.log,
+		});
+	}
 
 	static async start(options: HubOptions): Promise<Hub> {
 		const state = await loadState(join(options.stateDir, 'state.json'), options.log);
@@ -144,6 +174,7 @@ export class Hub {
 
 	close(): void {
 		clearInterval(this.paneCheck);
+		this.summarizer.close();
 	}
 
 	connect(send: Send): Connection {
@@ -298,9 +329,27 @@ export class Hub {
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
 		this.view(client, session.id);
+		return { session: summary(session), chat: await this.conversation(session) };
+	}
+
+	private async conversation(session: Session): Promise<ChatItem[]> {
 		const { chat, chatStartedAt, claudeSessionId } = session.model;
 		const history = normalizeHistory(await this.options.readHistory(claudeSessionId, session.projectDir), chatStartedAt ?? Infinity);
-		return { session: summary(session), chat: joinHistory(history, chat) };
+		return joinHistory(history, chat);
+	}
+
+	private async summaryInput(sessionId: SessionId): Promise<SummaryInput | null> {
+		const session = this.sessions.get(sessionId);
+		if (!session) return null;
+		const chat = await this.conversation(session);
+		const lastPrompt = chat.findLastIndex((item) => item.kind === 'user');
+		const reply = chat.slice(lastPrompt + 1).findLast((item) => item.kind === 'assistant');
+		return {
+			title: session.title,
+			folder: basename(session.projectDir),
+			userMessages: chat.flatMap((item) => (item.kind === 'user' ? [item.text] : [])),
+			reply: reply?.kind === 'assistant' ? reply.text : null,
+		};
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {
@@ -344,9 +393,7 @@ export class Hub {
 	}
 
 	private assertTakesInput(session: Session): void {
-		if (session.model.state === 'needs_approval' || session.model.state === 'needs_answer') {
-			throw new HubError('not_ready', `session ${session.id} is waiting for an answer to a request`);
-		}
+		if (waitsOnYou(session.model.state)) throw new HubError('not_ready', `session ${session.id} is waiting for an answer to a request`);
 	}
 
 	private waitForHook(session: Session, matches: (event: HookEvent) => boolean, timeoutMs: number, clockStarts: Promise<unknown> = Promise.resolve()): Promise<boolean> {
@@ -476,10 +523,11 @@ export class Hub {
 		const before = session.model;
 		const after = reduce(before, input);
 		session.model = after;
-		if (after.state !== before.state || after.claudeSessionId !== before.claudeSessionId) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
+		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
 		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item });
-		if (after.claudeSessionId !== before.claudeSessionId) this.save();
+		if (changed(STORED, before, after)) this.save();
+		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);
 	}
 
 	private broadcast(message: HubMessage): void {

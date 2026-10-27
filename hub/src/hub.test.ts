@@ -7,6 +7,7 @@ import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, SessionId, S
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hub } from './hub.js';
 import { hookSettings } from './settings.js';
+import type { ApiKey, SummaryClient } from './summaries.js';
 import type { Tmux } from './tmux.js';
 
 const SOCKET = '/run/user/0/orfoni/hooks.sock';
@@ -78,7 +79,11 @@ class TestClient {
 	}
 
 	state(sessionId: SessionId): string | undefined {
-		return this.messages.flatMap((m) => (m.type === 'sessionUpdated' && m.session.id === sessionId ? [m.session.state] : [])).at(-1);
+		return this.session(sessionId)?.state;
+	}
+
+	session(sessionId: SessionId): SessionSummary | undefined {
+		return this.messages.flatMap((m) => (m.type === 'sessionUpdated' && m.session.id === sessionId ? [m.session] : [])).at(-1);
 	}
 
 	close(): void {
@@ -119,6 +124,13 @@ let logs: string[];
 let history: { claudeSessionId: ClaudeSessionId; projectDir: string }[];
 let transcript: SessionMessage[];
 let transcripts: Map<string, SessionMessage[]>;
+let apiKey: ApiKey;
+let summaryPrompts: string[];
+
+const summaryClient: SummaryClient = async ({ prompt }) => {
+	summaryPrompts.push(prompt);
+	return { kind: 'summary', about: `About #${summaryPrompts.length}`, status: `Status #${summaryPrompts.length}`, usage: { inputTokens: 900, outputTokens: 40 } };
+};
 
 async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 	fake = tmux;
@@ -133,6 +145,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 			history.push({ claudeSessionId, projectDir });
 			return transcripts.get(claudeSessionId) ?? transcript;
 		},
+		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
 		log: (line) => logs.push(line),
 	});
 	return new TestClient(hub);
@@ -157,6 +170,8 @@ beforeEach(() => {
 	history = [];
 	transcript = [];
 	transcripts = new Map();
+	apiKey = { missing: 'no key in tests' };
+	summaryPrompts = [];
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
 });
@@ -514,6 +529,73 @@ describe('viewing', () => {
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'two' }));
 		await hub.hook(id, body('Stop', claude));
 		expect(watcher.state(id)).toBe('answered');
+	});
+});
+
+describe('summaries', () => {
+	test('a turn that ends is summarized from the conversation, and every client sees the summary on the session', async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'write the notes' }));
+		await hub.hook(id, body('MessageDisplay', claude, { delta: 'The notes are in notes.md.' }));
+		vi.setSystemTime(T0 + 10_000);
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => other.session(id)?.summary !== null);
+		expect(summaryPrompts).toHaveLength(1);
+		for (const text of ['write the notes', 'The notes are in notes.md.', 'proj']) expect(summaryPrompts[0]).toContain(text);
+		const summary = { about: 'About #1', status: 'Status #1', at: T0 + 10_000 };
+		expect(other.session(id)).toMatchObject({ state: 'answered', summary });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, summary })]);
+	});
+
+	test('a session that starts waiting for an approval is summarized', async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'write a.txt' }));
+		void hub.hook(id, body('PermissionRequest', claude));
+		await untilRealTime(() => client.session(id)?.summary !== null);
+		expect(summaryPrompts[0]).toContain('write a.txt');
+	});
+
+	test('turns that end within 20 s of a summary get one more summary, 20 s after it', async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		for (const prompt of ['one', 'two', 'three']) {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt }));
+			await hub.hook(id, body('Stop', claude));
+			await vi.advanceTimersByTimeAsync(5000);
+		}
+		expect(summaryPrompts).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(5000);
+		await untilRealTime(() => summaryPrompts.length === 2);
+		expect(summaryPrompts[1]).toContain('three');
+	});
+
+	test('a new conversation after /clear drops the summary of the old one', async () => {
+		apiKey = { key: 'sk-test' };
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => client.session(id)?.summary !== null);
+		await hub.hook(id, body('SessionStart', '9b0c5d0e-0000-4000-8000-000000000001', { source: 'clear' }));
+		expect(client.session(id)?.summary).toBeNull();
+	});
+
+	test('without a key sessions keep working, summaries stay null, and the hub says so once', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		for (const prompt of ['one', 'two']) {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt }));
+			await hub.hook(id, body('Stop', claude));
+			await vi.advanceTimersByTimeAsync(20_000);
+		}
+		expect(client.session(id)).toMatchObject({ state: 'answered', summary: null });
+		expect(logs).toEqual([expect.stringContaining('no key in tests')]);
 	});
 });
 

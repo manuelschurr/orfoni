@@ -35,6 +35,7 @@ describe('reduce', () => {
 			openRequests: [],
 			viewing: false,
 			chatStartedAt: null,
+			summary: null,
 		});
 	});
 
