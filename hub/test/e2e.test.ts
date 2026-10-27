@@ -12,7 +12,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	for (const sessionId of started.splice(0)) await client.request('stopSession', { sessionId }).catch(() => {});
+	for (const sessionId of started.splice(0)) await client.request('removeSession', { sessionId }).catch(() => {});
 	client.close();
 });
 
