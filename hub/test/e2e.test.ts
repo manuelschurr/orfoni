@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, SessionId } from '@orfoni/protocol';
+import type { ChatItem, PermissionMode, SessionId } from '@orfoni/protocol';
 import { acceptTrustPrompt, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -16,7 +18,7 @@ afterEach(async () => {
 	client.close();
 });
 
-async function start(params: { prompt?: string; permissionMode?: 'default' | 'plan' } = {}): Promise<{ id: SessionId; dir: string }> {
+async function start(params: { prompt?: string; permissionMode?: PermissionMode } = {}): Promise<{ id: SessionId; dir: string }> {
 	const dir = newProjectDir();
 	const result = (await client.request('startSession', { projectDir: dir, model: 'haiku', permissionMode: 'default', ...params })) as Started;
 	started.push(result.session.id);
@@ -160,6 +162,13 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const cgroup = readFileSync(`/proc/${panePid}/cgroup`, 'utf8').trim().split('/').pop() ?? '';
 		const memoryMax = execFileSync('systemctl', ['--user', 'show', cgroup, '-p', 'MemoryMax'], { encoding: 'utf8' }).trim();
 		expect(memoryMax).toBe('MemoryMax=8589934592');
+	});
+
+	test('a session started in auto mode runs in auto mode', async () => {
+		const { id, dir } = await start({ prompt: 'Reply with exactly: ok', permissionMode: 'auto' });
+		const { claudeSessionId } = await client.waitForSession(id, (s) => s.state === 'answered');
+		const transcript = readFileSync(join(homedir(), '.claude/projects', dir.replace(/[^a-zA-Z0-9]/g, '-'), `${claudeSessionId}.jsonl`), 'utf8');
+		expect(transcript).toContain('"permissionMode":"auto"');
 	});
 
 	test('a session reports its task progress and its memory against the pane cap', async () => {
