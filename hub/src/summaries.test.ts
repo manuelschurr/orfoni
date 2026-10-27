@@ -232,14 +232,35 @@ describe('Summarizer', () => {
 		expect(logs).toEqual([expect.stringContaining('transcript gone')]);
 	});
 
-	test('without a key no request goes out, it is logged once, and status reports summaries off', async () => {
-		apiKey = { missing: 'set ANTHROPIC_API_KEY or write the key to ~/.config/orfoni/anthropic-api-key' };
+	test('status says why summaries fail, without the key, until one succeeds again', async () => {
+		makeSummarizer().request(a);
+		await settle();
+		calls[0]!.answer(new Error(`401 invalid x-api-key ${KEY}`));
+		await settle();
+		const failing = await summarizer.status();
+		expect(failing).toEqual({ enabled: true, spentTodayUsd: 0, problem: expect.stringContaining('invalid x-api-key') });
+		expect(JSON.stringify(failing)).not.toContain(KEY);
+		await vi.advanceTimersByTimeAsync(20_000);
+		summarizer.request(a);
+		await settle();
+		calls[1]!.answer(reply('Notes', 'Done.'));
+		await settle();
+		expect((await summarizer.status()).problem).toBeNull();
+	});
+
+	test('status says when summaries are paused until tomorrow', async () => {
+		makeSummarizer({ day: '2026-10-26', requests: 1000, spentUsd: 0.5 });
+		expect(await summarizer.status()).toEqual({ enabled: true, spentTodayUsd: 0.5, problem: expect.stringContaining('until tomorrow') });
+	});
+
+	test('without a key no request goes out, it is logged once, and status reports summaries off with the reason', async () => {
+		apiKey = { missing: 'no API key, write the key to ~/.config/orfoni/anthropic-api-key' };
 		makeSummarizer().request(a);
 		summarizer.request(b);
 		await settle();
 		expect(calls).toEqual([]);
-		expect(logs).toEqual([expect.stringContaining('ANTHROPIC_API_KEY')]);
-		expect(await summarizer.status()).toEqual({ enabled: false, spentTodayUsd: 0 });
+		expect(logs).toEqual([expect.stringContaining('anthropic-api-key')]);
+		expect(await summarizer.status()).toEqual({ enabled: false, spentTodayUsd: 0, problem: apiKey.missing });
 	});
 
 	test('a key that appears later turns summaries on without a restart', async () => {
@@ -251,7 +272,7 @@ describe('Summarizer', () => {
 		summarizer.request(a);
 		await settle();
 		expect(calls).toHaveLength(1);
-		expect(await summarizer.status()).toEqual({ enabled: true, spentTodayUsd: 0 });
+		expect(await summarizer.status()).toEqual({ enabled: true, spentTodayUsd: 0, problem: null });
 	});
 
 	test('the input is the title, the folder, the last 6 user messages, and the reply', async () => {

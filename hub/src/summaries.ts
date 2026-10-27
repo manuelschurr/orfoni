@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import type { SessionId, SessionSummary } from '@orfoni/protocol';
+import type { HubStatus, SessionId, SessionSummary } from '@orfoni/protocol';
 import { z } from 'zod';
 
 export const SUMMARY_MODEL = 'claude-haiku-5-5';
@@ -157,6 +157,7 @@ export class Summarizer {
 	private readonly slots = new Map<SessionId, Slot>();
 	private spent: SummaryBudget;
 	private lastLogged: string | null = null;
+	private failure: string | null = null;
 	private reading: Promise<unknown> = Promise.resolve();
 
 	constructor(private readonly options: SummarizerOptions) {
@@ -167,8 +168,11 @@ export class Summarizer {
 		return this.today();
 	}
 
-	async status(): Promise<{ enabled: boolean; spentTodayUsd: number }> {
-		return { enabled: 'key' in (await this.options.apiKey()), spentTodayUsd: this.today().spentUsd };
+	async status(): Promise<HubStatus['summaries']> {
+		const apiKey = await this.options.apiKey();
+		const spentTodayUsd = this.today().spentUsd;
+		if ('missing' in apiKey) return { enabled: false, spentTodayUsd, problem: apiKey.missing };
+		return { enabled: true, spentTodayUsd, problem: this.pause() ?? this.failure };
 	}
 
 	request(sessionId: SessionId): void {
@@ -206,6 +210,11 @@ export class Summarizer {
 		this.options.log(line);
 	}
 
+	private fail(reason: string): void {
+		this.failure = `the last summary failed, ${reason}`;
+		this.logOnce(`orfoni-hub: summary failed, kept the previous one: ${reason}`);
+	}
+
 	private pause(): string | null {
 		const budget = this.today();
 		return budget.requests >= DAILY_REQUESTS || budget.spentUsd >= DAILY_USD ? `paused until tomorrow, today reached the cap of ${DAILY_REQUESTS} summaries or $${DAILY_USD}` : null;
@@ -229,7 +238,7 @@ export class Summarizer {
 		try {
 			await this.summarize(sessionId, slot);
 		} catch (error) {
-			this.logOnce(`orfoni-hub: summary failed, kept the previous one: ${explain(error)}`);
+			this.fail(explain(error));
 		} finally {
 			slot.running = false;
 			if (slot.again) {
@@ -251,11 +260,12 @@ export class Summarizer {
 		try {
 			const reply = await this.options.client(apiKey.key)({ model: this.options.model, prompt: summaryPrompt(input) });
 			budget.spentUsd += costUsd(this.options.model, reply.usage);
-			if (reply.kind === 'declined') return this.logOnce(`orfoni-hub: summary failed, kept the previous one: ${reply.reason}`);
+			if (reply.kind === 'declined') return this.fail(reply.reason);
+			this.failure = null;
 			this.lastLogged = null;
 			this.options.summarized(sessionId, { about: reply.about, status: reply.status, at: Date.now() });
 		} catch (error) {
-			this.logOnce(`orfoni-hub: summary failed, kept the previous one: ${explain(error)}`.replaceAll(apiKey.key, '[API key]'));
+			this.fail(explain(error).replaceAll(apiKey.key, '[API key]'));
 		} finally {
 			this.options.budgetChanged();
 		}

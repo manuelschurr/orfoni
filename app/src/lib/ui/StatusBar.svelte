@@ -58,6 +58,7 @@
 			<span>{bytes(hub.memory.availableBytes)} of {bytes(hub.memory.totalBytes)} free on the VPS</span>
 			<span>{hub.summaries.enabled ? `Summaries on, ${usd.format(hub.summaries.spentTodayUsd)} today` : 'Summaries off'}</span>
 		</p>
+		{#if hub.summaries.problem}<p class="summary-problem" class:failing={hub.summaries.enabled}>{hub.summaries.problem}</p>{/if}
 	{/if}
 </div>
 
@@ -141,6 +142,20 @@
 		color: var(--faint);
 		font-size: 0.75rem;
 		font-variant-numeric: tabular-nums;
+	}
+
+	.summary-problem {
+		margin: 0.2rem 0 0 0.95rem;
+		color: var(--faint);
+		font-size: 0.75rem;
+	}
+
+	.summary-problem::first-letter {
+		text-transform: uppercase;
+	}
+
+	.summary-problem.failing {
+		color: var(--danger);
 	}
 
 	.problem {

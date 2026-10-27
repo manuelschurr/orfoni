@@ -6,8 +6,8 @@ import StatusBar from './StatusBar.svelte';
 
 const GB = 1024 ** 3;
 
-function hubStatus(availableGb: number, enabled: boolean, spentTodayUsd: number) {
-	return { memory: { availableBytes: availableGb * GB, totalBytes: 11.7 * GB }, summaries: { enabled, spentTodayUsd } };
+function hubStatus(availableGb: number, enabled: boolean, spentTodayUsd: number, problem: string | null = null) {
+	return { memory: { availableBytes: availableGb * GB, totalBytes: 11.7 * GB }, summaries: { enabled, spentTodayUsd, problem } };
 }
 
 async function settle(): Promise<void> {
@@ -48,6 +48,15 @@ test('the VPS memory and the summary spend refresh every 30 seconds, and go away
 	expect(screen.queryByText(/free on the VPS/)).toBeNull();
 	vi.advanceTimersByTime(60_000);
 	expect(transport.requests('hubStatus')).toHaveLength(2);
+});
+
+test('the reason summaries are not working shows under the figures', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, true, 0, 'the last summary failed, the Claude API answered 401 authentication_error: invalid x-api-key'));
+	await settle();
+	expect(screen.getByText('Summaries on, $0.00 today')).toBeTruthy();
+	expect(screen.getByText('the last summary failed, the Claude API answered 401 authentication_error: invalid x-api-key')).toBeTruthy();
 });
 
 test('summaries without an API key read as off', async () => {

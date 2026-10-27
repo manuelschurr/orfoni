@@ -27,7 +27,7 @@ export type SessionSummary = z.infer<typeof SessionSummary>;
 
 export const HubStatus = z.object({
 	memory: z.object({ availableBytes: z.number(), totalBytes: z.number() }),
-	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number() }),
+	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number(), problem: z.string().nullable().default(null) }),
 });
 export type HubStatus = z.infer<typeof HubStatus>;
 

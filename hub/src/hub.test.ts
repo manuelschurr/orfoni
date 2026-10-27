@@ -705,13 +705,13 @@ describe('memory', () => {
 	test('hubStatus reports the VPS memory and whether summaries are on with what they cost today', async () => {
 		writeMeminfo(3 * GB, 12 * GB);
 		const client = await startHub();
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0 } });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0, problem: 'no key in tests' } });
 		apiKey = { key: 'sk-test' };
 		const { id, claude } = await ready(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
 		await untilRealTime(() => client.session(id)?.summary !== null);
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000 } });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null } });
 	});
 
 	test('startSession warns when less than 1.5 GB of memory is available', async () => {

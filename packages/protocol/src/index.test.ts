@@ -88,8 +88,13 @@ describe('milestone 3 fields', () => {
 		expect(parseClientRequest('{"id":3,"method":"hubStatus"}')).toEqual({ id: 3, method: 'hubStatus' });
 	});
 
-	test('a hub status carries the VPS memory and the summary budget', () => {
-		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42 } };
+	test('a hub status carries the VPS memory, the summary budget, and why summaries are not working', () => {
+		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42, problem: 'the last summary failed, timeout' } };
 		expect(HubStatus.parse(status)).toEqual(status);
+	});
+
+	test('a hub status from a hub without problem reports none', () => {
+		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42 } };
+		expect(HubStatus.parse(status).summaries.problem).toBeNull();
 	});
 });
