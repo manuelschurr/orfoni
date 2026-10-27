@@ -1,4 +1,4 @@
-import type { ChatItem, SessionStateKind, SessionSummary } from '@orfoni/protocol';
+import type { ChatItem, OtherSession, SessionStateKind, SessionSummary } from '@orfoni/protocol';
 
 export const stateLabel: Record<SessionStateKind, string> = {
 	offline: 'Offline',
@@ -27,6 +27,17 @@ export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string
 	if (session.title) return session.title;
 	const prompt = chat?.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
 	return prompt?.kind === 'user' ? firstLine(prompt.text) : 'Untitled session';
+}
+
+export const otherStatus: Record<OtherSession['status'], string> = { idle: 'Idle', busy: 'Busy' };
+
+export function otherName(other: OtherSession): string {
+	return other.name || 'Untitled session';
+}
+
+export function otherPlace(other: OtherSession): string {
+	if (other.background) return 'background';
+	return other.tmux === null ? 'no tmux' : `tmux ${other.tmux}`;
 }
 
 export function folderName(dir: string): string {

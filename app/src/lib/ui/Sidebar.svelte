@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { HubClient } from '../hub-client.svelte';
 	import { folderName, needsYou, sessionTitle } from './format';
+	import OtherSessionRow from './OtherSessionRow.svelte';
 	import SessionRow from './SessionRow.svelte';
 	import StatusBar from './StatusBar.svelte';
 
@@ -19,7 +20,7 @@
 
 	function arrowKeys(event: KeyboardEvent): void {
 		if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-		const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[data-session]')];
+		const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[data-session], [data-other]')];
 		const index = rows.indexOf(document.activeElement as HTMLElement);
 		if (index === -1) return;
 		event.preventDefault();
@@ -37,19 +38,30 @@
 		{#each groups as group (group.dir)}
 			<section class="group">
 				<h2 title={group.dir}>{folderName(group.dir)}</h2>
-				<ul aria-label={folderName(group.dir)}>
-					{#each group.sessions as session (session.id)}
-						<li>
-							<SessionRow
-								{session}
-								{now}
-								title={sessionTitle(session, client.chats.get(session.id))}
-								selected={client.selected === session.id}
-								onselect={() => void client.select(session.id).catch(() => {})}
-							/>
-						</li>
-					{/each}
-				</ul>
+				{#if group.sessions.length > 0}
+					<ul aria-label={folderName(group.dir)}>
+						{#each group.sessions as session (session.id)}
+							<li>
+								<SessionRow
+									{session}
+									{now}
+									title={sessionTitle(session, client.chats.get(session.id))}
+									selected={client.selected === session.id}
+									onselect={() => void client.select(session.id).catch(() => {})}
+								/>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if group.others.length > 0}
+					<ul class="others" aria-label="{folderName(group.dir)}, outside orfoni">
+						{#each group.others as other (other.pid)}
+							<li>
+								<OtherSessionRow {other} {now} selected={client.other?.session.pid === other.pid} onselect={() => void client.openOther(other.pid).catch(() => {})} />
+							</li>
+						{/each}
+					</ul>
+				{/if}
 			</section>
 		{:else}
 			{#if client.status.kind === 'connected'}

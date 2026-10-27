@@ -247,6 +247,25 @@ textarea {
 	box-shadow: inset 0 0 0 1.5px var(--state-idle);
 }
 
+/* A square, so a session outside orfoni never reads as the state dot of one of orfoni's own. */
+.mark {
+	flex: none;
+	width: 0.55rem;
+	height: 0.55rem;
+	border: 1.5px solid var(--state-idle);
+	border-radius: 2px;
+}
+
+.mark[data-status='busy'] {
+	border-color: var(--state-working);
+	background: var(--state-working);
+	animation: pulse 1.6s ease-in-out infinite;
+}
+
+.mark[data-status='ended'] {
+	border-style: dashed;
+}
+
 @keyframes pulse {
 	50% {
 		opacity: 0.35;

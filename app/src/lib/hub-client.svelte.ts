@@ -52,15 +52,28 @@ export class HubRequestError extends Error {
 export interface Project {
 	dir: string;
 	sessions: SessionSummary[];
+	others: OtherSession[];
 }
 
-export function groupProjects(sessions: Iterable<SessionSummary>): Project[] {
-	const groups = new Map<string, SessionSummary[]>();
-	for (const session of sessions) groups.set(session.projectDir, [...(groups.get(session.projectDir) ?? []), session]);
+// Only orfoni's own sessions place a folder, so folders that hold nothing but sessions outside orfoni come last.
+export function groupProjects(sessions: Iterable<SessionSummary>, others: Iterable<OtherSession>): Project[] {
+	const groups = new Map<string, Project>();
+	const group = (dir: string): Project => {
+		let project = groups.get(dir);
+		if (!project) groups.set(dir, (project = { dir, sessions: [], others: [] }));
+		return project;
+	};
+	for (const session of sessions) group(session.projectDir).sessions.push(session);
+	for (const other of others) group(other.projectDir).others.push(other);
 	const newest = (project: Project) => project.sessions[0]?.stateSince ?? 0;
-	return [...groups]
-		.map(([dir, list]) => ({ dir, sessions: list.toSorted((a, b) => b.stateSince - a.stateSince) }))
-		.sort((a, b) => newest(b) - newest(a) || a.dir.localeCompare(b.dir));
+	const newestOther = (project: Project) => project.others[0]?.statusSince ?? 0;
+	return [...groups.values()]
+		.map((project) => ({
+			...project,
+			sessions: project.sessions.toSorted((a, b) => b.stateSince - a.stateSince),
+			others: project.others.toSorted((a, b) => b.statusSince - a.statusSince),
+		}))
+		.sort((a, b) => newest(b) - newest(a) || newestOther(b) - newestOther(a) || a.dir.localeCompare(b.dir));
 }
 
 export function itemKey(item: ChatItem): string {
@@ -126,7 +139,7 @@ export class HubClient {
 	problem = $state<string | null>(null);
 	others = $state.raw<OtherSession[]>([]);
 	other = $state.raw<OtherView | null>(null);
-	projects = $derived(groupProjects(this.sessions.values()));
+	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
 	private nextId = 1;
