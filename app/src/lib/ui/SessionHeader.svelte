@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
-	import type { HubClient } from '../hub-client.svelte';
-	import { bytes, oomKills, sessionTitle, stateLabel, tasksDone } from './format';
+	import type { Change, HubClient, Setting } from '../hub-client.svelte';
+	import { bytes, effortChoices, modelChoices, oomKills, sessionTitle, stateLabel, tasksDone, type Choices } from './format';
 
 	let {
 		client,
@@ -16,6 +16,25 @@
 	const memory = $derived(session.memory);
 	const limit = $derived(memory?.maxBytes ? { max: memory.maxBytes, warning: memory.currentBytes > 0.8 * memory.maxBytes } : null);
 	const used = $derived(memory && limit ? `${bytes(memory.currentBytes)} of ${bytes(limit.max)}` : '');
+	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered');
+	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
+	const notes: Record<Change['phase'], (command: string) => string> = {
+		sending: (command) => `Sending ${command}`,
+		sent: (command) => `Sent ${command}, waiting for Claude Code`,
+		unreported: (command) => `Claude Code reported no change after ${command}. Check the terminal.`,
+	};
+
+	async function change(setting: Setting, select: HTMLSelectElement, reported: string): Promise<void> {
+		const to = select.value;
+		// The select keeps showing what Claude Code reports, and the note says what was sent until Claude Code reports it.
+		select.value = reported;
+		error = null;
+		try {
+			await client.change(session.id, setting, to);
+		} catch (e) {
+			error = `Changing the ${setting} failed: ${(e as Error).message}`;
+		}
+	}
 
 	function percent(part: number, whole: number): string {
 		return `${Math.min(100, whole > 0 ? (part / whole) * 100 : 0)}%`;
@@ -69,7 +88,7 @@
 		>
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
-	{#if session.tasks || memory}
+	{#if session.tasks || memory || session.model}
 		<div class="gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
@@ -105,10 +124,34 @@
 					{#if memory.oomKills > 0}<span class="note oom">{oomKills(memory.oomKills)}</span>{/if}
 				</div>
 			{/if}
+			<!-- Last in the row, so a note that comes and goes moves nothing else. -->
+			{#if session.model}
+				{@render setting('model', 'Model', modelChoices(session.model))}
+				{#if session.effort !== null}{@render setting('effort', 'Effort', effortChoices(session.effort))}{/if}
+				{#each changes as pending (pending.setting)}
+					<span class="change" data-phase={pending.phase} role="status">{notes[pending.phase](`/${pending.setting} ${pending.to}`)}</span>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 	{#if error}<p class="error" role="alert">{error}</p>{/if}
 </header>
+
+{#snippet setting(name: Setting, label: string, choices: Choices)}
+	<label class="pick">
+		<span class="label">{label}</span>
+		<span class="select" class:fixed={!takesChanges}>
+			<select
+				value={choices.value}
+				disabled={!takesChanges}
+				title={takesChanges ? undefined : `You can change the ${name} while the session is idle.`}
+				onchange={(event) => void change(name, event.currentTarget, choices.value)}
+			>
+				{#each choices.options as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
+			</select>
+		</span>
+	</label>
+{/snippet}
 
 <dialog bind:this={confirm} class="confirm" aria-labelledby="remove-title">
 	<h2 id="remove-title">Remove "{title}"?</h2>
@@ -195,10 +238,83 @@
 		font-size: 0.8125rem;
 	}
 
-	.gauge {
+	.gauge,
+	.pick {
 		display: flex;
 		align-items: center;
 		gap: 0.55rem;
+	}
+
+	.select {
+		position: relative;
+		display: inline-flex;
+	}
+
+	.select::after {
+		position: absolute;
+		top: 50%;
+		right: 0.55rem;
+		width: 0.32rem;
+		height: 0.32rem;
+		border-right: 1.5px solid var(--muted);
+		border-bottom: 1.5px solid var(--muted);
+		content: '';
+		pointer-events: none;
+		transform: translateY(-70%) rotate(45deg);
+	}
+
+	select {
+		appearance: none;
+		padding: 0.1rem 1.5rem 0.1rem 0.5rem;
+		border: 1px solid var(--border-strong);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		font-size: inherit;
+		line-height: 1.4;
+		cursor: pointer;
+	}
+
+	select:hover:not(:disabled) {
+		border-color: var(--muted);
+	}
+
+	.fixed::after {
+		visibility: hidden;
+	}
+
+	select:disabled {
+		border-color: transparent;
+		background: transparent;
+		color: var(--text);
+		opacity: 1;
+		cursor: default;
+	}
+
+	.change {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+
+	.change::before {
+		flex: none;
+		width: 0.45rem;
+		height: 0.45rem;
+		border-radius: 50%;
+		background: var(--state-working);
+		content: '';
+		animation: pulse 1.6s ease-in-out infinite;
+	}
+
+	.change[data-phase='unreported'] {
+		color: color-mix(in srgb, var(--state-needs) 70%, var(--text));
+		font-weight: 600;
+	}
+
+	.change[data-phase='unreported']::before {
+		background: var(--state-needs);
+		animation: none;
 	}
 
 	.bar {

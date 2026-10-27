@@ -171,6 +171,23 @@ describe('HubClient', () => {
 		expect(client.chats.get(a1.id)).toEqual([finished, user('u1', 'next')]);
 	});
 
+	test('a model or effort change waits until Claude Code reports another value, which can arrive in the list after a reconnect', async () => {
+		const reporting: SessionSummary = { ...a1, model: { id: 'claude-opus-5-5', name: 'Opus 5.5' }, effort: 'xhigh' };
+		await connect([reporting]);
+		const changing = client.change(a1.id, 'effort', 'high');
+		expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/effort high' }]);
+		transport.respond('send', {});
+		await changing;
+		transport.push({ type: 'sessionUpdated', session: { ...reporting, memory: { currentBytes: 300 * 1024 ** 2, maxBytes: null, oomKills: 0 } } });
+		expect(client.changes).toEqual([{ sessionId: a1.id, setting: 'effort', to: 'high', from: 'xhigh', phase: 'sent' }]);
+
+		transport.status({ kind: 'reconnecting', attempt: 1, error: 'socket closed' });
+		transport.status({ kind: 'connected' });
+		transport.respond('listSessions', [{ ...reporting, effort: 'high' }]);
+		await settle();
+		expect(client.changes).toEqual([]);
+	});
+
 	test('a removed session leaves the list, its chat, and the selection', async () => {
 		await connect();
 		await open(a1, [user('u1', 'hello')]);

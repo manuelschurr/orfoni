@@ -1,4 +1,29 @@
-import type { ChatItem, OtherSession, SessionStateKind, SessionSummary } from '@orfoni/protocol';
+import { Effort, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+
+// The aliases claude takes with --model and /model.
+export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+export type ModelAlias = (typeof models)[number];
+export const modelLabel: Record<ModelAlias, string> = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+export const effortLabel: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+
+// What a select shows for a value Claude Code reports. A reported value that matches none of the options leads them.
+export interface Choices {
+	value: string;
+	options: { value: string; label: string }[];
+}
+
+// Claude Code reports a model ID, such as claude-opus-5-5[1m], with a display name, which the select shows also when the ID matches no alias.
+export function modelChoices(model: { id: string; name: string }): Choices {
+	const words = model.id.split(/[^a-z0-9]+/);
+	const current = models.find((alias) => words.includes(alias));
+	const options = models.map((alias) => ({ value: alias, label: alias === current ? model.name : modelLabel[alias] }));
+	return current ? { value: current, options } : { value: '', options: [{ value: '', label: model.name }, ...options] };
+}
+
+export function effortChoices(level: string): Choices {
+	const options = Effort.options.map((value) => ({ value, label: effortLabel[value] }));
+	return { value: level, options: options.some((option) => option.value === level) ? options : [{ value: level, label: level }, ...options] };
+}
 
 export const stateLabel: Record<SessionStateKind, string> = {
 	offline: 'Offline',
