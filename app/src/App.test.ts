@@ -215,3 +215,22 @@ test('porting a session outside orfoni opens the new orfoni session in its place
 	expect(screen.getByRole('article', { name: 'Claude' }).textContent).toContain('The uplink retries now.');
 	expect(screen.getByRole('button', { name: /^swarm-73/ }).getAttribute('aria-current')).toBe('true');
 });
+
+test('in Tauri, the sidebar shows the installed version next to the app name', async () => {
+	inTauri((cmd, _args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'plugin:app|version':
+				return '0.3.42';
+			default:
+				return null;
+		}
+	});
+	render(App);
+	const sidebar = await screen.findByRole('navigation', { name: 'Sessions' });
+	expect(await within(sidebar).findByText('0.3.42')).toBeTruthy();
+});

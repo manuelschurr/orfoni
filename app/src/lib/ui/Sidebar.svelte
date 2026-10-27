@@ -5,7 +5,7 @@
 	import SessionRow from './SessionRow.svelte';
 	import StatusBar from './StatusBar.svelte';
 
-	let { client, onnew, onsettings }: { client: HubClient; onnew: () => void; onsettings?: () => void } = $props();
+	let { client, version = null, onnew, onsettings }: { client: HubClient; version?: string | null; onnew: () => void; onsettings?: () => void } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -30,7 +30,7 @@
 
 <nav class="sidebar" aria-label="Sessions">
 	<div class="top">
-		<span class="brand">orfoni</span>
+		<span class="brand">orfoni{#if version}<span class="version" title="Installed version">{version}</span>{/if}</span>
 		<button class="btn" onclick={onnew}>New session</button>
 	</div>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -92,6 +92,15 @@
 		font-size: 1.15rem;
 		font-weight: 650;
 		letter-spacing: -0.01em;
+	}
+
+	.version {
+		margin-left: 0.45rem;
+		color: var(--faint);
+		font-size: 0.75rem;
+		font-weight: 400;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0;
 	}
 
 	.groups {

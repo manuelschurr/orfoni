@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HubStatus, SessionId, SessionSummary } from '@orfoni/protocol';
+	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { onMount } from 'svelte';
@@ -43,7 +44,10 @@
 	const title = $derived(windowTitle(client?.sessions.values() ?? []));
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
 
+	let version = $state<string | null>(null);
+
 	onMount(() => {
+		if (isTauri()) getVersion().then((installed) => (version = installed), () => {});
 		let transports;
 		try {
 			transports = createTransports();
@@ -103,7 +107,7 @@
 
 {#if client && ready}
 	<div class="app" class:split={terminals.length > 0}>
-		<Sidebar {client} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
+		<Sidebar {client} {version} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
 		<main>
 			{#if session}
 				{#key session.id}
