@@ -1,4 +1,5 @@
 import {
+	HubStatus,
 	ChatItem,
 	ProjectDir,
 	SessionSummary,
@@ -29,6 +30,7 @@ const results = {
 	openShell: z.object({ target: z.string() }),
 	listProjectDirs: z.object({ dirs: z.array(ProjectDir) }),
 	removeSession: done,
+	hubStatus: HubStatus,
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 

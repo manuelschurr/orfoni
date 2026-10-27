@@ -87,7 +87,7 @@ function tmuxName(id: SessionId): string {
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: null, tasks: null, memory: null };
 }
 
 function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {

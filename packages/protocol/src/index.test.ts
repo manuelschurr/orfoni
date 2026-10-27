@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, parseClientRequest, parseHubMessage, ProtocolError, type HubMessage } from './index.js';
+import { ClaudeSessionId, HubStatus, parseClientRequest, parseHubMessage, ProtocolError, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -63,5 +63,33 @@ describe('parseHubMessage', () => {
 			item: { kind: 'approval', requestId: 'r1', toolName: 'Write', input: { file_path: 'a.txt', content: 'hi' }, status: 'pending' },
 		};
 		expect(parseHubMessage(JSON.stringify(message))).toEqual(message);
+	});
+});
+
+describe('milestone 3 fields', () => {
+	const base = { id: 's', projectDir: '/p', title: null, claudeSessionId: null, state: 'idle', stateSince: 1 };
+
+	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
+		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null } });
+	});
+
+	test('a session summary carries its summary, task progress, and memory', () => {
+		const session = {
+			...base,
+			summary: { about: 'Fixing the login test', status: 'Waiting for approval to run npm test', at: 2 },
+			tasks: { done: 3, total: 7 },
+			memory: { currentBytes: 1_200_000_000, maxBytes: 8_589_934_592, oomKills: 1 },
+		};
+		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
+	});
+
+	test('hubStatus is a request without parameters', () => {
+		expect(parseClientRequest('{"id":3,"method":"hubStatus"}')).toEqual({ id: 3, method: 'hubStatus' });
+	});
+
+	test('a hub status carries the VPS memory and the summary budget', () => {
+		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42 } };
+		expect(HubStatus.parse(status)).toEqual(status);
 	});
 });

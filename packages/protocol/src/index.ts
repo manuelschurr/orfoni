@@ -19,8 +19,17 @@ export const SessionSummary = z.object({
 	claudeSessionId: ClaudeSessionId.nullable(),
 	state: SessionStateKind,
 	stateSince: z.number(),
+	summary: z.object({ about: z.string(), status: z.string(), at: z.number() }).nullable().default(null),
+	tasks: z.object({ done: z.number().int(), total: z.number().int() }).nullable().default(null),
+	memory: z.object({ currentBytes: z.number(), maxBytes: z.number().nullable(), oomKills: z.number().int() }).nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
+
+export const HubStatus = z.object({
+	memory: z.object({ availableBytes: z.number(), totalBytes: z.number() }),
+	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number() }),
+});
+export type HubStatus = z.infer<typeof HubStatus>;
 
 export const ProjectDir = z.object({ path: z.string(), lastActive: z.number().nullable() });
 export type ProjectDir = z.infer<typeof ProjectDir>;
@@ -103,6 +112,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('stopSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('openShell'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('listProjectDirs') }),
+	z.object({ id, method: z.literal('hubStatus') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 ]);
 export type ClientRequest = z.infer<typeof ClientRequest>;

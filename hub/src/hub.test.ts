@@ -180,7 +180,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0 },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -604,8 +604,8 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000 },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000 },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null },
 		]);
 	});
 
