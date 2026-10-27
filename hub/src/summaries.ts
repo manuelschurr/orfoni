@@ -140,16 +140,16 @@ function explain(error: unknown): string {
 	return (error as Error).message;
 }
 
-export async function readApiKey(path: string, fromEnv: string | undefined): Promise<ApiKey> {
-	if (fromEnv) return { key: fromEnv.trim() };
+// The key comes only from the file. Claude Code bills a session to ANTHROPIC_API_KEY instead of the subscription when that variable reaches it, and tmux hands the hub's environment to new sessions.
+export async function readApiKey(path: string): Promise<ApiKey> {
 	try {
 		const [info, text] = await Promise.all([stat(path), readFile(path, 'utf8')]);
 		if ((info.mode & 0o077) !== 0) return { missing: `other accounts can read ${path}, run chmod 600 ${path}` };
 		const key = text.trim();
 		return key ? { key } : { missing: `${path} is empty` };
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { missing: `no API key, set ANTHROPIC_API_KEY or write the key to ${path}` };
-		throw error;
+		const { code, message } = error as NodeJS.ErrnoException;
+		return { missing: code === 'ENOENT' ? `no API key, write the key to ${path} and run chmod 600 on it` : `cannot read ${path}: ${code ?? message}` };
 	}
 }
 

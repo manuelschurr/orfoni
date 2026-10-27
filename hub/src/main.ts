@@ -25,7 +25,7 @@ async function daemon(): Promise<void> {
 		readHistory: (claudeSessionId, projectDir) => getSessionMessages(claudeSessionId, { dir: projectDir, includeSystemMessages: true }),
 		summaries: {
 			model: process.env.ORFONI_SUMMARY_MODEL || SUMMARY_MODEL,
-			apiKey: () => readApiKey(join(homedir(), '.config/orfoni/anthropic-api-key'), process.env.ANTHROPIC_API_KEY),
+			apiKey: () => readApiKey(join(homedir(), '.config/orfoni/anthropic-api-key')),
 			client: (apiKey) => claudeClient(apiKey),
 		},
 		systemRoot: '/',

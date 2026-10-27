@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionId } from '@orfoni/protocol';
@@ -281,25 +281,32 @@ describe('readApiKey', () => {
 		dir = mkdtempSync(join(tmpdir(), 'orfoni-key-'));
 	});
 
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	test('reads the key file without its trailing newline', async () => {
 		writeFileSync(join(dir, 'key'), `${KEY}\n`, { mode: 0o600 });
-		expect(await readApiKey(join(dir, 'key'), undefined)).toEqual({ key: KEY });
+		expect(await readApiKey(join(dir, 'key'))).toEqual({ key: KEY });
 	});
 
-	test('ANTHROPIC_API_KEY wins when set', async () => {
-		writeFileSync(join(dir, 'key'), 'from-file', { mode: 0o600 });
-		expect(await readApiKey(join(dir, 'key'), 'from-env')).toEqual({ key: 'from-env' });
-	});
-
-	test('a missing file without the variable means no key, and says how to add one', async () => {
-		const key = await readApiKey(join(dir, 'key'), '');
+	// Claude Code bills a session to ANTHROPIC_API_KEY instead of the subscription when that variable reaches it, so the hub never reads it or suggests setting it.
+	test('a missing file means no key even with ANTHROPIC_API_KEY set, and the reason points at the file only', async () => {
+		vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-from-env');
+		const key = await readApiKey(join(dir, 'key'));
 		expect(key).toEqual({ missing: expect.stringContaining(join(dir, 'key')) });
+		expect(JSON.stringify(key)).not.toContain('ANTHROPIC_API_KEY');
+	});
+
+	test('a key path the hub cannot read means no key, with the reason', async () => {
+		mkdirSync(join(dir, 'key'));
+		expect(await readApiKey(join(dir, 'key'))).toEqual({ missing: expect.stringContaining('EISDIR') });
 	});
 
 	test('a key file other accounts can read is refused with the fix', async () => {
 		writeFileSync(join(dir, 'key'), KEY);
 		chmodSync(join(dir, 'key'), 0o644);
-		const key = await readApiKey(join(dir, 'key'), undefined);
+		const key = await readApiKey(join(dir, 'key'));
 		expect(key).toEqual({ missing: expect.stringContaining('chmod 600') });
 		expect(JSON.stringify(key)).not.toContain(KEY);
 	});
