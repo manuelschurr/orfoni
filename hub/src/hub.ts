@@ -36,6 +36,8 @@ const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const PANE_CHECK_INTERVAL_MS = 5_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
+const EXIT_TIMEOUT_MS = 10_000;
+const EXIT_CHECK_INTERVAL_MS = 100;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 
 export interface HubOptions {
@@ -49,6 +51,7 @@ export interface HubOptions {
 	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
 	systemRoot: string;
 	claudeSessionsDir: string;
+	kill(pid: number, signal: NodeJS.Signals): void;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -157,6 +160,7 @@ export class Hub {
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
+	private readonly porting = new Set<number>();
 	private readonly summarizer: Summarizer;
 
 	private constructor(
@@ -280,6 +284,8 @@ export class Hub {
 				return (await this.refreshOthers()).map(({ session }) => session);
 			case 'openOtherSession':
 				return this.openOther(request.pid);
+			case 'portSession':
+				return this.port(request);
 		}
 	}
 
@@ -292,37 +298,69 @@ export class Hub {
 	private async startSession(
 		request: Extract<ClientRequest, { method: 'startSession' }>,
 	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
-		const now = Date.now();
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
-		const session: Session = {
-			id: SessionId.parse(randomUUID()),
-			projectDir: request.projectDir,
-			title: request.title ?? null,
-			createdAt: now,
-			model: emptySession(now, claudeSessionId),
-			claude: { kind: 'exited' },
-		};
 		const options = [
 			...(request.model ? ['--model', request.model] : []),
 			...(request.permissionMode ? ['--permission-mode', request.permissionMode] : []),
 			...(request.title ? ['--name', request.title] : []),
 			...(request.prompt ? ['--', request.prompt] : []),
 		];
-		const needsTrust = await this.needsTrust(request.projectDir);
+		const started = await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], options);
+		const memory = await systemMemory(this.options.systemRoot).catch((error: Error) => {
+			this.options.log(`orfoni-hub: reading the VPS memory failed: ${error.message}`);
+			return null;
+		});
+		return { ...started, ...(memory && memory.availableBytes < LOW_MEMORY_BYTES ? { memoryWarning: memory } : {}) };
+	}
+
+	private async port(request: Extract<ClientRequest, { method: 'portSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
+		const { pid, claudeSessionId, permissionMode } = request;
+		if (this.porting.has(pid)) throw new HubError('not_ready', `session ${pid} is being ported already`);
+		this.porting.add(pid);
+		try {
+			const other = await this.other(pid);
+			if (other.session.claudeSessionId !== claudeSessionId) throw new HubError('not_found', `session ${pid} is on another conversation now`);
+			if (other.session.status === 'busy') throw new HubError('not_ready', `session ${pid} is busy`);
+			this.options.kill(pid, 'SIGTERM');
+			if (!(await this.exited(other))) throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing`);
+			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : []);
+			await this.refreshOthers();
+			return ported;
+		} finally {
+			this.porting.delete(pid);
+		}
+	}
+
+	private async exited({ session: { pid }, procStart }: OtherProcess): Promise<boolean> {
+		const deadline = Date.now() + EXIT_TIMEOUT_MS;
+		while (await this.registry.running(pid, procStart)) {
+			if (Date.now() >= deadline) return false;
+			await delay(EXIT_CHECK_INTERVAL_MS);
+		}
+		return true;
+	}
+
+	private async newSession(
+		projectDir: string,
+		title: string | null,
+		claudeSessionId: ClaudeSessionId,
+		identity: string[],
+		options: string[],
+	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
+		const now = Date.now();
+		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' } };
+		const needsTrust = await this.needsTrust(projectDir);
 		this.sessions.set(session.id, session);
 		try {
-			await this.launch(session, [`--session-id=${claudeSessionId}`], options);
+			await this.launch(session, identity, options);
 		} catch (error) {
 			this.sessions.delete(session.id);
 			throw error;
 		}
 		this.save();
 		this.broadcast({ type: 'sessionUpdated', session: summary(session) });
-		const memory = await systemMemory(this.options.systemRoot).catch((error: Error) => {
-			this.options.log(`orfoni-hub: reading the VPS memory failed: ${error.message}`);
-			return null;
-		});
-		return { session: summary(session), needsTrust, ...(memory && memory.availableBytes < LOW_MEMORY_BYTES ? { memoryWarning: memory } : {}) };
+		return { session: summary(session), needsTrust };
 	}
 
 	private async needsTrust(projectDir: string): Promise<boolean> {

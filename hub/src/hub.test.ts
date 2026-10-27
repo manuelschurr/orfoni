@@ -136,11 +136,15 @@ function registryFile(pid: number): string {
 	return join(dir, 'home/.claude/sessions', `${pid}.json`);
 }
 
+function writeStat(pid: number, startTime: string): void {
+	mkdirSync(join(dir, 'root/proc', String(pid)), { recursive: true });
+	writeFileSync(join(dir, 'root/proc', String(pid), 'stat'), `${pid} (claude) S 1 ${pid} 1 34821 ${pid} 4194304 0 0 0 0 0 0 0 0 20 0 11 0 ${startTime} 0 0\n`);
+}
+
 // A Claude Code session that orfoni did not start: its registry file, and its process with the start time the file records.
 function runOther(pid: number, fields: Record<string, unknown> = {}): void {
 	const procStart = String(pid * 10);
-	mkdirSync(join(dir, 'root/proc', String(pid)), { recursive: true });
-	writeFileSync(join(dir, 'root/proc', String(pid), 'stat'), `${pid} (claude) S 1 ${pid} 1 34821 ${pid} 4194304 0 0 0 0 0 0 0 0 20 0 11 0 ${procStart} 0 0\n`);
+	writeStat(pid, procStart);
 	mkdirSync(join(dir, 'home/.claude/sessions'), { recursive: true });
 	const entry = { pid, procStart, sessionId: OTHER, cwd: OTHER_PROJECT, name: 'swarm-73', nameSource: 'derived', status: 'idle', statusUpdatedAt: T0 - 1000, startedAt: T0 - 60_000, kind: 'interactive', tmux: 'swarm:@0.%14', ...fields };
 	writeFileSync(registryFile(pid), JSON.stringify(entry));
@@ -160,6 +164,23 @@ function otherLists(client: TestClient): OtherSession[][] {
 	return client.messages.flatMap((m) => (m.type === 'otherSessions' ? [m.sessions] : []));
 }
 
+// While the hub waits for a process to exit it reads /proc for real between fake pauses, so fake time moves on in small steps with real turns in between.
+async function step(ms: number): Promise<void> {
+	for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+		await vi.advanceTimersByTimeAsync(100);
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+}
+
+async function stepUntil(check: () => boolean, ms = 2000): Promise<void> {
+	for (let elapsed = 0; !check(); elapsed += 100) {
+		if (elapsed >= ms) throw new Error('condition never became true');
+		await vi.advanceTimersByTimeAsync(100);
+		const deadline = performance.now() + 20;
+		while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
+	}
+}
+
 async function untilRealTime(check: () => boolean): Promise<void> {
 	const deadline = performance.now() + 2000;
 	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
@@ -175,6 +196,7 @@ let transcript: SessionMessage[];
 let transcripts: Map<string, SessionMessage[]>;
 let apiKey: ApiKey;
 let summaryPrompts: string[];
+let kills: [number, NodeJS.Signals][];
 
 const summaryClient: SummaryClient = async ({ prompt }) => {
 	summaryPrompts.push(prompt);
@@ -197,6 +219,10 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
 		systemRoot: join(dir, 'root'),
 		claudeSessionsDir: join(dir, 'home/.claude/sessions'),
+		kill: (pid, signal) => {
+			kills.push([pid, signal]);
+			endOther(pid);
+		},
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -224,6 +250,7 @@ beforeEach(() => {
 	transcripts = new Map();
 	apiKey = { missing: 'no key in tests' };
 	summaryPrompts = [];
+	kills = [];
 	writeMeminfo(6 * GB);
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
@@ -845,6 +872,118 @@ describe('other sessions', () => {
 		await vi.advanceTimersByTimeAsync(5000);
 		await client.ok('listOtherSessions', {});
 		expect(logs.filter((line) => line.includes('4001.json'))).toHaveLength(1);
+	});
+});
+
+describe('portSession', () => {
+	const NOTES = '94917ae8-57a9-4474-abc5-f812984ab86d' as ClaudeSessionId;
+	const recordOnly = { kill: (pid: number, signal: NodeJS.Signals) => void kills.push([pid, signal]) };
+
+	function port(client: TestClient, pid: number, params: Partial<Params<'portSession'>> = {}): Promise<Response> {
+		return client.request('portSession', { pid, claudeSessionId: OTHER, ...params });
+	}
+
+	test('ends the session with SIGTERM, waits until it exits, then resumes its conversation in a new orfoni session under its name and in the requested mode', async () => {
+		runOther(4321);
+		const client = await startHub(fakeTmux(), recordOnly);
+		let response: Response | undefined;
+		void port(client, 4321, { permissionMode: 'auto' }).then((r) => (response = r));
+		await untilRealTime(() => kills.length > 0);
+		expect(kills).toEqual([[4321, 'SIGTERM']]);
+		await step(2000);
+		expect(fake.of('newSession')).toEqual([]);
+		expect(response).toBeUndefined();
+		endOther(4321);
+		await stepUntil(() => response !== undefined);
+		if (!response?.ok) throw new Error(`port failed: ${JSON.stringify(response)}`);
+		const { session } = response.result as Started;
+		const settings = join(dir, 'settings', `${session.id}.json`);
+		expect(fake.of('newSession')).toEqual([
+			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--permission-mode', 'auto']],
+		]);
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET));
+		expect(response.result).toEqual({
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null },
+			needsTrust: true,
+		});
+		expect(kills).toEqual([[4321, 'SIGTERM']]);
+	});
+
+	test('a session that is still running 10 s after SIGTERM fails the port with internal, and orfoni starts nothing', async () => {
+		runOther(4321);
+		const client = await startHub(fakeTmux(), recordOnly);
+		let response: Response | undefined;
+		void port(client, 4321).then((r) => (response = r));
+		await untilRealTime(() => kills.length > 0);
+		await step(9900);
+		expect(response).toBeUndefined();
+		await stepUntil(() => response !== undefined, 1000);
+		expect(response).toMatchObject({ ok: false, error: { code: 'internal' } });
+		expect(fake.of('newSession')).toEqual([]);
+		expect(await client.ok('listSessions', {})).toEqual([]);
+	});
+
+	test('a busy session is refused with not_ready and nothing is signalled', async () => {
+		runOther(4321, { status: 'busy' });
+		const client = await startHub();
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		expect(kills).toEqual([]);
+		expect(fake.of('newSession')).toEqual([]);
+	});
+
+	test('a session now on another conversation, as after a /clear since the list, is refused with not_found and nothing is signalled', async () => {
+		runOther(4321, { sessionId: NOTES });
+		const client = await startHub();
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(kills).toEqual([]);
+		expect(fake.of('newSession')).toEqual([]);
+	});
+
+	test('a process that is gone, a stale registry file, and a pid now used by another process are refused with not_found and nothing is signalled', async () => {
+		runOther(4322);
+		rmSync(join(dir, 'root/proc/4322'), { recursive: true });
+		runOther(4323);
+		writeStat(4323, '1');
+		const client = await startHub();
+		for (const pid of [4321, 4322, 4323]) expect(await port(client, pid)).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(kills).toEqual([]);
+		expect(fake.of('newSession')).toEqual([]);
+	});
+
+	test("an orfoni session's own Claude Code is refused with not_found and nothing is signalled", async () => {
+		const client = await startHub();
+		const { id, claude } = await start(client);
+		runOther(4001, { sessionId: claude, tmux: `orfoni-${id}:@0.%0` });
+		expect(await port(client, 4001, { claudeSessionId: claude })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(kills).toEqual([]);
+		expect(fake.of('newSession')).toHaveLength(1);
+	});
+
+	test('a second port of a session that is still being ported is refused with not_ready, and one orfoni session starts', async () => {
+		runOther(4321);
+		const client = await startHub(fakeTmux(), recordOnly);
+		let first: Response | undefined;
+		void port(client, 4321).then((r) => (first = r));
+		await untilRealTime(() => kills.length > 0);
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		endOther(4321);
+		await stepUntil(() => first !== undefined);
+		expect(first).toMatchObject({ ok: true });
+		expect(kills).toEqual([[4321, 'SIGTERM']]);
+		expect(fake.of('newSession')).toHaveLength(1);
+	});
+
+	test('by the time a port answers, every client has the new session and the other sessions without the ported one', async () => {
+		runOther(4321);
+		runOther(4322, { sessionId: NOTES, name: 'notes' });
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const response = await port(client, 4321);
+		if (!response.ok) throw new Error(`port failed: ${response.error.message}`);
+		const { session } = response.result as Started;
+		expect(other.session(session.id)).toMatchObject({ claudeSessionId: OTHER, title: 'swarm-73', projectDir: OTHER_PROJECT });
+		expect(otherLists(other).at(-1)).toEqual([otherSession(4322, { claudeSessionId: NOTES, name: 'notes' })]);
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id: session.id })]);
 	});
 });
 
