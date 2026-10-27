@@ -181,7 +181,9 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const tag = randomUUID().slice(0, 8);
 		const socket = `orfoni-e2e-outside-${tag}`;
 		const name = `outside-${tag}`;
-		const outside = (...args: string[]) => execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8' });
+		// The throwaway session must not inherit the Claude Code session that runs this suite, whose variables point at its own job and messaging files.
+		const env = Object.fromEntries(Object.entries(process.env).filter(([variable]) => !/^(CLAUDE|TMUX)/.test(variable)));
+		const outside = (...args: string[]) => execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8', env });
 		outside('new-session', '-d', '-s', name, '-x', '200', '-y', '50', '-c', TRUSTED_DIR, 'bash');
 		try {
 			const shell = outside('display-message', '-p', '-t', `=${name}:`, '#{pane_pid}').trim();
