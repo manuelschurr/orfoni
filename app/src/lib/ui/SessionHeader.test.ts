@@ -165,13 +165,20 @@ test('a model that reports no effort level shows no effort to change', async () 
 });
 
 test('a model and an effort level outside the known ones still show as Claude Code reports them, and the known ones switch away from them', async () => {
-	const { transport } = await header({ state: 'idle', model: { id: 'claude-mythos-1', name: 'Mythos 1' }, effort: 'ultra' });
+	const { transport, report } = await header({ state: 'idle', model: { id: 'claude-mythos-1', name: 'Mythos 1' }, effort: 'ultra' });
 	expect(chosen('Model')).toBe('Mythos 1');
 	expect(options('Model')).toEqual(['Mythos 1', 'Fable', 'Opus', 'Sonnet', 'Haiku']);
 	expect(chosen('Effort')).toBe('ultra');
 	expect(options('Effort')).toEqual(['ultra', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 	await pick('Model', 'opus');
 	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/model opus' }]);
+	expect(chosen('Model')).toBe('Mythos 1');
+
+	report({ model: opus, effort: 'high' });
+	expect(chosen('Model')).toBe('Opus 5.5');
+	expect(options('Model')).toEqual(['Fable', 'Opus 5.5', 'Sonnet', 'Haiku']);
+	expect(chosen('Effort')).toBe('High');
+	expect(options('Effort')).toEqual(['Low', 'Medium', 'High', 'Extra high', 'Max']);
 });
 
 test('memory above 80 percent of the limit is called out in words, not only in colour', async () => {
