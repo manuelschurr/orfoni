@@ -92,7 +92,7 @@ export interface Started {
 }
 
 export function tmux(...args: string[]): string {
-	return execFileSync('tmux', ['-L', 'orfoni', ...args], { encoding: 'utf8' });
+	return execFileSync('tmux', ['-L', process.env.ORFONI_TMUX_SOCKET ?? 'orfoni', ...args], { encoding: 'utf8' });
 }
 
 export function pane(sessionId: SessionId): string {
@@ -128,6 +128,16 @@ export async function until(check: () => boolean, timeoutMs = 30_000): Promise<v
 	while (!check()) {
 		if (Date.now() > deadline) throw new Error('condition never became true');
 		await sleep(250);
+	}
+}
+
+export async function eventually<T>(read: () => Promise<T>, done: (value: T) => boolean, timeoutMs = 120_000): Promise<T> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const value = await read();
+		if (done(value)) return value;
+		if (Date.now() > deadline) throw new Error('condition never became true');
+		await sleep(1000);
 	}
 }
 
