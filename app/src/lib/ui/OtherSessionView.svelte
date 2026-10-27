@@ -1,12 +1,15 @@
 <script lang="ts">
-	import type { OtherSession, PermissionMode } from '@orfoni/protocol';
+	import type { Effort, OtherSession, PermissionMode } from '@orfoni/protocol';
 	import type { HubClient, HubRequestError, Result } from '../hub-client.svelte';
 	import ChatView from './ChatView.svelte';
-	import { otherEnding, otherName, otherPlace, otherStatus } from './format';
+	import { otherEnding, otherName, otherPlace, otherStatus, type ModelAlias } from './format';
+	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
 
 	let { client, onported }: { client: HubClient; onported: (ported: Result<'portSession'>) => void } = $props();
 	let dialog: HTMLDialogElement | undefined = $state();
+	let model = $state<ModelAlias | ''>('');
+	let effort = $state<Effort | ''>('');
 	let permissionMode = $state<PermissionMode>('auto');
 	let porting = $state(false);
 	let error = $state<string | null>(null);
@@ -39,7 +42,7 @@
 		porting = true;
 		error = null;
 		try {
-			const ported = await client.port(view.session, permissionMode);
+			const ported = await client.port(view.session, { model: model || undefined, effort: effort || undefined, permissionMode });
 			dialog?.close();
 			onported(ported);
 		} catch (e) {
@@ -92,6 +95,7 @@
 			<h2 id="port-title">Port "{otherName(session)}" into orfoni?</h2>
 			<p>{otherEnding(session)} and continues the conversation here as a new orfoni session.</p>
 			<p>Anything typed there but not sent is lost. If the session is open on claude.ai, it disappears there and comes back once the new session starts.</p>
+			<ModelEffortFields bind:model bind:effort />
 			<PermissionModeField bind:value={permissionMode} />
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 			<div class="buttons">

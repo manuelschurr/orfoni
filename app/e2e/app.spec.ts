@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import type { HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
+import type { Effort, HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { OutsideSession } from './outside';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
@@ -21,7 +21,7 @@ test.afterEach(async () => {
 	hub.close();
 });
 
-async function startReady(params: { prompt?: string; title?: string; permissionMode?: PermissionMode } = {}): Promise<SessionSummary & { dir: string }> {
+async function startReady(params: { prompt?: string; title?: string; effort?: Effort; permissionMode?: PermissionMode } = {}): Promise<SessionSummary & { dir: string }> {
 	const dir = newProjectDir();
 	const { session, needsTrust } = await hub.start({ projectDir: dir, ...params });
 	if (needsTrust) await acceptTrustPrompt(session.id);
@@ -199,6 +199,20 @@ test('a summary shows on the row and in the header when the hub has an API key',
 	await expect(row).toContainText(summary.about);
 	await row.click();
 	await expect(page.getByRole('main').getByText(summary.status, { exact: true })).toBeVisible();
+});
+
+test('change the effort from the header and see the level Claude Code reports there', async ({ page }) => {
+	const session = await startReady({ title: 'effort check', effort: 'low' });
+	await openSession(page, session);
+	const main = page.getByRole('main');
+	const effort = main.getByRole('combobox', { name: 'Effort' });
+	await expect(effort).toHaveValue('low', { timeout: 60_000 });
+	await expect(main.getByRole('combobox', { name: 'Model' }).locator('option:checked')).toHaveText(/Haiku/);
+	await effort.selectOption('high');
+	await expect(effort).toHaveValue('high', { timeout: 30_000 });
+	await expect(effort.locator('option:checked')).toHaveText('High');
+	await expect(main.getByRole('status')).toHaveCount(0);
+	expect((await hub.sessions()).find((s) => s.id === session.id)?.effort).toBe('high');
 });
 
 test('remove a session', async ({ page }) => {

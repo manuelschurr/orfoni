@@ -9,7 +9,6 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
-	type PermissionMode,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
@@ -110,6 +109,25 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	return index === -1 ? [...chat, item] : chat.with(index, item);
 }
 
+// The settings the app changes with the slash command of the same name.
+export type Setting = 'model' | 'effort';
+
+// A change sent to a session. `from` is what Claude Code reported when it was sent, and any other report settles the change, so the app never shows a value before Claude Code reports it.
+export interface Change {
+	sessionId: SessionId;
+	setting: Setting;
+	to: string;
+	from: string | null;
+	phase: 'sending' | 'sent' | 'unreported';
+}
+
+// Claude Code's status line reports to the hub every 10 seconds, so a change it has not reported after three of those most likely did not take effect.
+const REPORT_WAIT_MS = 30_000;
+
+function reported(session: SessionSummary, setting: Setting): string | null {
+	return setting === 'model' ? (session.model?.id ?? null) : session.effort;
+}
+
 // The session outside orfoni on screen. `session` follows the hub's list and keeps its last state once the session ends. `chat` belongs to the conversation in `session`, or is undefined while that loads.
 export interface OtherView {
 	session: OtherSession;
@@ -139,6 +157,7 @@ export class HubClient {
 	problem = $state<string | null>(null);
 	others = $state.raw<OtherSession[]>([]);
 	other = $state.raw<OtherView | null>(null);
+	changes = $state.raw<Change[]>([]);
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
@@ -187,6 +206,21 @@ export class HubClient {
 		await this.request('send', { sessionId, text });
 	}
 
+	// Sends /model or /effort as if typed in the terminal.
+	async change(sessionId: SessionId, setting: Setting, to: string): Promise<void> {
+		const session = this.sessions.get(sessionId);
+		const sending: Change = { sessionId, setting, to, from: session ? reported(session, setting) : null, phase: 'sending' };
+		this.changes = [...this.changes.filter((change) => change.sessionId !== sessionId || change.setting !== setting), sending];
+		try {
+			await this.send(sessionId, `/${setting} ${to}`);
+		} catch (error) {
+			this.replaceChange(sending, null);
+			throw error;
+		}
+		const sent: Change = { ...sending, phase: 'sent' };
+		if (this.replaceChange(sending, sent)) setTimeout(() => this.replaceChange(sent, { ...sent, phase: 'unreported' }), REPORT_WAIT_MS);
+	}
+
 	async decide(requestId: RequestId, decision: Decision): Promise<RequestOutcome> {
 		return (await this.request('decide', { requestId, decision })).outcome;
 	}
@@ -207,8 +241,8 @@ export class HubClient {
 		return this.request('startSession', params);
 	}
 
-	port(other: OtherSession, permissionMode: PermissionMode): Promise<Result<'portSession'>> {
-		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, permissionMode });
+	port(other: OtherSession, settings: Omit<Params<'portSession'>, 'pid' | 'claudeSessionId'>): Promise<Result<'portSession'>> {
+		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, ...settings });
 	}
 
 	async openShell(sessionId: SessionId): Promise<string> {
@@ -237,10 +271,26 @@ export class HubClient {
 		this.pending.clear();
 	}
 
+	private setSessions(sessions: Map<SessionId, SessionSummary>): void {
+		this.sessions = sessions;
+		const waiting = this.changes.filter((change) => {
+			const session = sessions.get(change.sessionId);
+			return session !== undefined && reported(session, change.setting) === change.from;
+		});
+		if (waiting.length !== this.changes.length) this.changes = waiting;
+	}
+
+	// A newer change or a report may have replaced `current` meanwhile, and then it stays replaced.
+	private replaceChange(current: Change, next: Change | null): boolean {
+		if (!this.changes.includes(current)) return false;
+		this.changes = this.changes.flatMap((change) => (change !== current ? [change] : next ? [next] : []));
+		return true;
+	}
+
 	private async refresh(): Promise<void> {
 		const sessions = await this.request('listSessions', {});
 		this.problem = null;
-		this.sessions = new Map(sessions.map((session) => [session.id, session]));
+		this.setSessions(new Map(sessions.map((session) => [session.id, session])));
 		const { selected } = this;
 		// Chats of other sessions may have missed items while the connection was down.
 		this.chats = new Map([...this.chats].filter(([id]) => id === selected));
@@ -294,7 +344,7 @@ export class HubClient {
 		try {
 			const { session, chat } = await this.request('openSession', { sessionId });
 			const known = this.sessions.get(sessionId);
-			if (!known) this.sessions = new Map(this.sessions).set(sessionId, session);
+			if (!known) this.setSessions(new Map(this.sessions).set(sessionId, session));
 			const current = !known || known.claudeSessionId === session.claudeSessionId;
 			const since = loading.items.slice(Math.max(start, loading.clearedAt));
 			this.chats = new Map(this.chats).set(sessionId, since.reduce(upsert, current ? collapse(chat) : []));
@@ -331,7 +381,7 @@ export class HubClient {
 			case 'sessionUpdated': {
 				const { session } = message;
 				const known = this.sessions.get(session.id);
-				this.sessions = new Map(this.sessions).set(session.id, session);
+				this.setSessions(new Map(this.sessions).set(session.id, session));
 				if (!known || known.claudeSessionId === session.claudeSessionId) return;
 				if (this.chats.has(session.id)) this.chats = new Map(this.chats).set(session.id, []);
 				const loading = this.loading.get(session.id);
@@ -349,7 +399,7 @@ export class HubClient {
 				const { sessionId } = message;
 				const sessions = new Map(this.sessions);
 				sessions.delete(sessionId);
-				this.sessions = sessions;
+				this.setSessions(sessions);
 				const chats = new Map(this.chats);
 				chats.delete(sessionId);
 				this.chats = chats;

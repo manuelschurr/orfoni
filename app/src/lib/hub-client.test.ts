@@ -171,6 +171,23 @@ describe('HubClient', () => {
 		expect(client.chats.get(a1.id)).toEqual([finished, user('u1', 'next')]);
 	});
 
+	test('a model or effort change waits until Claude Code reports another value, which can arrive in the list after a reconnect', async () => {
+		const reporting: SessionSummary = { ...a1, model: { id: 'claude-opus-5-5', name: 'Opus 5.5' }, effort: 'xhigh' };
+		await connect([reporting]);
+		const changing = client.change(a1.id, 'effort', 'high');
+		expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/effort high' }]);
+		transport.respond('send', {});
+		await changing;
+		transport.push({ type: 'sessionUpdated', session: { ...reporting, memory: { currentBytes: 300 * 1024 ** 2, maxBytes: null, oomKills: 0 } } });
+		expect(client.changes).toEqual([{ sessionId: a1.id, setting: 'effort', to: 'high', from: 'xhigh', phase: 'sent' }]);
+
+		transport.status({ kind: 'reconnecting', attempt: 1, error: 'socket closed' });
+		transport.status({ kind: 'connected' });
+		transport.respond('listSessions', [{ ...reporting, effort: 'high' }]);
+		await settle();
+		expect(client.changes).toEqual([]);
+	});
+
 	test('a removed session leaves the list, its chat, and the selection', async () => {
 		await connect();
 		await open(a1, [user('u1', 'hello')]);
@@ -321,11 +338,11 @@ describe('HubClient with sessions outside orfoni', () => {
 		expect(client.other).toEqual({ session: swarm, chat: fromTmux, error: null });
 	});
 
-	test('porting names the process and its conversation with the permission mode, and answers with the new orfoni session', async () => {
+	test('porting names the process and its conversation with the model, effort, and permission mode, and answers with the new orfoni session', async () => {
 		await connectWithOthers();
 		const ported = session('p1', swarm.projectDir, 1500, 'working');
-		const porting = client.port(swarm, 'acceptEdits');
-		expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, permissionMode: 'acceptEdits' }]);
+		const porting = client.port(swarm, { model: 'sonnet', effort: 'high', permissionMode: 'acceptEdits' });
+		expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, model: 'sonnet', effort: 'high', permissionMode: 'acceptEdits' }]);
 		transport.respond('portSession', { session: ported, needsTrust: false });
 		expect(await porting).toEqual({ session: ported, needsTrust: false });
 	});
