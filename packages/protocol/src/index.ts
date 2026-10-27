@@ -31,6 +31,20 @@ export const HubStatus = z.object({
 });
 export type HubStatus = z.infer<typeof HubStatus>;
 
+// A Claude Code session that orfoni did not start, found in Claude Code's session registry. `tmux` is the tmux session it runs in, if any.
+export const OtherSession = z.object({
+	pid: z.number().int(),
+	claudeSessionId: ClaudeSessionId,
+	projectDir: z.string(),
+	name: z.string().nullable(),
+	status: z.enum(['idle', 'busy']),
+	statusSince: z.number(),
+	startedAt: z.number(),
+	tmux: z.string().nullable(),
+	background: z.boolean(),
+});
+export type OtherSession = z.infer<typeof OtherSession>;
+
 export const ProjectDir = z.object({ path: z.string(), lastActive: z.number().nullable() });
 export type ProjectDir = z.infer<typeof ProjectDir>;
 
@@ -114,6 +128,9 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('listProjectDirs') }),
 	z.object({ id, method: z.literal('hubStatus') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
+	z.object({ id, method: z.literal('listOtherSessions') }),
+	z.object({ id, method: z.literal('openOtherSession'), pid: z.number().int() }),
+	z.object({ id, method: z.literal('portSession'), pid: z.number().int(), claudeSessionId: ClaudeSessionId, permissionMode: PermissionMode.optional() }),
 ]);
 export type ClientRequest = z.infer<typeof ClientRequest>;
 
@@ -134,6 +151,7 @@ export const HubMessage = z.union([
 	z.object({ type: z.literal('sessionUpdated'), session: SessionSummary }),
 	z.object({ type: z.literal('chatItem'), sessionId: SessionId, item: ChatItem }),
 	z.object({ type: z.literal('sessionRemoved'), sessionId: SessionId }),
+	z.object({ type: z.literal('otherSessions'), sessions: z.array(OtherSession) }),
 ]);
 export type HubMessage = z.infer<typeof HubMessage>;
 

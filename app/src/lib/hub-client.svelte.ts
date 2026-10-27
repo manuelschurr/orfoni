@@ -1,6 +1,7 @@
 import {
 	HubStatus,
 	ChatItem,
+	OtherSession,
 	ProjectDir,
 	SessionSummary,
 	parseHubMessage,
@@ -31,6 +32,9 @@ const results = {
 	listProjectDirs: z.object({ dirs: z.array(ProjectDir) }),
 	removeSession: done,
 	hubStatus: HubStatus,
+	listOtherSessions: z.array(OtherSession),
+	openOtherSession: z.object({ session: OtherSession, chat: z.array(ChatItem) }),
+	portSession: z.object({ session: SessionSummary, needsTrust: z.boolean() }),
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 

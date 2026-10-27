@@ -102,3 +102,37 @@ describe('milestone 3 fields', () => {
 		expect(HubStatus.parse(status).summaries.problem).toBeNull();
 	});
 });
+
+describe('other sessions', () => {
+	const other = {
+		pid: 1172033,
+		claudeSessionId: 'dc5b988b-a782-4352-9056-0c133ae7370a',
+		projectDir: '/root/projects/swarm',
+		name: 'swarm-73',
+		status: 'idle',
+		statusSince: 1793011300000,
+		startedAt: 1793011223810,
+		tmux: 'swarm',
+		background: false,
+	};
+
+	test('the hub lists, opens, and ports sessions it did not start', () => {
+		expect(parseClientRequest('{"id":4,"method":"listOtherSessions"}')).toEqual({ id: 4, method: 'listOtherSessions' });
+		expect(parseClientRequest('{"id":5,"method":"openOtherSession","pid":1172033}')).toEqual({ id: 5, method: 'openOtherSession', pid: 1172033 });
+		expect(parseClientRequest(`{"id":6,"method":"portSession","pid":1172033,"claudeSessionId":"${other.claudeSessionId}","permissionMode":"auto"}`)).toEqual({
+			id: 6,
+			method: 'portSession',
+			pid: 1172033,
+			claudeSessionId: other.claudeSessionId,
+			permissionMode: 'auto',
+		});
+	});
+
+	test('porting names the conversation as well as the process, so a session that moved on is not ported', () => {
+		expect(() => parseClientRequest('{"id":6,"method":"portSession","pid":1172033}')).toThrow(ProtocolError);
+	});
+
+	test('the hub broadcasts the whole list of other sessions when it changes', () => {
+		expect(parseHubMessage(JSON.stringify({ type: 'otherSessions', sessions: [other] }))).toEqual({ type: 'otherSessions', sessions: [other] });
+	});
+});

@@ -180,6 +180,16 @@ The hub writes a summary when a turn finishes and when a session starts waiting 
 
 Sessions themselves run on Manuel's Claude subscription through the normal `claude` login, exactly as they do in Tabby today.
 
+## Other sessions
+
+Manuel also starts Claude Code outside orfoni: in Tabby's tmux, from Termius on the phone, as a fork, or as a background session. orfoni lists these as other sessions under their project folder and can port one in, which moves the conversation into an orfoni session with the chat, approvals, states, summaries, and memory limits that orfoni gives its own sessions. Over time everything is meant to move into orfoni (Manuel, 2026-10-27).
+
+The hub finds them in `~/.claude/sessions/`, where Claude Code keeps one JSON file per running session with its process ID, process start time, conversation ID, folder, name, idle or busy status, and tmux location. The hub reads the folder every 5 seconds, keeps entries whose process is alive with the recorded start time, leaves out orfoni's own sessions, and broadcasts the list when it changes. A file that does not parse is skipped, so a format change empties the list and breaks nothing else.
+
+An other session shows its name, where it runs, whether it is busy, and its chat read from the transcript, refreshed when a turn ends. It has no composer, no approval cards, and no terminal in orfoni, because those need orfoni's hooks or would disturb the pane it runs in.
+
+Porting checks that the session is idle and still on the same conversation, ends its process with SIGTERM, waits for it to exit, and resumes the conversation in a new orfoni session with `claude --resume=<id>`. A spike on 2026-10-27 showed the process exiting within 2 seconds with its transcript intact and its registry file removed, the pane returning to its shell, and the resumed session appending to the same transcript. Input typed into the old session but not sent is lost, and the session leaves claude.ai and comes back under the new process.
+
 ## Repository layout
 
 ```
@@ -196,6 +206,7 @@ Each milestone ends with a check on the real thing, not only tests.
 1. Hub core without a UI. Start and stop sessions in tmux, receive hooks, keep session states, send messages, answer approvals and questions, interrupt, and read history, driven by a small command-line client over SSH.
 2. Desktop app. SSH login with the key, the session list, the chat view, approvals and questions, the terminal and shell actions, and starting a session.
 3. Summaries, the task progress bar, memory per session, and read state.
+   - Other sessions: list the Claude Code sessions orfoni did not start, and port them in.
 4. Android. The phone layout, the terminal key row, key storage on the phone, and the Android build.
 
 ## Risks and open questions
@@ -211,6 +222,7 @@ Each milestone ends with a check on the real thing, not only tests.
 - The SDK is at version 0.3, and its earlier session API was removed (the "TypeScript SDK V2 session API (removed)" page). The hub uses only two reader functions, keeps them in one module, and pins the SDK version.
 - The terminal returns as a feature, with the lessons from v0: one reader per channel, the size set before attaching, the Unicode 11 widths add-on, and no shared lock between keystrokes and other work.
 - Android needs `russh` to cross-compile, a safe place for the SSH key, and Tauri's younger Android support to hold up.
+- The session registry in `~/.claude/sessions/` is an internal Claude Code file without documentation. orfoni reads it only to list and port other sessions, and a registry it cannot read leaves that list empty.
 
 ## Lessons from v0
 
