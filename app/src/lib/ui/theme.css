@@ -262,6 +262,15 @@ textarea {
 	animation: pulse 1.6s ease-in-out infinite;
 }
 
+.mark[data-status='waiting'] {
+	border-color: var(--state-needs);
+	background: var(--state-needs);
+}
+
+.mark[data-status='shell'] {
+	border-color: var(--state-working);
+}
+
 .mark[data-status='ended'] {
 	border-style: dashed;
 }

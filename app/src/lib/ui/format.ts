@@ -29,7 +29,7 @@ export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string
 	return prompt?.kind === 'user' ? firstLine(prompt.text) : 'Untitled session';
 }
 
-export const otherStatus: Record<OtherSession['status'], string> = { idle: 'Idle', busy: 'Busy' };
+export const otherStatus: Record<OtherSession['status'], string> = { idle: 'Idle', busy: 'Working', waiting: 'Waiting for you', shell: 'Shell running' };
 
 export function otherName(other: OtherSession): string {
 	return other.name || 'Untitled session';

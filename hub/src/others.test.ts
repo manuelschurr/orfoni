@@ -99,10 +99,32 @@ describe('Registry', () => {
 		expect(logs).toEqual([]);
 	});
 
-	test('a status other than idle reads as busy', async () => {
-		writeEntry(1172033, { status: 'waiting' });
+	// Claude Code 2.1.311 writes waiting with waitingFor while a prompt or a question waits in its terminal, and shell while a background shell runs.
+	test('waiting and shell keep their meaning, and any other status reads as busy', async () => {
+		const statuses = ['waiting', 'shell', 'busy', 'thinking'];
+		statuses.forEach((status, index) => {
+			writeEntry(1172030 + index, { status, startedAt: T - index });
+			writeProcess(1172030 + index, '66936127');
+		});
+		expect((await registry().read()).map(({ session }) => session.status)).toEqual(['waiting', 'shell', 'busy', 'busy']);
+	});
+
+	// Claude Code also registers a window whose session moved to the background, a pre-started spare process, and its daemon and workers. Its own agent list leaves those out.
+	test('records that are not sessions are skipped: a parked window, a spare process, a daemon, and a daemon worker', async () => {
+		writeEntry(1172031, { parkedJobId: 'job-1' });
+		writeEntry(1172032, { spare: true });
+		writeEntry(1172033, { kind: 'daemon' });
+		writeEntry(1172034, { kind: 'daemon-worker' });
+		writeEntry(1172035, { kind: 'bg', tmux: null });
+		for (const pid of [1172031, 1172032, 1172033, 1172034, 1172035]) writeProcess(pid, '66936127');
+		expect((await registry().read()).map(({ session }) => session.pid)).toEqual([1172035]);
+	});
+
+	test('a file whose name is not its own pid is skipped, so one process is never listed twice', async () => {
+		writeEntry(1172033);
 		writeProcess(1172033, '66936127');
-		expect((await registry().read())[0]?.session.status).toBe('busy');
+		writeFileSync(join(dir, '999.json'), readFileSync(join(dir, '1172033.json')));
+		expect((await registry().read()).map(({ session }) => session.pid)).toEqual([1172033]);
 	});
 
 	test('an entry whose process is gone, or whose pid now belongs to a process with another start time, is skipped', async () => {

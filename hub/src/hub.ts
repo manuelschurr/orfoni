@@ -39,6 +39,11 @@ const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
+const NOT_IDLE: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
+	busy: 'is working',
+	waiting: 'waits for an answer in its terminal',
+	shell: 'runs a shell command Claude started',
+};
 
 export interface HubOptions {
 	tmux: Tmux;
@@ -160,7 +165,7 @@ export class Hub {
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
-	private readonly porting = new Set<number>();
+	private readonly porting = new Set<ClaudeSessionId>();
 	private readonly summarizer: Summarizer;
 
 	private constructor(
@@ -316,12 +321,18 @@ export class Hub {
 
 	private async port(request: Extract<ClientRequest, { method: 'portSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const { pid, claudeSessionId, permissionMode } = request;
-		if (this.porting.has(pid)) throw new HubError('not_ready', `session ${pid} is being ported already`);
-		this.porting.add(pid);
+		if (this.porting.has(claudeSessionId)) throw new HubError('not_ready', `conversation ${claudeSessionId} is being ported already`);
+		this.porting.add(claudeSessionId);
 		try {
-			const other = await this.other(pid);
+			const others = await this.refreshOthers();
+			const other = others.find(({ session }) => session.pid === pid);
+			if (!other) throw new HubError('not_found', `no other session runs as process ${pid}`);
 			if (other.session.claudeSessionId !== claudeSessionId) throw new HubError('not_found', `session ${pid} is on another conversation now`);
-			if (other.session.status === 'busy') throw new HubError('not_ready', `session ${pid} is busy`);
+			// A background session runs under Claude Code's daemon, which may start it again once ended from outside, and no check has tried that yet.
+			if (other.session.background) throw new HubError('not_ready', `session ${pid} is a background session, and orfoni does not port background sessions yet`);
+			if (other.session.status !== 'idle') throw new HubError('not_ready', `session ${pid} ${NOT_IDLE[other.session.status]}`);
+			const holders = others.filter(({ session }) => session.claudeSessionId === claudeSessionId).length;
+			if (holders > 1) throw new HubError('not_ready', `conversation ${claudeSessionId} is open in ${holders} Claude Code processes, so orfoni cannot tell which one to end`);
 			try {
 				this.options.kill(pid, 'SIGTERM');
 			} catch (error) {
@@ -336,7 +347,7 @@ export class Hub {
 			await this.refreshOthers();
 			return ported;
 		} finally {
-			this.porting.delete(pid);
+			this.porting.delete(claudeSessionId);
 		}
 	}
 

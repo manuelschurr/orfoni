@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PermissionMode } from '@orfoni/protocol';
+	import type { OtherSession, PermissionMode } from '@orfoni/protocol';
 	import type { HubClient, HubRequestError, Result } from '../hub-client.svelte';
 	import ChatView from './ChatView.svelte';
 	import { otherEnding, otherName, otherPlace, otherStatus } from './format';
@@ -12,7 +12,15 @@
 	let error = $state<string | null>(null);
 	const view = $derived(client.other);
 	const ended = $derived(view !== null && !client.others.some((other) => other.pid === view.session.pid));
-	const busy = $derived(!ended && view?.session.status === 'busy');
+	const reasons: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
+		busy: 'Claude is working in this session. You can port it once the turn ends.',
+		waiting: 'This session waits for an answer in its terminal. Answer it there, then port it.',
+		shell: 'A shell command Claude started still runs in this session. You can port it once that command ends.',
+	};
+	// Ending a background session from outside may make Claude Code's daemon start it again, which no check has tried yet.
+	const blocked = $derived(
+		ended || !view ? null : view.session.background ? 'orfoni does not port background sessions yet.' : view.session.status === 'idle' ? null : reasons[view.session.status],
+	);
 	// A port keeps the conversation ID, so an orfoni session that holds it is where this session went.
 	const continued = $derived(ended && view ? [...client.sessions.values()].find((session) => session.claudeSessionId === view.session.claudeSessionId) : undefined);
 	const refusals: Partial<Record<HubRequestError['code'], string>> = {
@@ -61,13 +69,13 @@
 				</p>
 			{:else if ended}
 				<p class="note">This session is no longer running. Its conversation stays in Claude Code's history for this folder.</p>
-			{:else if busy}
-				<p class="note" id="port-reason">Claude is working in this session. You can port it once the turn ends.</p>
+			{:else if blocked}
+				<p class="note" id="port-reason">{blocked}</p>
 			{/if}
 		</div>
 		{#if !ended}
 			<div class="actions">
-				<button class="btn btn-primary" disabled={busy} aria-describedby={busy ? 'port-reason' : undefined} onclick={openDialog}>Port into orfoni</button>
+				<button class="btn btn-primary" disabled={blocked !== null} aria-describedby={blocked ? 'port-reason' : undefined} onclick={openDialog}>Port into orfoni</button>
 			</div>
 		{/if}
 	</header>

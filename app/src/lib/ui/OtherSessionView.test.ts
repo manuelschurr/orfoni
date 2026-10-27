@@ -74,13 +74,25 @@ test('the port dialog says what happens where the session runs now, starts on Au
 	expect(dialog.hasAttribute('open')).toBe(false);
 });
 
-test('the port dialog says how a background session and one outside tmux end', async () => {
-	const background = await shown({ ...swarm, background: true, tmux: null });
-	expect((await openPortDialog()).textContent).toContain('orfoni ends this background session and continues the conversation here as a new orfoni session.');
-	background.unmount();
-
+test('the port dialog says how a session outside tmux ends', async () => {
 	await shown({ ...swarm, tmux: null });
 	expect((await openPortDialog()).textContent).toContain('orfoni ends Claude Code in the terminal where it runs now and continues the conversation here as a new orfoni session.');
+});
+
+test('a session waiting for an answer in its terminal, or running a shell command, cannot be ported yet, and says why', async () => {
+	const waiting = await shown({ ...swarm, status: 'waiting' });
+	expect(screen.getByText('Waiting for you')).toBeTruthy();
+	expect((screen.getByRole('button', { name: 'Port into orfoni', description: 'This session waits for an answer in its terminal. Answer it there, then port it.' }) as HTMLButtonElement).disabled).toBe(true);
+	waiting.unmount();
+
+	await shown({ ...swarm, status: 'shell' });
+	expect(screen.getByText('Shell running')).toBeTruthy();
+	expect((screen.getByRole('button', { name: 'Port into orfoni', description: 'A shell command Claude started still runs in this session. You can port it once that command ends.' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test('a background session cannot be ported yet, and says so', async () => {
+	await shown({ ...swarm, background: true, tmux: null });
+	expect((screen.getByRole('button', { name: 'Port into orfoni', description: 'orfoni does not port background sessions yet.' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test('a port the hub refuses says why, keeps the dialog open, and opens nothing', async () => {

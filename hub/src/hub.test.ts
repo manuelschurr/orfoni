@@ -962,6 +962,30 @@ describe('portSession', () => {
 		expect(await client.ok('listSessions', {})).toEqual([expect.objectContaining({ claudeSessionId: OTHER, projectDir: OTHER_PROJECT, title: 'swarm-73', state: 'offline' })]);
 	});
 
+	test('a background session is refused with not_ready and nothing is signalled, since ending one from outside is untested', async () => {
+		runOther(4321, { kind: 'bg', tmux: null });
+		const client = await startHub();
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('background') } });
+		expect(kills).toEqual([]);
+	});
+
+	test('a session waiting on an answer in its terminal, or running a background shell, is refused with not_ready and nothing is signalled', async () => {
+		runOther(4321, { status: 'waiting' });
+		runOther(4322, { status: 'shell', sessionId: '9b0c5d0e-0000-4000-8000-000000000001' });
+		const client = await startHub();
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		expect(await port(client, 4322, { claudeSessionId: '9b0c5d0e-0000-4000-8000-000000000001' as ClaudeSessionId })).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		expect(kills).toEqual([]);
+	});
+
+	test('a conversation open in two processes is refused with not_ready and nothing is signalled', async () => {
+		runOther(4321);
+		runOther(4322);
+		const client = await startHub();
+		expect(await port(client, 4321)).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('2') } });
+		expect(kills).toEqual([]);
+		expect(fake.of('newSession')).toEqual([]);
+	});
 
 	test('a busy session is refused with not_ready and nothing is signalled', async () => {
 		runOther(4321, { status: 'busy' });

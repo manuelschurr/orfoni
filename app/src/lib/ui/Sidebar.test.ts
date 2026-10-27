@@ -94,7 +94,7 @@ test('a row outside orfoni shows its name or Untitled session, where it runs, an
 	);
 	render(Sidebar, { client, onnew: () => {} });
 	expect(words(row(/swarm-73/))).toBe('swarm-73 Idle, tmux swarm 2 h');
-	expect(words(row(/Untitled session/))).toBe('Untitled session Busy, background now');
+	expect(words(row(/Untitled session/))).toBe('Untitled session Working, background now');
 	expect(words(row(/notes/))).toBe('notes Idle, no tmux 5 min');
 });
 

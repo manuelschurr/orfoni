@@ -1,11 +1,11 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { ClaudeSessionId, type OtherSession } from '@orfoni/protocol';
 import { z } from 'zod';
 
 // Claude Code's session registry is undocumented, so orfoni reads only these fields and skips an entry that does not parse.
 const Entry = z.object({
-	pid: z.number().int(),
+	pid: z.number().int().positive(),
 	procStart: z.string(),
 	sessionId: ClaudeSessionId,
 	cwd: z.string(),
@@ -15,7 +15,13 @@ const Entry = z.object({
 	startedAt: z.number(),
 	kind: z.string().optional(),
 	tmux: z.string().nullish(),
+	parkedJobId: z.string().nullish(),
+	spare: z.boolean().optional(),
 });
+
+// Claude Code also registers a window whose session moved to the background, a pre-started spare process, and its daemon and workers, none of them a session of their own.
+const SESSION_KINDS = new Set(['interactive', 'bg']);
+const KEPT_STATUSES = new Set<string>(['idle', 'waiting', 'shell'] satisfies OtherSession['status'][]);
 
 export interface OtherProcess {
 	session: OtherSession;
@@ -71,7 +77,8 @@ export class Registry {
 			this.report(path, `orfoni-hub: skipped ${path}, which is not a session entry orfoni knows: ${z.prettifyError(entry.error)}`);
 			return null;
 		}
-		const { pid, procStart, sessionId, cwd, name, status, statusUpdatedAt, startedAt, kind, tmux } = entry.data;
+		const { pid, procStart, sessionId, cwd, name, status, statusUpdatedAt, startedAt, kind, tmux, parkedJobId, spare } = entry.data;
+		if (!SESSION_KINDS.has(kind ?? '') || parkedJobId || spare || basename(path) !== `${pid}.json`) return null;
 		if (!(await this.running(pid, procStart))) return null;
 		return {
 			session: {
@@ -79,7 +86,7 @@ export class Registry {
 				claudeSessionId: sessionId,
 				projectDir: cwd,
 				name: name ?? null,
-				status: status === 'idle' ? 'idle' : 'busy',
+				status: status !== undefined && KEPT_STATUSES.has(status) ? (status as OtherSession['status']) : 'busy',
 				statusSince: statusUpdatedAt ?? startedAt,
 				startedAt,
 				tmux: tmux?.split(':')[0] || null,

@@ -37,7 +37,7 @@ export const OtherSession = z.object({
 	claudeSessionId: ClaudeSessionId,
 	projectDir: z.string(),
 	name: z.string().nullable(),
-	status: z.enum(['idle', 'busy']),
+	status: z.enum(['idle', 'busy', 'waiting', 'shell']),
 	statusSince: z.number(),
 	startedAt: z.number(),
 	tmux: z.string().nullable(),
