@@ -9,6 +9,7 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
+	type PermissionMode,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
@@ -96,6 +97,13 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	return index === -1 ? [...chat, item] : chat.with(index, item);
 }
 
+// The session outside orfoni that is on screen. `session` follows the hub's list and keeps its last state once the session ends, and `chat` always belongs to its conversation.
+export interface OtherView {
+	session: OtherSession;
+	chat: ChatItem[] | undefined;
+	error: string | null;
+}
+
 interface Pending {
 	method: Method;
 	resolve(result: unknown): void;
@@ -116,12 +124,15 @@ export class HubClient {
 	selected = $state<SessionId | null>(null);
 	openError = $state<string | null>(null);
 	problem = $state<string | null>(null);
+	others = $state.raw<OtherSession[]>([]);
+	other = $state.raw<OtherView | null>(null);
 	projects = $derived(groupProjects(this.sessions.values()));
 
 	private readonly transport: HubTransport;
 	private nextId = 1;
 	private readonly pending = new Map<number, Pending>();
 	private readonly loading = new Map<SessionId, Loading>();
+	private otherLoads = 0;
 
 	constructor(transport: HubTransport) {
 		this.transport = transport;
@@ -143,8 +154,18 @@ export class HubClient {
 
 	select(sessionId: SessionId | null): Promise<void> {
 		this.selected = sessionId;
+		this.other = null;
 		this.openError = null;
 		return sessionId === null ? Promise.resolve() : this.open(sessionId);
+	}
+
+	openOther(pid: number): Promise<void> {
+		const session = this.others.find((other) => other.pid === pid);
+		if (!session) return Promise.reject(new HubRequestError('not_found', `No session with process ${pid} runs outside orfoni.`));
+		this.selected = null;
+		this.openError = null;
+		this.other = { session, chat: undefined, error: null };
+		return this.loadOther();
 	}
 
 	async send(sessionId: SessionId, text: string): Promise<void> {
@@ -171,6 +192,10 @@ export class HubClient {
 
 	startSession(params: Params<'startSession'>): Promise<Result<'startSession'>> {
 		return this.request('startSession', params);
+	}
+
+	port(other: OtherSession, permissionMode: PermissionMode): Promise<Result<'portSession'>> {
+		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, permissionMode });
 	}
 
 	async openShell(sessionId: SessionId): Promise<string> {
@@ -206,9 +231,45 @@ export class HubClient {
 		const { selected } = this;
 		// Chats of other sessions may have missed items while the connection was down.
 		this.chats = new Map([...this.chats].filter(([id]) => id === selected));
-		if (selected === null) return;
-		if (this.sessions.has(selected)) await this.open(selected);
-		else await this.select(null);
+		const reopen = selected === null ? undefined : this.sessions.has(selected) ? this.open(selected) : this.select(null);
+		await Promise.all([reopen, this.listOthers()]);
+	}
+
+	// Asked only after listSessions succeeded, so a failure here is not cleared by that success.
+	private async listOthers(): Promise<void> {
+		try {
+			this.updateOthers(await this.request('listOtherSessions', {}));
+		} catch (error) {
+			if (this.status.kind === 'connected') this.problem = `Listing the sessions outside orfoni failed: ${(error as Error).message}`;
+		}
+	}
+
+	// The shown chat is read again when a turn starts or ends, after a /clear, and after a failed load.
+	private updateOthers(others: OtherSession[]): void {
+		this.others = others;
+		const view = this.other;
+		const listed = view && others.find((other) => other.pid === view.session.pid);
+		if (!view || !listed) return;
+		const sameConversation = listed.claudeSessionId === view.session.claudeSessionId;
+		this.other = { ...view, session: listed, chat: sameConversation ? view.chat : undefined };
+		if (!sameConversation || listed.statusSince !== view.session.statusSince || view.error !== null) this.loadOther().catch(() => {});
+	}
+
+	// Only the newest load may land, and only on the conversation still shown, since the hub answers requests in any order.
+	private async loadOther(): Promise<void> {
+		if (!this.other) return;
+		const { pid } = this.other.session;
+		const load = ++this.otherLoads;
+		const shown = () => (load === this.otherLoads && this.other?.session.pid === pid ? this.other : null);
+		try {
+			const { session, chat } = await this.request('openOtherSession', { pid });
+			const view = shown();
+			if (view && view.session.claudeSessionId === session.claudeSessionId) this.other = { ...view, chat: collapse(chat), error: null };
+		} catch (error) {
+			const view = shown();
+			if (view) this.other = { ...view, error: (error as Error).message };
+			throw error;
+		}
 	}
 
 	private async open(sessionId: SessionId): Promise<void> {
@@ -281,6 +342,9 @@ export class HubClient {
 				if (this.selected === sessionId) this.selected = null;
 				return;
 			}
+			case 'otherSessions':
+				this.updateOthers(message.sessions);
+				return;
 		}
 	}
 }

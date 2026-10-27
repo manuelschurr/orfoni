@@ -33,7 +33,9 @@ export class FakeTransport implements HubTransport {
 		this.closed = true;
 	}
 
+	// Requests sent before the link dropped never get an answer.
 	status(status: ConnectionStatus): void {
+		if (status.kind !== 'connected') for (const { id } of this.sent) this.answered.add(id);
 		for (const listener of this.statusListeners) listener(status);
 	}
 
