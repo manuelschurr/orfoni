@@ -68,6 +68,8 @@ The settings button at the bottom of the session list opens the settings again. 
 
 Each session in the list shows its summary under the title, its task progress such as `3/7`, and its memory once that passes 1 GB or a process in it was killed for using too much. A bold title marks an answer you have not opened yet. The open session's header shows where it stands, a task bar, and its memory against the session's limit. The bar at the bottom of the list shows the server's free memory and whether summaries are on, with today's spend. The window title reads `orfoni (n)`, where n counts the sessions that wait on you or have an answer you have not opened.
 
+Sessions you started outside orfoni, in Tabby's tmux, from Termius, or as a background session, show under their folder below orfoni's own, in a quieter style with where they run. orfoni finds them in Claude Code's session registry in `~/.claude/sessions/`, an internal Claude Code file, so a Claude Code update can empty that list without breaking anything else. Opening one shows its chat read-only. Port into orfoni ends Claude Code where it runs and continues the conversation as an orfoni session with everything an orfoni session has. It refuses a session that is busy or has moved on to another conversation, and anything typed there but not sent is lost.
+
 ## Develop
 
 ```sh
