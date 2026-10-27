@@ -1,0 +1,67 @@
+import { render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
+import { afterEach, expect, test, vi } from 'vitest';
+import { connectedClient } from '../testing';
+import StatusBar from './StatusBar.svelte';
+
+const GB = 1024 ** 3;
+
+function hubStatus(availableGb: number, enabled: boolean, spentTodayUsd: number) {
+	return { memory: { availableBytes: availableGb * GB, totalBytes: 11.7 * GB }, summaries: { enabled, spentTodayUsd } };
+}
+
+async function settle(): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await tick();
+}
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+test('once connected, the status bar shows the memory free on the VPS and what summaries cost today', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, true, 0.37));
+	await settle();
+	expect(screen.getByText('4.2 GB of 11.7 GB free on the VPS')).toBeTruthy();
+	expect(screen.getByText('Summaries on, $0.37 today')).toBeTruthy();
+	expect(screen.getByText('Connected')).toBeTruthy();
+});
+
+test('the VPS memory and the summary spend refresh every 30 seconds, and go away while the hub is unreachable', async () => {
+	vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, true, 0.37));
+	await settle();
+	vi.advanceTimersByTime(29_000);
+	expect(transport.requests('hubStatus')).toHaveLength(1);
+	vi.advanceTimersByTime(1_000);
+	transport.respond('hubStatus', hubStatus(2.5, true, 0.41));
+	await settle();
+	expect(screen.getByText('2.5 GB of 11.7 GB free on the VPS')).toBeTruthy();
+	expect(screen.getByText('Summaries on, $0.41 today')).toBeTruthy();
+
+	transport.status({ kind: 'reconnecting', attempt: 1, error: 'connection reset' });
+	await settle();
+	expect(screen.queryByText(/free on the VPS/)).toBeNull();
+	vi.advanceTimersByTime(60_000);
+	expect(transport.requests('hubStatus')).toHaveLength(2);
+});
+
+test('summaries without an API key read as off', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, false, 0));
+	await settle();
+	expect(screen.getByText('Summaries off')).toBeTruthy();
+});
+
+test('a hub that cannot answer hubStatus leaves the status bar as it was, with no problem shown', async () => {
+	const { client, transport } = await connectedClient([]);
+	const { container } = render(StatusBar, { client });
+	transport.fail('hubStatus', 'bad_message', 'unknown method');
+	await settle();
+	expect(container.textContent?.replace(/\s+/g, ' ').trim()).toBe('Connected');
+});
