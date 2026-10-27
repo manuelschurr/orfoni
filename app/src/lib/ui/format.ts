@@ -14,6 +14,11 @@ export function needsYou(state: SessionStateKind): boolean {
 	return state === 'needs_approval' || state === 'needs_answer';
 }
 
+export function windowTitle(sessions: Iterable<SessionSummary>): string {
+	const waiting = [...sessions].filter((session) => needsYou(session.state) || session.state === 'answered').length;
+	return waiting > 0 ? `orfoni (${waiting})` : 'orfoni';
+}
+
 function firstLine(text: string): string {
 	return text.trim().split('\n', 1)[0] ?? '';
 }

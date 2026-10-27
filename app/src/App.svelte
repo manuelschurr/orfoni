@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { SessionId, SessionSummary } from '@orfoni/protocol';
+	import { isTauri } from '@tauri-apps/api/core';
+	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { onMount } from 'svelte';
 	import { createTransports } from './lib/connect';
 	import { HubClient } from './lib/hub-client.svelte';
@@ -8,7 +10,7 @@
 	import type { TerminalTransport } from './lib/transport';
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
-	import { folderName, sessionTitle } from './lib/ui/format';
+	import { folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
 	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
@@ -35,6 +37,7 @@
 	const session = $derived(client?.selected ? client.sessions.get(client.selected) : undefined);
 	const trustHint = $derived(session !== undefined && untrusted.includes(session.id) && (client?.chats.get(session.id)?.length ?? 0) === 0);
 	const step = $derived(setup?.step);
+	const title = $derived(windowTitle(client?.sessions.values() ?? []));
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
 
 	onMount(() => {
@@ -54,6 +57,11 @@
 			void setup.start();
 		}
 		return () => hub.close();
+	});
+
+	$effect(() => {
+		document.title = title;
+		if (isTauri()) getCurrentWindow().setTitle(title).catch((error: unknown) => console.warn('set_title', error));
 	});
 
 	function started(created: SessionSummary, needsTrust: boolean): void {
