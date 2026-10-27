@@ -14,6 +14,11 @@ export function needsYou(state: SessionStateKind): boolean {
 	return state === 'needs_approval' || state === 'needs_answer';
 }
 
+export function windowTitle(sessions: Iterable<SessionSummary>): string {
+	const waiting = [...sessions].filter((session) => needsYou(session.state) || session.state === 'answered').length;
+	return waiting > 0 ? `orfoni (${waiting})` : 'orfoni';
+}
+
 function firstLine(text: string): string {
 	return text.trim().split('\n', 1)[0] ?? '';
 }
@@ -26,6 +31,25 @@ export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string
 
 export function folderName(dir: string): string {
 	return dir.replace(/\/+$/, '').split('/').pop() || dir;
+}
+
+const GB = 1024 ** 3;
+const MB = 1024 ** 2;
+
+export function bytes(value: number): string {
+	return value >= GB ? `${(value / GB).toFixed(1)} GB` : `${Math.round(value / MB)} MB`;
+}
+
+export function tasksDone(tasks: { done: number; total: number }): string {
+	return `${tasks.done} of ${tasks.total} tasks done`;
+}
+
+export function oomKills(count: number): string {
+	return `killed for using too much memory ${count === 1 ? 'once' : `${count} times`}`;
+}
+
+export function rowMemory(memory: SessionSummary['memory']): string | null {
+	return memory && (memory.currentBytes > GB || memory.oomKills > 0) ? bytes(memory.currentBytes) : null;
 }
 
 export function relativeTime(since: number, now: number): string {

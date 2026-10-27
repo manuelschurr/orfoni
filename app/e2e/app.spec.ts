@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import type { PermissionMode, SessionSummary } from '@orfoni/protocol';
+import type { HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
 
@@ -67,6 +67,7 @@ test('the session list loads', async ({ page }) => {
 
 test('start a session and see the reply as a bubble', async ({ page }) => {
 	await page.goto(APP);
+	await expect(page.getByRole('status').getByText('Connected', { exact: true })).toBeVisible();
 	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
 	const dialog = page.getByRole('dialog', { name: 'New session' });
 	await dialog.getByLabel('Folder', { exact: true }).fill(newProjectDir());
@@ -170,6 +171,32 @@ test('a prompt typed in the terminal shows up in the chat', async ({ page }) => 
 	} finally {
 		screen.close();
 	}
+});
+
+test('task progress and memory show on the row, in the header, and in the status bar', async ({ page }) => {
+	const session = await startReady({
+		prompt: 'Use the TaskCreate tool to create two tasks, one named alpha and one named beta. Then use the TaskUpdate tool to mark alpha as completed. Do not work on beta. Then reply with exactly: tasks set',
+	});
+	await openSession(page, session);
+	await expect(claude(page).last()).toContainText('tasks set', { timeout: REPLY_MS });
+	await expect(page.locator(`[data-session="${session.id}"]`)).toContainText('1/2');
+	await expect(page.getByRole('main').getByRole('progressbar', { name: 'Tasks' })).toHaveAttribute('aria-valuetext', '1 of 2 tasks done');
+	await expect(page.getByRole('main').getByText(/^[\d.]+ (MB|GB)( of [\d.]+ GB)?$/)).toBeVisible();
+	await expect(page.getByRole('navigation').getByText(/^[\d.]+ (MB|GB) of [\d.]+ GB free on the VPS$/)).toBeVisible();
+});
+
+test('a summary shows on the row and in the header when the hub has an API key', async ({ page }) => {
+	const status = (await hub.request('hubStatus', {})) as HubStatus;
+	test.skip(!status.summaries.enabled, 'the hub has no API key, so it writes no summaries');
+	const session = await startReady({ prompt: 'Reply with exactly: summary check 3' });
+	const { summary } = await hub.waitForSession(session.id, (s) => s.summary !== null, 0, REPLY_MS);
+	if (!summary) throw new Error('unreachable');
+	await page.goto(APP);
+	await expect(page.getByRole('navigation').getByText(/^Summaries on, \$\d+\.\d\d today$/)).toBeVisible();
+	const row = page.locator(`[data-session="${session.id}"]`);
+	await expect(row).toContainText(summary.about);
+	await row.click();
+	await expect(page.getByRole('main').getByText(summary.status, { exact: true })).toBeVisible();
 });
 
 test('remove a session', async ({ page }) => {

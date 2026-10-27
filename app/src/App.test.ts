@@ -1,4 +1,4 @@
-import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
+import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeAll, expect, test } from 'vitest';
 import App from './App.svelte';
@@ -18,6 +18,7 @@ function inTauri(handle: Handler): string[] {
 	const commands: string[] = [];
 	let push: (message: unknown) => void = () => {};
 	mockIPC(() => null);
+	mockWindows('main');
 	globals.isTauri = true;
 	globals.__TAURI_INTERNALS__.invoke = async (cmd, args = {}) => {
 		commands.push(cmd);
@@ -94,4 +95,41 @@ test('in Tauri, an unknown host key is asked about, and trusting it connects', a
 	await fireEvent.click(screen.getByRole('button', { name: 'Trust and connect' }));
 	expect(await screen.findByRole('navigation', { name: 'Sessions' })).toBeTruthy();
 	expect(commands.filter((cmd) => cmd === 'connect')).toHaveLength(2);
+});
+
+test('the window title counts the sessions that need you or have an unread answer, in the page and the native window', async () => {
+	const titles: string[] = [];
+	let hubLine: (message: unknown) => void = () => {};
+	inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				hubLine = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string };
+				if (request.method === 'listSessions') {
+					const sessions = [summary('a1', 'needs_approval'), summary('a2', 'answered'), summary('a3', 'idle'), summary('a4', 'working'), summary('a5', 'needs_answer')];
+					hubLine({ type: 'response', id: request.id, ok: true, result: sessions });
+				}
+				return null;
+			}
+			case 'plugin:window|set_title':
+				titles.push(`${String(args.label)}: ${String(args.value)}`);
+				return null;
+			default:
+				return null;
+		}
+	});
+	render(App);
+	await waitFor(() => expect(document.title).toBe('orfoni (3)'));
+	await waitFor(() => expect(titles.at(-1)).toBe('main: orfoni (3)'));
+
+	hubLine({ type: 'sessionUpdated', session: summary('a2', 'idle', { stateSince: 2000 }) });
+	hubLine({ type: 'sessionUpdated', session: summary('a1', 'working', { stateSince: 2000 }) });
+	hubLine({ type: 'sessionUpdated', session: summary('a5', 'working', { stateSince: 2000 }) });
+	await waitFor(() => expect(document.title).toBe('orfoni'));
+	await waitFor(() => expect(titles.at(-1)).toBe('main: orfoni'));
 });
