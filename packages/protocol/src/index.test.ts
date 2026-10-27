@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, HubStatus, parseClientRequest, parseHubMessage, ProtocolError, type HubMessage } from './index.js';
+import { ClaudeSessionId, HubStatus, parseClientRequest, parseHubMessage, ProtocolError, SessionSummary, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -75,7 +75,7 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null, model: null, effort: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
@@ -84,6 +84,8 @@ describe('milestone 3 fields', () => {
 			summary: { about: 'Fixing the login test', status: 'Waiting for approval to run npm test', at: 2 },
 			tasks: { done: 3, total: 7 },
 			memory: { currentBytes: 1_200_000_000, maxBytes: 8_589_934_592, oomKills: 1 },
+			model: null,
+			effort: null,
 		};
 		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
 	});
@@ -134,5 +136,19 @@ describe('other sessions', () => {
 
 	test('the hub broadcasts the whole list of other sessions when it changes', () => {
 		expect(parseHubMessage(JSON.stringify({ type: 'otherSessions', sessions: [other] }))).toEqual({ type: 'otherSessions', sessions: [other] });
+	});
+});
+
+describe('model and effort', () => {
+	test('a session reports the model and effort Claude Code runs it on, and none before it first reports', () => {
+		const session = { id: 's1', projectDir: '/p', title: null, claudeSessionId: null, state: 'idle', stateSince: 1 };
+		expect(SessionSummary.parse(session)).toMatchObject({ model: null, effort: null });
+		expect(SessionSummary.parse({ ...session, model: { id: 'claude-opus-5-5', name: 'Opus 5.5' }, effort: 'xhigh' })).toMatchObject({ model: { id: 'claude-opus-5-5', name: 'Opus 5.5' }, effort: 'xhigh' });
+	});
+
+	test('a session starts and ports with a model and an effort level of the CLI', () => {
+		expect(parseClientRequest('{"id":7,"method":"startSession","projectDir":"/p","model":"fable","effort":"max"}')).toMatchObject({ model: 'fable', effort: 'max' });
+		expect(parseClientRequest('{"id":8,"method":"portSession","pid":7,"claudeSessionId":"dc5b988b-a782-4352-9056-0c133ae7370a","model":"opus","effort":"low"}')).toMatchObject({ model: 'opus', effort: 'low' });
+		expect(() => parseClientRequest('{"id":9,"method":"startSession","projectDir":"/p","effort":"extreme"}')).toThrow(ProtocolError);
 	});
 });

@@ -8,7 +8,7 @@ const CLAUDE_1 = ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111');
 const CLAUDE_2 = ClaudeSessionId.parse('22222222-2222-4222-8222-222222222222');
 
 function session(id: string, projectDir: string, stateSince: number, state: SessionStateKind = 'idle', claudeSessionId = CLAUDE_1): SessionSummary {
-	return { id: SessionId.parse(id), projectDir, title: null, claudeSessionId, state, stateSince, summary: null, tasks: null, memory: null };
+	return { id: SessionId.parse(id), projectDir, title: null, claudeSessionId, state, stateSince, summary: null, tasks: null, memory: null, model: null, effort: null };
 }
 
 const a1 = session('a1', '/root/projects/alpha', 100);

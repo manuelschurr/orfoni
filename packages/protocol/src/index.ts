@@ -12,6 +12,10 @@ export type ClaudeSessionId = z.infer<typeof ClaudeSessionId>;
 export const SessionStateKind = z.enum(['offline', 'working', 'needs_approval', 'needs_answer', 'answered', 'idle', 'failed']);
 export type SessionStateKind = z.infer<typeof SessionStateKind>;
 
+// The effort levels the claude CLI takes with --effort and /effort.
+export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof Effort>;
+
 export const SessionSummary = z.object({
 	id: SessionId,
 	projectDir: z.string(),
@@ -22,6 +26,9 @@ export const SessionSummary = z.object({
 	summary: z.object({ about: z.string(), status: z.string(), at: z.number() }).nullable().default(null),
 	tasks: z.object({ done: z.number().int(), total: z.number().int() }).nullable().default(null),
 	memory: z.object({ currentBytes: z.number(), maxBytes: z.number().nullable(), oomKills: z.number().int() }).nullable().default(null),
+	// What Claude Code reports for the session, which follows /model and /effort. Effort is a string so a level the CLI adds later still shows.
+	model: z.object({ id: z.string(), name: z.string() }).nullable().default(null),
+	effort: z.string().nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -117,6 +124,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		prompt: z.string().min(1).optional(),
 		title: z.string().min(1).optional(),
 		model: z.string().min(1).optional(),
+		effort: Effort.optional(),
 		permissionMode: PermissionMode.optional(),
 	}),
 	z.object({ id, method: z.literal('openSession'), sessionId: SessionId }),
@@ -130,7 +138,15 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('listOtherSessions') }),
 	z.object({ id, method: z.literal('openOtherSession'), pid: z.number().int() }),
-	z.object({ id, method: z.literal('portSession'), pid: z.number().int(), claudeSessionId: ClaudeSessionId, permissionMode: PermissionMode.optional() }),
+	z.object({
+		id,
+		method: z.literal('portSession'),
+		pid: z.number().int(),
+		claudeSessionId: ClaudeSessionId,
+		model: z.string().min(1).optional(),
+		effort: Effort.optional(),
+		permissionMode: PermissionMode.optional(),
+	}),
 ]);
 export type ClientRequest = z.infer<typeof ClientRequest>;
 

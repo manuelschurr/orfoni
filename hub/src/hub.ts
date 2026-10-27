@@ -107,7 +107,7 @@ function tmuxName(id: SessionId): string {
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: null, effort: null };
 }
 
 const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory'] as const satisfies (keyof SessionModel)[];
