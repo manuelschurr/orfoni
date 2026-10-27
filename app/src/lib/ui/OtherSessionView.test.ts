@@ -74,6 +74,29 @@ test('the port dialog says what happens where the session runs now, starts on Au
 	expect(dialog.hasAttribute('open')).toBe(false);
 });
 
+test("the port dialog offers the model and effort, starting on Claude Code's default, and ports with the ones you pick", async () => {
+	const { transport } = await shown();
+	const dialog = await openPortDialog();
+	const model = within(dialog).getByRole('combobox', { name: 'Model' }) as HTMLSelectElement;
+	const effort = within(dialog).getByRole('combobox', { name: 'Effort' }) as HTMLSelectElement;
+	expect([...model.options].map((option) => option.textContent)).toEqual(["Claude Code's default", 'Fable', 'Opus', 'Sonnet', 'Haiku']);
+	expect([...effort.options].map((option) => option.textContent)).toEqual(["Claude Code's default", 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+	expect(model.selectedOptions[0]?.textContent).toBe("Claude Code's default");
+	expect(effort.selectedOptions[0]?.textContent).toBe("Claude Code's default");
+
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Port session' }));
+	const [defaults] = transport.requests('portSession');
+	expect(defaults?.model).toBeUndefined();
+	expect(defaults?.effort).toBeUndefined();
+	transport.fail('portSession', 'not_ready', 'process 1172033 is busy');
+	await vi.waitFor(() => expect(within(dialog).getByRole('alert')).toBeTruthy());
+
+	await fireEvent.change(model, { target: { value: 'opus' } });
+	await fireEvent.change(effort, { target: { value: 'max' } });
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Port session' }));
+	expect(transport.requests('portSession')[1]).toMatchObject({ pid: 1172033, claudeSessionId: swarm.claudeSessionId, model: 'opus', effort: 'max', permissionMode: 'auto' });
+});
+
 test('the port dialog says how a session outside tmux ends', async () => {
 	await shown({ ...swarm, tmux: null });
 	expect((await openPortDialog()).textContent).toContain('orfoni ends Claude Code in the terminal where it runs now and continues the conversation here as a new orfoni session.');

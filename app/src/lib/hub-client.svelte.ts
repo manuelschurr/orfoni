@@ -9,7 +9,6 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
-	type PermissionMode,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
@@ -242,8 +241,8 @@ export class HubClient {
 		return this.request('startSession', params);
 	}
 
-	port(other: OtherSession, permissionMode: PermissionMode): Promise<Result<'portSession'>> {
-		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, permissionMode });
+	port(other: OtherSession, settings: Omit<Params<'portSession'>, 'pid' | 'claudeSessionId'>): Promise<Result<'portSession'>> {
+		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, ...settings });
 	}
 
 	async openShell(sessionId: SessionId): Promise<string> {

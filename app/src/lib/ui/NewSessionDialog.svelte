@@ -1,7 +1,8 @@
 <script lang="ts">
-	import type { PermissionMode, ProjectDir } from '@orfoni/protocol';
+	import type { Effort, PermissionMode, ProjectDir } from '@orfoni/protocol';
 	import type { HubClient, Result } from '../hub-client.svelte';
-	import { folderName } from './format';
+	import { folderName, type ModelAlias } from './format';
+	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
 
 	let {
@@ -13,7 +14,8 @@
 	let dirs = $state<ProjectDir[]>([]);
 	let folder = $state('');
 	let prompt = $state('');
-	let model = $state('');
+	let model = $state<ModelAlias | ''>('');
+	let effort = $state<Effort | ''>('');
 	let permissionMode = $state<PermissionMode>('auto');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
@@ -52,6 +54,7 @@
 				prompt: prompt.trim() || undefined,
 				title: titleFrom(prompt),
 				model: model || undefined,
+				effort: effort || undefined,
 				permissionMode,
 			});
 			prompt = '';
@@ -86,18 +89,8 @@
 			<span>First message</span>
 			<textarea class="field" rows="4" bind:value={prompt} placeholder="What should Claude do?"></textarea>
 		</label>
-		<div class="pair">
-			<label class="row">
-				<span>Model</span>
-				<select class="field" bind:value={model}>
-					<option value="">Claude Code's default</option>
-					<option value="opus">Opus</option>
-					<option value="sonnet">Sonnet</option>
-					<option value="haiku">Haiku</option>
-				</select>
-			</label>
-			<PermissionModeField bind:value={permissionMode} />
-		</div>
+		<ModelEffortFields bind:model bind:effort />
+		<PermissionModeField bind:value={permissionMode} />
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<div class="buttons">
 			<button type="button" class="btn" onclick={() => (open = false)}>Cancel</button>
@@ -128,11 +121,5 @@
 	.chip[aria-pressed='true'] {
 		border-color: var(--accent);
 		background: color-mix(in srgb, var(--accent) 14%, transparent);
-	}
-
-	.pair {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 0.8rem;
 	}
 </style>

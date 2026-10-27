@@ -24,7 +24,6 @@
 
 <style>
 	.hint {
-		grid-column: 1 / -1;
 		margin: -0.3rem 0 0;
 	}
 </style>

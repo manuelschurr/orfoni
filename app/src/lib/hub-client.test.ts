@@ -338,11 +338,11 @@ describe('HubClient with sessions outside orfoni', () => {
 		expect(client.other).toEqual({ session: swarm, chat: fromTmux, error: null });
 	});
 
-	test('porting names the process and its conversation with the permission mode, and answers with the new orfoni session', async () => {
+	test('porting names the process and its conversation with the model, effort, and permission mode, and answers with the new orfoni session', async () => {
 		await connectWithOthers();
 		const ported = session('p1', swarm.projectDir, 1500, 'working');
-		const porting = client.port(swarm, 'acceptEdits');
-		expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, permissionMode: 'acceptEdits' }]);
+		const porting = client.port(swarm, { model: 'sonnet', effort: 'high', permissionMode: 'acceptEdits' });
+		expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, model: 'sonnet', effort: 'high', permissionMode: 'acceptEdits' }]);
 		transport.respond('portSession', { session: ported, needsTrust: false });
 		expect(await porting).toEqual({ session: ported, needsTrust: false });
 	});
