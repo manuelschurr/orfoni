@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, PermissionMode, SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
+import type { ChatItem, OtherSession, PermissionMode, SessionId } from '@orfoni/protocol';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
 const started: SessionId[] = [];
@@ -27,6 +28,11 @@ async function start(params: { prompt?: string; permissionMode?: PermissionMode 
 }
 
 const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.status === 'pending';
+
+// A folder Claude Code already trusts, so no trust dialog holds up the session started outside orfoni.
+const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
+
+const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
 
 describe('orfoni-hub against real Claude Code sessions', () => {
 	test('approval from the client creates the file', async () => {
@@ -169,6 +175,48 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const { claudeSessionId } = await client.waitForSession(id, (s) => s.state === 'answered');
 		const transcript = readFileSync(join(homedir(), '.claude/projects', dir.replace(/[^a-zA-Z0-9]/g, '-'), `${claudeSessionId}.jsonl`), 'utf8');
 		expect(transcript).toContain('"permissionMode":"auto"');
+	});
+
+	test('a session started outside orfoni is listed with its reply, and porting it continues the conversation in an orfoni session', async () => {
+		const tag = randomUUID().slice(0, 8);
+		const socket = `orfoni-e2e-outside-${tag}`;
+		const name = `outside-${tag}`;
+		const outside = (...args: string[]) => execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8' });
+		outside('new-session', '-d', '-s', name, '-x', '200', '-y', '50', '-c', TRUSTED_DIR, 'bash');
+		try {
+			const shell = outside('display-message', '-p', '-t', `=${name}:`, '#{pane_pid}').trim();
+			outside('send-keys', '-t', `=${name}:`, `claude --model haiku 'Reply with exactly: first-${tag}'`, 'Enter');
+			const listed = await client.waitFor((m) => m.type === 'otherSessions' && m.sessions.some((s) => s.tmux === name));
+			const entry = listed.type === 'otherSessions' ? listed.sessions.find((s) => s.tmux === name) : undefined;
+			if (!entry) throw new Error('unreachable');
+			expect(entry.projectDir).toBe(TRUSTED_DIR);
+			// Every other Claude Code session on the machine shares the registry, so the check ports only the process whose parent is the shell it started.
+			expect(readFileSync(`/proc/${entry.pid}/stat`, 'utf8').split(' ')[3]).toBe(shell);
+			const names = new Set([entry.name]);
+			const open = async () => {
+				const opened = (await client.request('openOtherSession', { pid: entry.pid })) as { session: OtherSession; chat: ChatItem[] };
+				names.add(opened.session.name);
+				return opened;
+			};
+			await eventually(open, ({ session, chat }) => session.status === 'idle' && chat.some(replied(`first-${tag}`)));
+
+			const ported = (await client.request('portSession', { pid: entry.pid, claudeSessionId: entry.claudeSessionId, permissionMode: 'default' })) as Started;
+			started.push(ported.session.id);
+			await acceptTrustPrompt(ported);
+			expect(ported.session).toMatchObject({ projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId });
+			expect([...names]).toContain(ported.session.title);
+			expect(((await client.request('listOtherSessions', {})) as OtherSession[]).map((s) => s.pid)).not.toContain(entry.pid);
+			await until(() => outside('display-message', '-p', '-t', `=${name}:`, '#{pane_current_command}').trim() === 'bash');
+			const { chat } = (await client.request('openSession', { sessionId: ported.session.id })) as { chat: ChatItem[] };
+			expect(chat.some(replied(`first-${tag}`))).toBe(true);
+
+			await client.request('send', { sessionId: ported.session.id, text: `Reply with exactly: second-${tag}` });
+			await client.waitForChat(ported.session.id, replied(`second-${tag}`));
+			expect(((await client.request('listOtherSessions', {})) as OtherSession[]).map((s) => s.claudeSessionId)).not.toContain(entry.claudeSessionId);
+		} finally {
+			outside('kill-server');
+			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
+		}
 	});
 
 	test('a session reports its task progress and its memory against the pane cap', async () => {
