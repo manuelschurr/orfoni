@@ -24,6 +24,8 @@ let logs: string[];
 let summaries: { sessionId: SessionId; about: string; status: string; at: number }[];
 let apiKey: ApiKey;
 let inputs: Map<SessionId, SummaryInput>;
+let reads: SessionId[];
+let readInput: (sessionId: SessionId) => Promise<SummaryInput | null>;
 let summarizer: Summarizer;
 
 function client(apiKey: string): SummaryClient {
@@ -36,7 +38,7 @@ function makeSummarizer(budget: { day: string; requests: number; spentUsd: numbe
 		model: 'claude-haiku-5-5',
 		apiKey: async () => apiKey,
 		client,
-		input: async (sessionId) => inputs.get(sessionId) ?? null,
+		input: (sessionId) => readInput(sessionId),
 		summarized: (sessionId, summary) => summaries.push({ sessionId, ...summary }),
 		budget,
 		budgetChanged: () => {},
@@ -64,6 +66,11 @@ beforeEach(() => {
 		[a, input()],
 		[b, input({ title: 'Other' })],
 	]);
+	reads = [];
+	readInput = async (sessionId) => {
+		reads.push(sessionId);
+		return inputs.get(sessionId) ?? null;
+	};
 });
 
 afterEach(() => {
@@ -184,6 +191,45 @@ describe('Summarizer', () => {
 		expect(logs).toHaveLength(1);
 		expect(logs[0]).toContain('invalid x-api-key');
 		expect(logs[0]).not.toContain(KEY);
+	});
+
+	test('a day at its cap reads no transcript', async () => {
+		makeSummarizer({ day: '2026-10-26', requests: 1000, spentUsd: 0.5 }).request(a);
+		await settle();
+		expect(reads).toEqual([]);
+		expect(logs).toEqual([expect.stringContaining('until tomorrow')]);
+	});
+
+	test('sessions read their transcripts one at a time', async () => {
+		const finish: (() => void)[] = [];
+		readInput = (sessionId) => {
+			reads.push(sessionId);
+			return new Promise((resolve) => finish.push(() => resolve(inputs.get(sessionId) ?? null)));
+		};
+		makeSummarizer().request(a);
+		summarizer.request(b);
+		await settle();
+		expect(reads).toEqual([a]);
+		finish.shift()!();
+		await settle();
+		expect(reads).toEqual([a, b]);
+		finish.shift()!();
+		await settle();
+		expect(calls).toHaveLength(2);
+	});
+
+	test('a transcript that cannot be read does not hold up the next session', async () => {
+		readInput = async (sessionId) => {
+			reads.push(sessionId);
+			if (sessionId === a) throw new Error('transcript gone');
+			return inputs.get(sessionId) ?? null;
+		};
+		makeSummarizer().request(a);
+		summarizer.request(b);
+		await settle();
+		expect(reads).toEqual([a, b]);
+		expect(calls).toHaveLength(1);
+		expect(logs).toEqual([expect.stringContaining('transcript gone')]);
 	});
 
 	test('without a key no request goes out, it is logged once, and status reports summaries off', async () => {

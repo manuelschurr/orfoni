@@ -157,6 +157,7 @@ export class Summarizer {
 	private readonly slots = new Map<SessionId, Slot>();
 	private spent: SummaryBudget;
 	private lastLogged: string | null = null;
+	private reading: Promise<unknown> = Promise.resolve();
 
 	constructor(private readonly options: SummarizerOptions) {
 		this.spent = options.budget ?? { day: today(), requests: 0, spentUsd: 0 };
@@ -205,6 +206,24 @@ export class Summarizer {
 		this.options.log(line);
 	}
 
+	private pause(): string | null {
+		const budget = this.today();
+		return budget.requests >= DAILY_REQUESTS || budget.spentUsd >= DAILY_USD ? `paused until tomorrow, today reached the cap of ${DAILY_REQUESTS} summaries or $${DAILY_USD}` : null;
+	}
+
+	private stopAtCap(): boolean {
+		const pause = this.pause();
+		if (pause) this.logOnce(`orfoni-hub: summaries ${pause}`);
+		return pause !== null;
+	}
+
+	// Building the input parses the session's whole transcript on the hub's only thread, so sessions take turns.
+	private read(sessionId: SessionId): Promise<SummaryInput | null> {
+		const input = this.reading.then(() => this.options.input(sessionId));
+		this.reading = input.catch(() => {});
+		return input;
+	}
+
 	private async run(sessionId: SessionId, slot: Slot): Promise<void> {
 		slot.running = true;
 		try {
@@ -223,12 +242,10 @@ export class Summarizer {
 	private async summarize(sessionId: SessionId, slot: Slot): Promise<void> {
 		const apiKey = await this.options.apiKey();
 		if ('missing' in apiKey) return this.logOnce(`orfoni-hub: summaries are off: ${apiKey.missing}`);
-		const input = await this.options.input(sessionId);
-		if (!input) return;
+		if (this.stopAtCap()) return;
+		const input = await this.read(sessionId);
+		if (!input || this.stopAtCap()) return;
 		const budget = this.today();
-		if (budget.requests >= DAILY_REQUESTS || budget.spentUsd >= DAILY_USD) {
-			return this.logOnce(`orfoni-hub: summaries paused until tomorrow, today reached the cap of ${DAILY_REQUESTS} summaries or $${DAILY_USD}`);
-		}
 		slot.startedAt = Date.now();
 		budget.requests += 1;
 		try {
