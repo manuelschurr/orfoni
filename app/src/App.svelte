@@ -107,7 +107,13 @@
 			{#if session}
 				{#key session.id}
 					<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} />
-					<ChatView {client} sessionId={session.id}>
+					<ChatView
+						{client}
+						chat={client.chats.get(session.id)}
+						error={client.openError}
+						empty="No messages yet. What you send here goes to Claude in this session's terminal."
+						onretry={() => void client?.select(session.id).catch(() => {})}
+					>
 						{#snippet banner()}
 							{#if memoryHint}
 								<div class="note" role="note">
