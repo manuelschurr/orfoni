@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SessionId } from '@orfoni/protocol';
+	import type { ChatItem } from '@orfoni/protocol';
 	import type { Snippet } from 'svelte';
 	import { itemKey, type HubClient } from '../hub-client.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
@@ -8,8 +8,14 @@
 	import QuestionCard from './QuestionCard.svelte';
 	import ToolCard from './ToolCard.svelte';
 
-	let { client, sessionId, banner }: { client: HubClient; sessionId: SessionId; banner?: Snippet } = $props();
-	const chat = $derived(client.chats.get(sessionId));
+	let {
+		client,
+		chat,
+		error,
+		empty,
+		onretry,
+		banner,
+	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet } = $props();
 	let scroller: HTMLElement | undefined = $state();
 	let pinned = true;
 
@@ -29,16 +35,16 @@
 	<div class="column">
 		{@render banner?.()}
 		{#if chat === undefined}
-			{#if client.openError}
+			{#if error}
 				<div class="state">
-					<p class="error">Loading this conversation failed: {client.openError}</p>
-					<button class="btn" onclick={() => void client.select(sessionId).catch(() => {})}>Try again</button>
+					<p class="error">Loading this conversation failed: {error}</p>
+					<button class="btn" onclick={onretry}>Try again</button>
 				</div>
 			{:else}
 				<p class="state">Loading the conversation</p>
 			{/if}
 		{:else if chat.length === 0}
-			<p class="state">No messages yet. What you send here goes to Claude in this session's terminal.</p>
+			<p class="state">{empty}</p>
 		{:else}
 			{#each chat as item (itemKey(item))}
 				<div class="item" data-kind={item.kind}>

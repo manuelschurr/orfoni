@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync } from 'node:fs';
-import type { ChatItem, ClientRequest, HubMessage, SessionId, SessionSummary } from '@orfoni/protocol';
+import type { ChatItem, ClientRequest, HubMessage, OtherSession, SessionId, SessionSummary } from '@orfoni/protocol';
 
 type Method = ClientRequest['method'];
 type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }>, 'id' | 'method'>;
@@ -86,6 +86,13 @@ export class Hub {
 		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && matches(m.session), since, timeoutMs);
 		if (message.type !== 'sessionUpdated') throw new Error('unreachable');
 		return message.session;
+	}
+
+	async waitForOther(matches: (other: OtherSession) => boolean, timeoutMs?: number): Promise<OtherSession> {
+		const message = await this.waitFor((m) => m.type === 'otherSessions' && m.sessions.some(matches), 0, timeoutMs);
+		const other = message.type === 'otherSessions' ? message.sessions.find(matches) : undefined;
+		if (!other) throw new Error('unreachable');
+		return other;
 	}
 
 	// Sessions the app started count as ours when they live in a folder the checks created, never anyone else's.

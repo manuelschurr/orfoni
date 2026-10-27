@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import type { HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
+import { OutsideSession } from './outside';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
 
 const REPLY_MS = 120_000;
@@ -248,5 +250,52 @@ test('reconnect after the bridge restarts without duplicated items', async ({ pa
 		await expect(claude(page)).toHaveCount(2);
 	} finally {
 		bridge.kill('SIGTERM');
+	}
+});
+
+test('a session outside orfoni shows under its folder and ports into an orfoni session that goes on with its conversation', async ({ page }) => {
+	const dir = newProjectDir();
+	const outside = OutsideSession.start(dir, 'Remember the code word kumquat. Reply with only the result of 4096 divided by 2, in digits.');
+	try {
+		await outside.acceptTrustPrompt();
+		await outside.waitFor(() => outside.screen().includes('2048'), 'replied', REPLY_MS);
+		const claudeCommand = outside.command();
+		const other = await hub.waitForOther((o) => o.projectDir === dir && o.status === 'idle', REPLY_MS);
+
+		await page.goto(APP);
+		await page.getByRole('list', { name: `${basename(dir)}, outside orfoni` }).locator(`[data-other="${other.pid}"]`).click();
+		const main = page.getByRole('main');
+		await expect(main.getByText(dir, { exact: true })).toBeVisible();
+		await expect(main.getByText('Outside orfoni')).toBeVisible();
+		await expect(claude(page).last()).toContainText('2048');
+		await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0);
+
+		await main.getByRole('button', { name: 'Port into orfoni' }).click();
+		const dialog = page.getByRole('dialog', { name: /^Port ".*" into orfoni\?$/ });
+		await expect(dialog.getByLabel('Permissions')).toHaveValue('auto');
+		await dialog.getByRole('button', { name: 'Port session' }).click();
+		await expect(dialog).toBeHidden({ timeout: 30_000 });
+
+		const box = page.getByRole('textbox', { name: 'Message' });
+		await expect(box).toBeVisible();
+		await expect(claude(page).first()).toContainText('2048');
+		await expect(page.locator(`[data-other="${other.pid}"]`)).toHaveCount(0);
+		await outside.waitFor(() => outside.command() !== claudeCommand, 'returned to its shell', 30_000);
+
+		const sessionId = (await page.locator('[data-session][aria-current="true"]').getAttribute('data-session')) ?? '';
+		expect((await hub.sessions()).find((s) => s.id === sessionId)?.projectDir).toBe(dir);
+		const screen = await Screen.attach(`=orfoni-${sessionId}`);
+		try {
+			await screen.waitFor('❯', 60_000);
+			expect(screen.text()).not.toContain('Yes, I trust this folder');
+			await sleep(2500);
+		} finally {
+			screen.close();
+		}
+		await box.fill('What was the code word? Reply with only that word.');
+		await box.press('Enter');
+		await expect(claude(page).last()).toContainText(/kumquat/i, { timeout: REPLY_MS });
+	} finally {
+		outside.stop();
 	}
 });

@@ -9,6 +9,7 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
+	type PermissionMode,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
@@ -51,15 +52,28 @@ export class HubRequestError extends Error {
 export interface Project {
 	dir: string;
 	sessions: SessionSummary[];
+	others: OtherSession[];
 }
 
-export function groupProjects(sessions: Iterable<SessionSummary>): Project[] {
-	const groups = new Map<string, SessionSummary[]>();
-	for (const session of sessions) groups.set(session.projectDir, [...(groups.get(session.projectDir) ?? []), session]);
+// Only orfoni's own sessions place a folder, so folders that hold nothing but sessions outside orfoni come last.
+export function groupProjects(sessions: Iterable<SessionSummary>, others: Iterable<OtherSession>): Project[] {
+	const groups = new Map<string, Project>();
+	const group = (dir: string): Project => {
+		let project = groups.get(dir);
+		if (!project) groups.set(dir, (project = { dir, sessions: [], others: [] }));
+		return project;
+	};
+	for (const session of sessions) group(session.projectDir).sessions.push(session);
+	for (const other of others) group(other.projectDir).others.push(other);
 	const newest = (project: Project) => project.sessions[0]?.stateSince ?? 0;
-	return [...groups]
-		.map(([dir, list]) => ({ dir, sessions: list.toSorted((a, b) => b.stateSince - a.stateSince) }))
-		.sort((a, b) => newest(b) - newest(a) || a.dir.localeCompare(b.dir));
+	const newestOther = (project: Project) => project.others[0]?.statusSince ?? 0;
+	return [...groups.values()]
+		.map((project) => ({
+			...project,
+			sessions: project.sessions.toSorted((a, b) => b.stateSince - a.stateSince),
+			others: project.others.toSorted((a, b) => b.statusSince - a.statusSince),
+		}))
+		.sort((a, b) => newest(b) - newest(a) || newestOther(b) - newestOther(a) || a.dir.localeCompare(b.dir));
 }
 
 export function itemKey(item: ChatItem): string {
@@ -96,6 +110,13 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	return index === -1 ? [...chat, item] : chat.with(index, item);
 }
 
+// The session outside orfoni on screen. `session` follows the hub's list and keeps its last state once the session ends. `chat` belongs to the conversation in `session`, or is undefined while that loads.
+export interface OtherView {
+	session: OtherSession;
+	chat: ChatItem[] | undefined;
+	error: string | null;
+}
+
 interface Pending {
 	method: Method;
 	resolve(result: unknown): void;
@@ -116,12 +137,15 @@ export class HubClient {
 	selected = $state<SessionId | null>(null);
 	openError = $state<string | null>(null);
 	problem = $state<string | null>(null);
-	projects = $derived(groupProjects(this.sessions.values()));
+	others = $state.raw<OtherSession[]>([]);
+	other = $state.raw<OtherView | null>(null);
+	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
 	private nextId = 1;
 	private readonly pending = new Map<number, Pending>();
 	private readonly loading = new Map<SessionId, Loading>();
+	private otherLoads = 0;
 
 	constructor(transport: HubTransport) {
 		this.transport = transport;
@@ -143,8 +167,18 @@ export class HubClient {
 
 	select(sessionId: SessionId | null): Promise<void> {
 		this.selected = sessionId;
+		this.other = null;
 		this.openError = null;
 		return sessionId === null ? Promise.resolve() : this.open(sessionId);
+	}
+
+	openOther(pid: number): Promise<void> {
+		const session = this.others.find((other) => other.pid === pid);
+		if (!session) return Promise.reject(new HubRequestError('not_found', `No session with process ${pid} runs outside orfoni.`));
+		this.selected = null;
+		this.openError = null;
+		this.other = { session, chat: undefined, error: null };
+		return this.loadOther();
 	}
 
 	async send(sessionId: SessionId, text: string): Promise<void> {
@@ -171,6 +205,10 @@ export class HubClient {
 
 	startSession(params: Params<'startSession'>): Promise<Result<'startSession'>> {
 		return this.request('startSession', params);
+	}
+
+	port(other: OtherSession, permissionMode: PermissionMode): Promise<Result<'portSession'>> {
+		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, permissionMode });
 	}
 
 	async openShell(sessionId: SessionId): Promise<string> {
@@ -206,9 +244,45 @@ export class HubClient {
 		const { selected } = this;
 		// Chats of other sessions may have missed items while the connection was down.
 		this.chats = new Map([...this.chats].filter(([id]) => id === selected));
-		if (selected === null) return;
-		if (this.sessions.has(selected)) await this.open(selected);
-		else await this.select(null);
+		const reopen = selected === null ? undefined : this.sessions.has(selected) ? this.open(selected) : this.select(null);
+		await Promise.all([reopen, this.listOthers()]);
+	}
+
+	// Asked only after listSessions succeeded, so a failure here is not cleared by that success.
+	private async listOthers(): Promise<void> {
+		try {
+			this.updateOthers(await this.request('listOtherSessions', {}));
+		} catch (error) {
+			if (this.status.kind === 'connected') this.problem = `Listing the sessions outside orfoni failed: ${(error as Error).message}`;
+		}
+	}
+
+	// The shown chat is read again when a turn starts or ends, after a /clear, and after a failed load.
+	private updateOthers(others: OtherSession[]): void {
+		this.others = others;
+		const view = this.other;
+		const listed = view && others.find((other) => other.pid === view.session.pid);
+		if (!view || !listed) return;
+		const sameConversation = listed.claudeSessionId === view.session.claudeSessionId;
+		this.other = { ...view, session: listed, chat: sameConversation ? view.chat : undefined };
+		if (!sameConversation || listed.statusSince !== view.session.statusSince || view.error !== null) this.loadOther().catch(() => {});
+	}
+
+	// Only the newest load may land, and only on the conversation still shown, since the hub answers requests in any order.
+	private async loadOther(): Promise<void> {
+		if (!this.other) return;
+		const { pid } = this.other.session;
+		const load = ++this.otherLoads;
+		const shown = () => (load === this.otherLoads && this.other?.session.pid === pid ? this.other : null);
+		try {
+			const { session, chat } = await this.request('openOtherSession', { pid });
+			const view = shown();
+			if (view && view.session.claudeSessionId === session.claudeSessionId) this.other = { ...view, chat: collapse(chat), error: null };
+		} catch (error) {
+			const view = shown();
+			if (view) this.other = { ...view, error: (error as Error).message };
+			throw error;
+		}
 	}
 
 	private async open(sessionId: SessionId): Promise<void> {
@@ -281,6 +355,9 @@ export class HubClient {
 				if (this.selected === sessionId) this.selected = null;
 				return;
 			}
+			case 'otherSessions':
+				this.updateOthers(message.sessions);
+				return;
 		}
 	}
 }

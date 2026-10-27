@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeAll, expect, test } from 'vitest';
 import App from './App.svelte';
 import type { Settings } from './lib/tauri-transport';
-import { stubDialogs, summary } from './lib/testing';
+import { otherSession, stubDialogs, summary } from './lib/testing';
 
 type Internals = {
 	invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -167,4 +167,51 @@ test('a session started while the VPS is low on memory says so until dismissed',
 	const note = await screen.findByText('The VPS had 1.2 GB of 11.7 GB free when this session started. Stop sessions you no longer need before it runs out.');
 	await fireEvent.click(within(note.closest('[role="note"]') as HTMLElement).getByRole('button', { name: 'Dismiss' }));
 	await waitFor(() => expect(screen.queryByText(/free when this session started/)).toBeNull());
+});
+
+test('porting a session outside orfoni opens the new orfoni session in its place', async () => {
+	const other = otherSession(1172033, { name: 'swarm-73' });
+	const ported = summary('p1', 'idle', { title: 'swarm-73', projectDir: other.projectDir, claudeSessionId: other.claudeSessionId });
+	const chat = [{ kind: 'assistant', id: 'a1', text: 'The uplink retries now.', done: true }];
+	let hubLine: (message: unknown) => void = () => {};
+	inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				hubLine = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string };
+				if (request.method === 'portSession') {
+					hubLine({ type: 'sessionUpdated', session: ported });
+					hubLine({ type: 'otherSessions', sessions: [] });
+				}
+				const results: Record<string, unknown> = {
+					listSessions: [],
+					listOtherSessions: [other],
+					openOtherSession: { session: other, chat },
+					portSession: { session: ported, needsTrust: false },
+					openSession: { session: ported, chat },
+				};
+				if (request.method in results) hubLine({ type: 'response', id: request.id, ok: true, result: results[request.method] });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^swarm-73/ }));
+	expect(await screen.findByText('Outside orfoni')).toBeTruthy();
+	expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Port into orfoni' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Port session' }));
+	expect(await screen.findByRole('textbox', { name: 'Message' })).toBeTruthy();
+	expect(screen.queryByText('Outside orfoni')).toBeNull();
+	expect(screen.getByRole('heading', { level: 1, name: 'swarm-73' })).toBeTruthy();
+	expect(screen.getByRole('article', { name: 'Claude' }).textContent).toContain('The uplink retries now.');
+	expect(screen.getByRole('button', { name: /^swarm-73/ }).getAttribute('aria-current')).toBe('true');
 });

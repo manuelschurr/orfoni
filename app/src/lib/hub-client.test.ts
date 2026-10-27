@@ -1,7 +1,8 @@
-import { ClaudeSessionId, RequestId, SessionId, type ChatItem, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { ClaudeSessionId, RequestId, SessionId, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { FakeTransport } from './fake-transport';
 import { HubClient } from './hub-client.svelte';
+import { otherSession } from './testing';
 
 const CLAUDE_1 = ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111');
 const CLAUDE_2 = ClaudeSessionId.parse('22222222-2222-4222-8222-222222222222');
@@ -177,5 +178,152 @@ describe('HubClient', () => {
 		expect(client.sessions.has(a1.id)).toBe(false);
 		expect(client.chats.has(a1.id)).toBe(false);
 		expect(client.selected).toBeNull();
+	});
+});
+
+describe('HubClient with sessions outside orfoni', () => {
+	const swarm = otherSession(1172033, { statusSince: 100 });
+	const beta = otherSession(4242, { claudeSessionId: CLAUDE_2, projectDir: '/root/code/beta', name: null, tmux: null, statusSince: 200 });
+	const fromTmux = [user('u7', 'tidy the readme'), assistant('m7', 'Done, the readme is tidy.', true)];
+
+	async function connectWithOthers(others: OtherSession[] = [swarm, beta]): Promise<void> {
+		await connect();
+		transport.respond('listOtherSessions', others);
+		await settle();
+	}
+
+	async function openOther(target: OtherSession, chat: ChatItem[] = fromTmux): Promise<void> {
+		const opening = client.openOther(target.pid);
+		transport.respond('openOtherSession', { session: target, chat });
+		await opening;
+	}
+
+	test('once connected, the client lists the sessions outside orfoni and keeps the list current from broadcasts', async () => {
+		await connectWithOthers([swarm]);
+		expect(client.others).toEqual([swarm]);
+		transport.push({ type: 'otherSessions', sessions: [swarm, beta] });
+		expect(client.others).toEqual([swarm, beta]);
+	});
+
+	test('a hub that cannot list sessions outside orfoni still shows its own and says what failed', async () => {
+		await connect([a1]);
+		transport.fail('listOtherSessions', 'bad_message', 'Invalid input');
+		await settle();
+		expect([...client.sessions.keys()]).toEqual(['a1']);
+		expect(client.problem).toBe('Listing the sessions outside orfoni failed: Invalid input');
+	});
+
+	test('opening a session outside orfoni loads its chat and leaves the orfoni session, and opening an orfoni session leaves it again', async () => {
+		await connectWithOthers();
+		await open(a1, [user('u1', 'hello')]);
+		const opening = client.openOther(swarm.pid);
+		expect(client.selected).toBeNull();
+		expect(client.other).toEqual({ session: swarm, chat: undefined, error: null });
+		expect(transport.requests('openOtherSession')).toMatchObject([{ pid: swarm.pid }]);
+		transport.respond('openOtherSession', { session: swarm, chat: fromTmux });
+		await opening;
+		expect(client.other).toEqual({ session: swarm, chat: fromTmux, error: null });
+
+		await open(b1);
+		expect(client.other).toBeNull();
+		expect(client.selected).toBe(b1.id);
+	});
+
+	test('the shown session reloads its chat when its status changes, and not when another session changes', async () => {
+		await connectWithOthers();
+		await openOther(swarm);
+		transport.push({ type: 'otherSessions', sessions: [swarm, { ...beta, status: 'busy', statusSince: 900 }] });
+		expect(transport.requests('openOtherSession')).toHaveLength(1);
+
+		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
+		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
+		expect(client.other).toEqual({ session: busy, chat: fromTmux, error: null });
+		expect(transport.requests('openOtherSession')).toHaveLength(2);
+		const next = [...fromTmux, user('u8', 'now the changelog')];
+		transport.respond('openOtherSession', { session: busy, chat: next });
+		await settle();
+		expect(client.other?.chat).toEqual(next);
+	});
+
+	test('after /clear in the shown session its chat empties until the new conversation loads, and late answers for the old one are dropped', async () => {
+		await connectWithOthers();
+		await openOther(swarm);
+		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
+		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
+		const cleared: OtherSession = { ...swarm, claudeSessionId: CLAUDE_2, statusSince: 1300 };
+		transport.push({ type: 'otherSessions', sessions: [cleared, beta] });
+		expect(client.other).toEqual({ session: cleared, chat: undefined, error: null });
+
+		transport.respond('openOtherSession', { session: busy, chat: [...fromTmux, user('u8', 'old conversation')] });
+		await settle();
+		expect(client.other?.chat).toBeUndefined();
+		transport.respond('openOtherSession', { session: cleared, chat: [user('u9', 'a fresh start')] });
+		await settle();
+		expect(client.other?.chat).toEqual([user('u9', 'a fresh start')]);
+	});
+
+	test('a slow answer to an earlier reload does not replace the answer to a newer one', async () => {
+		await connectWithOthers();
+		await openOther(swarm);
+		const busy: OtherSession = { ...swarm, status: 'busy', statusSince: 1200 };
+		const idle: OtherSession = { ...swarm, statusSince: 1400 };
+		transport.push({ type: 'otherSessions', sessions: [busy, beta] });
+		transport.push({ type: 'otherSessions', sessions: [idle, beta] });
+		const [, second, third] = transport.requests('openOtherSession');
+		const newest = [...fromTmux, user('u8', 'now the changelog'), assistant('m8', 'The changelog is done.', true)];
+		transport.push({ type: 'response', id: third?.id ?? 0, ok: true, result: { session: idle, chat: newest } });
+		transport.push({ type: 'response', id: second?.id ?? 0, ok: true, result: { session: busy, chat: [...fromTmux, user('u8', 'now the changelog')] } });
+		await settle();
+		expect(client.other?.chat).toEqual(newest);
+	});
+
+	test('a chat from a conversation the list does not show yet waits until the list catches up', async () => {
+		await connectWithOthers();
+		const cleared: OtherSession = { ...swarm, claudeSessionId: CLAUDE_2, statusSince: 1300 };
+		const fresh = [user('u9', 'a fresh start')];
+		const opening = client.openOther(swarm.pid);
+		transport.respond('openOtherSession', { session: cleared, chat: fresh });
+		await opening;
+		expect(client.other).toEqual({ session: swarm, chat: undefined, error: null });
+
+		transport.push({ type: 'otherSessions', sessions: [cleared, beta] });
+		transport.respond('openOtherSession', { session: cleared, chat: fresh });
+		await settle();
+		expect(client.other).toEqual({ session: cleared, chat: fresh, error: null });
+	});
+
+	test('a shown session that ends keeps its last details and chat on screen', async () => {
+		await connectWithOthers();
+		await openOther(swarm);
+		transport.push({ type: 'otherSessions', sessions: [beta] });
+		expect(client.others).toEqual([beta]);
+		expect(client.other).toEqual({ session: swarm, chat: fromTmux, error: null });
+	});
+
+	test('a chat that failed to load when the connection dropped loads again after the reconnect', async () => {
+		await connectWithOthers();
+		const opening = client.openOther(swarm.pid);
+		transport.status({ kind: 'reconnecting', attempt: 1, error: 'socket closed' });
+		await expect(opening).rejects.toMatchObject({ code: 'disconnected' });
+		expect(client.other?.error).toBe('Lost the connection to the hub: socket closed');
+
+		transport.status({ kind: 'connected' });
+		transport.respond('listSessions', [a1]);
+		await settle();
+		transport.respond('listOtherSessions', [swarm, beta]);
+		await settle();
+		expect(transport.requests('openOtherSession')).toHaveLength(2);
+		transport.respond('openOtherSession', { session: swarm, chat: fromTmux });
+		await settle();
+		expect(client.other).toEqual({ session: swarm, chat: fromTmux, error: null });
+	});
+
+	test('porting names the process and its conversation with the permission mode, and answers with the new orfoni session', async () => {
+		await connectWithOthers();
+		const ported = session('p1', swarm.projectDir, 1500, 'working');
+		const porting = client.port(swarm, 'acceptEdits');
+		expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, permissionMode: 'acceptEdits' }]);
+		transport.respond('portSession', { session: ported, needsTrust: false });
+		expect(await porting).toEqual({ session: ported, needsTrust: false });
 	});
 });

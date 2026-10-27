@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { expect, test } from 'vitest';
-import { connectedClient, summary } from '../testing';
+import { connectedClient, otherSession, summary } from '../testing';
 import Sidebar from './Sidebar.svelte';
 
 const GB = 1024 ** 3;
@@ -63,6 +63,61 @@ test('a row shows its memory after an out-of-memory kill, even when the memory i
 	const ran = row(/Ran the big suite/);
 	expect(within(ran).getByText('300 MB')).toBeTruthy();
 	expect(ran.textContent).toContain('killed for using too much memory 2 times');
+});
+
+test('sessions outside orfoni sit in their folder after its orfoni sessions, and folders with only such sessions come last', async () => {
+	const { client } = await connectedClient(
+		[summary('a1', 'idle', { title: 'Alpha work', stateSince: 1000 }), summary('b1', 'idle', { title: 'Beta work', projectDir: '/root/code/beta', stateSince: 3000 })],
+		[
+			otherSession(11, { name: 'alpha-newest', projectDir: '/root/projects/alpha', statusSince: 9000 }),
+			otherSession(12, { name: 'swarm-15', statusSince: 8000 }),
+			otherSession(13, { name: 'alpha-older', projectDir: '/root/projects/alpha', statusSince: 2000 }),
+		],
+	);
+	const { container } = render(Sidebar, { client, onnew: () => {} });
+	expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)).toEqual(['beta', 'alpha', 'swarm']);
+	const alpha = container.querySelectorAll('section')[1] as HTMLElement;
+	expect([...alpha.querySelectorAll('[data-session], [data-other]')].map((row) => row.getAttribute('data-session') ?? row.getAttribute('data-other'))).toEqual(['a1', '11', '13']);
+	expect(within(screen.getByRole('list', { name: 'alpha, outside orfoni' })).getAllByRole('button')).toHaveLength(2);
+	expect(within(screen.getByRole('list', { name: 'alpha' })).getAllByRole('button')).toHaveLength(1);
+});
+
+test('a row outside orfoni shows its name or Untitled session, where it runs, and how long since it changed, and says busy or idle in words', async () => {
+	const now = Date.now();
+	const { client } = await connectedClient(
+		[],
+		[
+			otherSession(21, { name: 'swarm-73', statusSince: now - 2 * 3600_000 }),
+			otherSession(22, { name: null, tmux: null, background: true, status: 'busy', statusSince: now }),
+			otherSession(23, { name: 'notes', tmux: null, statusSince: now - 5 * 60_000 }),
+		],
+	);
+	render(Sidebar, { client, onnew: () => {} });
+	expect(words(row(/swarm-73/))).toBe('swarm-73 Idle, tmux swarm 2 h');
+	expect(words(row(/Untitled session/))).toBe('Untitled session Busy, background now');
+	expect(words(row(/notes/))).toBe('notes Idle, no tmux 5 min');
+});
+
+test('choosing a row outside orfoni opens it and makes it the current row instead of the orfoni session', async () => {
+	const { client, transport } = await connectedClient([summary('a1', 'idle', { title: 'Alpha work' })], [otherSession(1172033)]);
+	render(Sidebar, { client, onnew: () => {} });
+	await fireEvent.click(row(/Alpha work/));
+	expect(row(/Alpha work/).getAttribute('aria-current')).toBe('true');
+
+	await fireEvent.click(row(/swarm-73/));
+	expect(transport.requests('openOtherSession')).toMatchObject([{ pid: 1172033 }]);
+	expect(row(/swarm-73/).getAttribute('aria-current')).toBe('true');
+	expect(row(/Alpha work/).getAttribute('aria-current')).toBeNull();
+});
+
+test('the arrow keys move from the orfoni sessions on to the rows outside orfoni', async () => {
+	const { client } = await connectedClient([summary('a1', 'idle', { title: 'Alpha work', projectDir: '/root/projects/swarm' })], [otherSession(1172033)]);
+	render(Sidebar, { client, onnew: () => {} });
+	row(/Alpha work/).focus();
+	await fireEvent.keyDown(row(/Alpha work/), { key: 'ArrowDown' });
+	expect(document.activeElement).toBe(row(/swarm-73/));
+	await fireEvent.keyDown(row(/swarm-73/), { key: 'ArrowUp' });
+	expect(document.activeElement).toBe(row(/Alpha work/));
 });
 
 test('an answered session reads as unread until opening it makes it idle', async () => {
