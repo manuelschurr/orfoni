@@ -110,7 +110,7 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	return index === -1 ? [...chat, item] : chat.with(index, item);
 }
 
-// The session outside orfoni that is on screen. `session` follows the hub's list and keeps its last state once the session ends, and `chat` always belongs to its conversation.
+// The session outside orfoni on screen. `session` follows the hub's list and keeps its last state once the session ends. `chat` belongs to the conversation in `session`, or is undefined while that loads.
 export interface OtherView {
 	session: OtherSession;
 	chat: ChatItem[] | undefined;

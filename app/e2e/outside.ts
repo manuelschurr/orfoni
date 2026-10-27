@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { sleep } from './terminal';
 
@@ -47,11 +47,7 @@ export class OutsideSession {
 	}
 
 	stop(): void {
-		try {
-			this.tmux('kill-server');
-		} catch {
-			// Already gone.
-		}
+		spawnSync('tmux', ['-L', this.socket, 'kill-server'], { stdio: 'ignore', env: ownEnv() });
 	}
 
 	private tmux(...args: string[]): string {

@@ -54,7 +54,7 @@
 					</ul>
 				{/if}
 				{#if group.others.length > 0}
-					<ul class="others" aria-label="{folderName(group.dir)}, outside orfoni">
+					<ul aria-label="{folderName(group.dir)}, outside orfoni">
 						{#each group.others as other (other.pid)}
 							<li>
 								<OtherSessionRow {other} {now} selected={client.other?.session.pid === other.pid} onselect={() => void client.openOther(other.pid).catch(() => {})} />
