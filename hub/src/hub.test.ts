@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, SessionId, SessionSummary } from '@orfoni/protocol';
+import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, OtherSession, SessionId, SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
@@ -129,6 +129,37 @@ function writeCgroup(panePid: number, currentBytes: number, oomKills = 0): void 
 	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.events'), `max 0\noom 0\noom_kill ${oomKills}\n`);
 }
 
+const OTHER = 'dc5b988b-a782-4352-9056-0c133ae7370a' as ClaudeSessionId;
+const OTHER_PROJECT = '/root/projects/swarm';
+
+function registryFile(pid: number): string {
+	return join(dir, 'home/.claude/sessions', `${pid}.json`);
+}
+
+// A Claude Code session that orfoni did not start: its registry file, and its process with the start time the file records.
+function runOther(pid: number, fields: Record<string, unknown> = {}): void {
+	const procStart = String(pid * 10);
+	mkdirSync(join(dir, 'root/proc', String(pid)), { recursive: true });
+	writeFileSync(join(dir, 'root/proc', String(pid), 'stat'), `${pid} (claude) S 1 ${pid} 1 34821 ${pid} 4194304 0 0 0 0 0 0 0 0 20 0 11 0 ${procStart} 0 0\n`);
+	mkdirSync(join(dir, 'home/.claude/sessions'), { recursive: true });
+	const entry = { pid, procStart, sessionId: OTHER, cwd: OTHER_PROJECT, name: 'swarm-73', nameSource: 'derived', status: 'idle', statusUpdatedAt: T0 - 1000, startedAt: T0 - 60_000, kind: 'interactive', tmux: 'swarm:@0.%14', ...fields };
+	writeFileSync(registryFile(pid), JSON.stringify(entry));
+}
+
+// Claude Code removes its registry file when it exits.
+function endOther(pid: number): void {
+	rmSync(join(dir, 'root/proc', String(pid)), { recursive: true, force: true });
+	rmSync(registryFile(pid), { force: true });
+}
+
+function otherSession(pid: number, fields: Partial<OtherSession> = {}): OtherSession {
+	return { pid, claudeSessionId: OTHER, projectDir: OTHER_PROJECT, name: 'swarm-73', status: 'idle', statusSince: T0 - 1000, startedAt: T0 - 60_000, tmux: 'swarm', background: false, ...fields };
+}
+
+function otherLists(client: TestClient): OtherSession[][] {
+	return client.messages.flatMap((m) => (m.type === 'otherSessions' ? [m.sessions] : []));
+}
+
 async function untilRealTime(check: () => boolean): Promise<void> {
 	const deadline = performance.now() + 2000;
 	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
@@ -165,6 +196,7 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 		},
 		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
 		systemRoot: join(dir, 'root'),
+		claudeSessionsDir: join(dir, 'home/.claude/sessions'),
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -742,6 +774,77 @@ describe('openSession', () => {
 	test('an unknown session fails with not_found', async () => {
 		const client = await startHub();
 		expect(await client.request('openSession', { sessionId: 'nope' as SessionId })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+	});
+});
+
+describe('other sessions', () => {
+	test('every client learns the other sessions, and each change to them, within 5 s', async () => {
+		runOther(4321);
+		await startHub();
+		const other = new TestClient(hub);
+		await vi.advanceTimersByTimeAsync(4999);
+		expect(otherLists(other)).toEqual([]);
+		await vi.advanceTimersByTimeAsync(1);
+		await untilRealTime(() => otherLists(other).length === 1);
+		runOther(4321, { status: 'busy', statusUpdatedAt: T0 + 7000 });
+		await vi.advanceTimersByTimeAsync(5000);
+		await untilRealTime(() => otherLists(other).length === 2);
+		expect(otherLists(other)).toEqual([[otherSession(4321)], [otherSession(4321, { status: 'busy', statusSince: T0 + 7000 })]]);
+	});
+
+	test('a read that finds the other sessions unchanged tells no client', async () => {
+		runOther(4321);
+		const client = await startHub();
+		const other = new TestClient(hub);
+		await client.ok('listOtherSessions', {});
+		await client.ok('listOtherSessions', {});
+		expect(otherLists(other)).toEqual([[otherSession(4321)]]);
+	});
+
+	test('listOtherSessions answers the other sessions that run now', async () => {
+		runOther(4321);
+		const client = await startHub();
+		expect(await client.ok('listOtherSessions', {})).toEqual([otherSession(4321)]);
+		endOther(4321);
+		expect(await client.ok('listOtherSessions', {})).toEqual([]);
+	});
+
+	test('orfoni sessions are never other sessions, by conversation ID or, right after a /clear, by tmux session', async () => {
+		const client = await startHub();
+		const { id, claude } = await start(client);
+		runOther(4001, { sessionId: claude, tmux: 'swarm:@0.%1' });
+		runOther(4002, { sessionId: '9b0c5d0e-0000-4000-8000-000000000001', tmux: `orfoni-${id}:@0.%0` });
+		runOther(4003);
+		expect(await client.ok('listOtherSessions', {})).toEqual([otherSession(4003)]);
+		expect(await client.request('openOtherSession', { pid: 4001 })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(await client.request('openOtherSession', { pid: 4002 })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+	});
+
+	test('openOtherSession answers the session and its chat, read from its own transcript in its own folder', async () => {
+		transcripts.set(OTHER, recordedConversation());
+		runOther(4321);
+		const client = await startHub();
+		const opened = (await client.ok('openOtherSession', { pid: 4321 })) as { session: OtherSession; chat: ChatItem[] };
+		expect(history).toEqual([{ claudeSessionId: OTHER, projectDir: OTHER_PROJECT }]);
+		expect(opened.session).toEqual(otherSession(4321));
+		expect(opened.chat.map((item) => item.kind)).toEqual(['notice', 'user', 'tool', 'assistant', 'user', 'assistant']);
+		expect(opened.chat.find((item) => item.kind === 'tool')).toMatchObject({ name: 'Write', status: 'done' });
+		expect(opened.chat.at(-1)).toMatchObject({ kind: 'assistant', text: '1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\ncounted' });
+	});
+
+	test('openOtherSession of a process that is not an other session fails with not_found', async () => {
+		const client = await startHub();
+		expect(await client.request('openOtherSession', { pid: 4321 })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+	});
+
+	test('a registry file that does not parse is logged once, not on every read', async () => {
+		mkdirSync(join(dir, 'home/.claude/sessions'), { recursive: true });
+		writeFileSync(registryFile(4001), '{"pid": 4001, "procSt');
+		const client = await startHub();
+		await client.ok('listOtherSessions', {});
+		await vi.advanceTimersByTimeAsync(5000);
+		await client.ok('listOtherSessions', {});
+		expect(logs.filter((line) => line.includes('4001.json'))).toHaveLength(1);
 	});
 });
 

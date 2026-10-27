@@ -11,6 +11,7 @@ import {
 	type ErrorCode,
 	type HubMessage,
 	type HubStatus,
+	type OtherSession,
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
@@ -22,6 +23,7 @@ import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, normalizeHistory, turnEnded } from './history.js';
 import { paneMemory, systemMemory } from './memory.js';
+import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
@@ -33,6 +35,7 @@ const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const PANE_CHECK_INTERVAL_MS = 5_000;
+const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 
 export interface HubOptions {
@@ -45,6 +48,7 @@ export interface HubOptions {
 	readHistory(claudeSessionId: ClaudeSessionId, projectDir: string): Promise<SessionMessage[]>;
 	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
 	systemRoot: string;
+	claudeSessionsDir: string;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -150,12 +154,16 @@ export class Hub {
 	private readonly waiters = new Set<Waiter>();
 	private saving = Promise.resolve();
 	private readonly paneCheck = setInterval(() => void this.checkPanes(), PANE_CHECK_INTERVAL_MS);
+	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
+	private readonly registry: Registry;
+	private shownOthers: OtherSession[] = [];
 	private readonly summarizer: Summarizer;
 
 	private constructor(
 		private readonly options: HubOptions,
 		budget: SummaryBudget | null,
 	) {
+		this.registry = new Registry(options.claudeSessionsDir, options.systemRoot, options.log);
 		this.summarizer = new Summarizer({
 			...options.summaries,
 			input: (sessionId) => this.summaryInput(sessionId),
@@ -185,6 +193,7 @@ export class Hub {
 
 	close(): void {
 		clearInterval(this.paneCheck);
+		clearInterval(this.registryCheck);
 		this.summarizer.close();
 	}
 
@@ -267,6 +276,10 @@ export class Hub {
 				return {};
 			case 'hubStatus':
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
+			case 'listOtherSessions':
+				return (await this.refreshOthers()).map(({ session }) => session);
+			case 'openOtherSession':
+				return this.openOther(request.pid);
 		}
 	}
 
@@ -373,6 +386,32 @@ export class Hub {
 			userMessages: chat.flatMap((item) => (item.kind === 'user' ? [item.text] : [])),
 			reply: reply?.kind === 'assistant' ? reply.text : null,
 		};
+	}
+
+	private async refreshOthers(): Promise<OtherProcess[]> {
+		const others = (await this.registry.read()).filter(({ session }) => !this.owns(session));
+		const sessions = others.map(({ session }) => session);
+		if (JSON.stringify(sessions) !== JSON.stringify(this.shownOthers)) {
+			this.shownOthers = sessions;
+			this.broadcast({ type: 'otherSessions', sessions });
+		}
+		return others;
+	}
+
+	// Right after a /clear the registry already has the new conversation ID while the hub still has the old one, so the tmux session tells too.
+	private owns(other: OtherSession): boolean {
+		return [...this.sessions.values()].some((session) => session.model.claudeSessionId === other.claudeSessionId || tmuxName(session.id) === other.tmux);
+	}
+
+	private async other(pid: number): Promise<OtherProcess> {
+		const other = (await this.refreshOthers()).find(({ session }) => session.pid === pid);
+		if (!other) throw new HubError('not_found', `no other session runs as process ${pid}`);
+		return other;
+	}
+
+	private async openOther(pid: number): Promise<{ session: OtherSession; chat: ChatItem[] }> {
+		const { session } = await this.other(pid);
+		return { session, chat: normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)) };
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {
