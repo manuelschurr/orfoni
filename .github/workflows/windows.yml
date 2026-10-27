@@ -2,8 +2,6 @@ name: windows
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 
 permissions:
   contents: read
@@ -12,8 +10,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -25,9 +23,11 @@ jobs:
   build:
     needs: test
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -35,11 +35,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri -> target
+      # Every build gets its own version, the major and minor from tauri.conf.json and the run number, so installers can be told apart.
+      - id: version
+        shell: bash
+        run: |
+          node -e "
+            const file = 'app/src-tauri/tauri.conf.json';
+            const config = JSON.parse(require('fs').readFileSync(file, 'utf8'));
+            config.version = config.version.split('.').slice(0, 2).join('.') + '.${{ github.run_number }}';
+            require('fs').writeFileSync(file, JSON.stringify(config, null, '\t'));
+            require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + config.version + '\n');
+          "
       - run: cargo test --manifest-path app/src-tauri/Cargo.toml
       - run: npm ci
       - run: npm run tauri -w app -- build --bundles nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: orfoni-windows-installer
           path: app/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: orfoni-windows-installer
+          path: installer
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: gh release create "v$VERSION" installer/*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "orfoni $VERSION" --notes "Windows installer built from $GITHUB_SHA. It is not signed, so SmartScreen asks first; choose More info, then Run anyway." --generate-notes
