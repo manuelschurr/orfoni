@@ -10,6 +10,7 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
+	type HubStatus,
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
@@ -20,6 +21,7 @@ import { z } from 'zod';
 import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, normalizeHistory, turnEnded } from './history.js';
+import { paneMemory, systemMemory } from './memory.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, endsSession, reduce, taskProgress, type SessionInput, type SessionModel } from './session/reduce.js';
 import { hookSettings } from './settings.js';
@@ -31,6 +33,7 @@ const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const PANE_CHECK_INTERVAL_MS = 5_000;
+const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 
 export interface HubOptions {
 	tmux: Tmux;
@@ -41,6 +44,7 @@ export interface HubOptions {
 	shell: string;
 	readHistory(claudeSessionId: ClaudeSessionId, projectDir: string): Promise<SessionMessage[]>;
 	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
+	systemRoot: string;
 	log(line: string): void;
 }
 
@@ -89,10 +93,10 @@ function tmuxName(id: SessionId): string {
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
@@ -254,6 +258,8 @@ export class Hub {
 			case 'removeSession':
 				await this.remove(this.session(request.sessionId));
 				return {};
+			case 'hubStatus':
+				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
 		}
 	}
 
@@ -263,7 +269,9 @@ export class Hub {
 		return session;
 	}
 
-	private async startSession(request: Extract<ClientRequest, { method: 'startSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
+	private async startSession(
+		request: Extract<ClientRequest, { method: 'startSession' }>,
+	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		const now = Date.now();
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const session: Session = {
@@ -290,7 +298,11 @@ export class Hub {
 		}
 		this.save();
 		this.broadcast({ type: 'sessionUpdated', session: summary(session) });
-		return { session: summary(session), needsTrust };
+		const memory = await systemMemory(this.options.systemRoot).catch((error: Error) => {
+			this.options.log(`orfoni-hub: reading the VPS memory failed: ${error.message}`);
+			return null;
+		});
+		return { session: summary(session), needsTrust, ...(memory && memory.availableBytes < LOW_MEMORY_BYTES ? { memoryWarning: memory } : {}) };
 	}
 
 	private async needsTrust(projectDir: string): Promise<boolean> {
@@ -465,15 +477,29 @@ export class Hub {
 	}
 
 	private async checkPanes(): Promise<void> {
+		let running: Map<string, number>;
 		try {
 			const listedAt = Date.now();
-			const running = new Set((await this.options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
+			running = new Map((await this.options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => [pane.name, pane.panePid]));
 			for (const session of this.sessions.values()) {
 				if (!running.has(tmuxName(session.id)) && expectsTmux(session.claude, listedAt)) this.paneExited(session);
 			}
 		} catch (error) {
 			this.options.log(`orfoni-hub: listing tmux panes failed: ${(error as Error).message}`);
+			return;
 		}
+		await Promise.all([...this.sessions.values()].map((session) => this.checkMemory(session, running.get(tmuxName(session.id)))));
+	}
+
+	private async checkMemory(session: Session, panePid: number | undefined): Promise<void> {
+		const memory =
+			panePid === undefined
+				? null
+				: await paneMemory(panePid, this.options.systemRoot).catch((error: Error) => {
+						this.options.log(`orfoni-hub: reading the memory of session ${session.id} failed: ${error.message}`);
+						return null;
+					});
+		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'memory_read', memory, at: Date.now() });
 	}
 
 	private paneExited(session: Session): void {

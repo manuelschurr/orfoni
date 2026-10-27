@@ -111,6 +111,24 @@ function body(name: string, claudeSessionId: string, fields: Record<string, unkn
 	return { ...fixture(name), session_id: claudeSessionId, ...fields };
 }
 
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+function writeMeminfo(availableBytes: number, totalBytes = 12 * GB): void {
+	mkdirSync(join(dir, 'root/proc'), { recursive: true });
+	writeFileSync(join(dir, 'root/proc/meminfo'), `MemTotal: ${totalBytes / 1024} kB\nMemFree: 1000 kB\nMemAvailable: ${availableBytes / 1024} kB\n`);
+}
+
+function writeCgroup(panePid: number, currentBytes: number, oomKills = 0): void {
+	const scope = `user.slice/tmux-spawn-${panePid}.scope`;
+	mkdirSync(join(dir, 'root/proc', String(panePid)), { recursive: true });
+	mkdirSync(join(dir, 'root/sys/fs/cgroup', scope), { recursive: true });
+	writeFileSync(join(dir, 'root/proc', String(panePid), 'cgroup'), `0::/${scope}\n`);
+	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.current'), `${currentBytes}\n`);
+	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.max'), `${8 * GB}\n`);
+	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.events'), `max 0\noom 0\noom_kill ${oomKills}\n`);
+}
+
 async function untilRealTime(check: () => boolean): Promise<void> {
 	const deadline = performance.now() + 2000;
 	while (!check() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
@@ -146,6 +164,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 			return transcripts.get(claudeSessionId) ?? transcript;
 		},
 		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
+		systemRoot: join(dir, 'root'),
 		log: (line) => logs.push(line),
 	});
 	return new TestClient(hub);
@@ -172,6 +191,7 @@ beforeEach(() => {
 	transcripts = new Map();
 	apiKey = { missing: 'no key in tests' };
 	summaryPrompts = [];
+	writeMeminfo(6 * GB);
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
 });
@@ -620,6 +640,79 @@ describe('task progress', () => {
 		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, tasks: { done: 1, total: 2 } })]);
 		await hub.hook(id, body('SessionStart', '9b0c5d0e-0000-4000-8000-000000000001', { source: 'clear' }));
 		expect(other.session(id)?.tasks).toBeNull();
+	});
+});
+
+describe('memory', () => {
+	async function readMemory(): Promise<void> {
+		await vi.advanceTimersByTimeAsync(5000);
+	}
+
+	test('every 5 s each running session gets the memory of its pane cgroup', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		writeCgroup(1000, 300 * MB);
+		await vi.advanceTimersByTimeAsync(5000);
+		await untilRealTime(() => client.session(id)?.memory !== null);
+		const memory = { currentBytes: 300 * MB, maxBytes: 8 * GB, oomKills: 0 };
+		expect(client.session(id)?.memory).toEqual(memory);
+		expect(await client.ok('listSessions', {})).toEqual([expect.objectContaining({ id, memory })]);
+	});
+
+	test('an out-of-memory kill in a session adds a notice to its chat and shows on its row', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		writeCgroup(1000, 2 * GB, 0);
+		await readMemory();
+		await untilRealTime(() => client.session(id)?.memory !== null);
+		expect(client.chat(id)).toEqual([]);
+		writeCgroup(1000, 3 * GB, 1);
+		await readMemory();
+		await untilRealTime(() => client.chat(id).length > 0);
+		expect(client.chat(id)).toEqual([{ kind: 'notice', id: expect.any(String), text: expect.stringMatching(/out of memory/), at: expect.any(Number) }]);
+		expect(client.session(id)?.memory).toEqual({ currentBytes: 3 * GB, maxBytes: 8 * GB, oomKills: 1 });
+	});
+
+	test('kills from before the hub first read a session add no notice', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		writeCgroup(1000, GB, 3);
+		await readMemory();
+		await untilRealTime(() => client.session(id)?.memory !== null);
+		expect(client.session(id)?.memory?.oomKills).toBe(3);
+		expect(client.chat(id)).toEqual([]);
+	});
+
+	test('a session whose pane is gone has no memory', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		writeCgroup(1000, GB);
+		await readMemory();
+		await untilRealTime(() => client.session(id)?.memory !== null);
+		fake.live.delete(`orfoni-${id}`);
+		await readMemory();
+		await untilRealTime(() => client.session(id)?.memory === null);
+		expect(client.session(id)).toMatchObject({ state: 'offline', memory: null });
+	});
+
+	test('hubStatus reports the VPS memory and whether summaries are on with what they cost today', async () => {
+		writeMeminfo(3 * GB, 12 * GB);
+		const client = await startHub();
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0 } });
+		apiKey = { key: 'sk-test' };
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => client.session(id)?.summary !== null);
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000 } });
+	});
+
+	test('startSession warns when less than 1.5 GB of memory is available', async () => {
+		writeMeminfo(1500 * MB, 12 * GB);
+		const client = await startHub();
+		expect((await start(client)).started).toMatchObject({ memoryWarning: { availableBytes: 1500 * MB, totalBytes: 12 * GB } });
+		writeMeminfo(1600 * MB, 12 * GB);
+		expect((await start(client)).started).not.toHaveProperty('memoryWarning');
 	});
 });
 

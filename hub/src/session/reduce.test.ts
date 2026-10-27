@@ -367,6 +367,41 @@ describe('reduce', () => {
 		expect(taskProgress(run(started, prompted, ...tasks, hook('session_start', { source: 'clear' }, 4, second)))).toBeNull();
 	});
 
+	const MB = 1024 * 1024;
+	const reading = (megabytes: number, oomKills = 0) => ({ currentBytes: megabytes * MB, maxBytes: 8192 * MB, oomKills });
+	const memoryRead = (megabytes: number | null, oomKills = 0, at = 10): SessionInput => ({ kind: 'memory_read', memory: megabytes === null ? null : reading(megabytes, oomKills), at });
+
+	test('a memory reading replaces the kept one only when it moved by more than 10 percent or 50 MB from it', () => {
+		const kept: (number | undefined)[] = [];
+		let model = run(started);
+		for (const megabytes of [1000, 1040, 1049, 1051, 100, 109, 111, 60]) {
+			model = reduce(model, memoryRead(megabytes));
+			kept.push(model.memory && model.memory.currentBytes / MB);
+		}
+		expect(kept).toEqual([1000, 1000, 1000, 1051, 100, 100, 111, 60]);
+	});
+
+	test('a memory reading with a new limit or kill count, or a pane that is gone, always replaces the kept one', () => {
+		const model = run(started, memoryRead(1000));
+		expect(reduce(model, { kind: 'memory_read', memory: { ...reading(1000), maxBytes: null }, at: 11 }).memory?.maxBytes).toBeNull();
+		expect(reduce(model, memoryRead(1000, 1)).memory?.oomKills).toBe(1);
+		expect(reduce(model, memoryRead(null)).memory).toBeNull();
+		expect(reduce(model, memoryRead(1001))).toBe(model);
+	});
+
+	test('a growing oom_kill count adds a notice to the chat', () => {
+		const one = run(started, memoryRead(1000, 0), memoryRead(1000, 1, 11));
+		expect(one.chat).toEqual([{ kind: 'notice', id: expect.any(String), text: 'A process in this session ran out of memory and was killed.', at: 11 }]);
+		const two = run(started, memoryRead(1000, 1), memoryRead(1000, 3, 11));
+		expect(two.chat).toEqual([{ kind: 'notice', id: expect.any(String), text: '2 processes in this session ran out of memory and were killed.', at: 11 }]);
+	});
+
+	test('kills counted before the first reading, or by a new pane after a restart of claude, add no notice', () => {
+		expect(run(started, memoryRead(1000, 4)).chat).toEqual([]);
+		expect(run(started, memoryRead(1000, 4), memoryRead(null), memoryRead(1000, 5)).chat).toEqual([]);
+		expect(run(started, memoryRead(1000, 4), memoryRead(1000, 0)).chat).toEqual([]);
+	});
+
 	test('reduce returns a new model and leaves its input untouched', () => {
 		const before = run(started, prompted);
 		const snapshot = structuredClone(before);

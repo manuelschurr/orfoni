@@ -28,6 +28,7 @@ async function daemon(): Promise<void> {
 			apiKey: () => readApiKey(join(homedir(), '.config/orfoni/anthropic-api-key'), process.env.ANTHROPIC_API_KEY),
 			client: (apiKey) => claudeClient(apiKey),
 		},
+		systemRoot: '/',
 		log,
 	});
 	await listenHooks(hub, hookSocket, log);

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind } from '@orfoni/protocol';
 import type { HookEvent } from '../hooks/events.js';
+import type { PaneMemory } from '../memory.js';
 import type { Summary } from '../summaries.js';
 
 export interface SessionModel {
@@ -13,6 +14,7 @@ export interface SessionModel {
 	chatStartedAt: number | null;
 	summary: Summary | null;
 	tasks: Record<string, boolean>;
+	memory: PaneMemory | null;
 }
 
 export type SessionInput =
@@ -23,7 +25,8 @@ export type SessionInput =
 	| { kind: 'view_changed'; viewing: boolean; at: number }
 	| { kind: 'interrupted'; at: number }
 	| { kind: 'pane_exited'; at: number }
-	| { kind: 'summarized'; summary: Summary; at: number };
+	| { kind: 'summarized'; summary: Summary; at: number }
+	| { kind: 'memory_read'; memory: PaneMemory | null; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -33,7 +36,23 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {} };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null };
+}
+
+const MEMORY_STEP_BYTES = 50 * 1024 * 1024;
+
+function memoryChanged(before: PaneMemory | null, after: PaneMemory | null): boolean {
+	if (before === null || after === null) return before !== after;
+	const step = Math.abs(after.currentBytes - before.currentBytes);
+	return step > MEMORY_STEP_BYTES || step > before.currentBytes * 0.1 || after.maxBytes !== before.maxBytes || after.oomKills !== before.oomKills;
+}
+
+function readMemory(model: SessionModel, memory: PaneMemory | null, at: number): SessionModel {
+	if (!memoryChanged(model.memory, memory)) return model;
+	const kills = model.memory && memory ? memory.oomKills - model.memory.oomKills : 0;
+	if (kills <= 0) return { ...model, memory };
+	const text = kills === 1 ? 'A process in this session ran out of memory and was killed.' : `${kills} processes in this session ran out of memory and were killed.`;
+	return { ...model, memory, chat: [...model.chat, { kind: 'notice', id: `notice-${randomUUID()}`, text, at }] };
 }
 
 export function taskProgress({ tasks }: SessionModel): { done: number; total: number } | null {
@@ -190,5 +209,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return enter(model, 'offline', at);
 		case 'summarized':
 			return { ...model, summary: input.summary };
+		case 'memory_read':
+			return readMemory(model, input.memory, at);
 	}
 }
