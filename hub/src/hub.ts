@@ -21,7 +21,7 @@ import {
 import { z } from 'zod';
 import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
-import { joinHistory, normalizeHistory, turnEnded } from './history.js';
+import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
 import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
@@ -130,14 +130,17 @@ function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
 	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
 }
 
-async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<SessionStateKind> {
-	const { claudeSessionId, projectDir } = stored;
+async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<{ state: SessionStateKind; lastTurnEndedAt: number | null }> {
+	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt } = stored;
 	try {
-		if (!turnEnded(await options.readHistory(claudeSessionId, projectDir))) return 'working';
-		return unread(stored) ? 'answered' : 'idle';
+		const history = await options.readHistory(claudeSessionId, projectDir);
+		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt };
+		// The Stop hook of a turn that ended while the hub was down reached nobody, so the transcript is the only record of when it ended.
+		const endedAt = Math.max(lastTurnEndedAt ?? 0, lastEntryAt(history) ?? 0) || null;
+		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt };
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
-		return 'working';
+		return { state: 'working', lastTurnEndedAt };
 	}
 }
 
@@ -190,10 +193,13 @@ export class Hub {
 		const state = await loadState(join(options.stateDir, 'state.json'), options.log);
 		const running = new Set((await options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
 		const hub = new Hub(options, state.summaries);
-		const states = await Promise.all(state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : 'offline')));
+		const restored = await Promise.all(
+			state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline' as const, lastTurnEndedAt: stored.lastTurnEndedAt })),
+		);
 		const now = Date.now();
-		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, tasks, lastTurnEndedAt, lastViewedAt }, index) => {
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, tasks, lastTurnEndedAt, lastViewedAt, state: states[index] ?? 'offline' };
+		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, tasks, lastViewedAt }, index) => {
+			const { state: kind, lastTurnEndedAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, tasks, lastTurnEndedAt, lastViewedAt, state: kind };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});

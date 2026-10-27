@@ -1210,6 +1210,27 @@ describe('read state and the state file', () => {
 		expect(states).toEqual({ [unread.id]: 'answered', [read.id]: 'idle', [watched.id]: 'idle' });
 	});
 
+	// The Stop hook of a turn that ends while the hub restarts reaches nobody, so only the transcript knows when that turn ended.
+	test('a turn that ended while the hub was down comes back answered, and a turn seen before the restart stays read', async () => {
+		const client = await startHub();
+		const unseen = await ready(client);
+		const seen = await ready(client);
+		await hub.hook(unseen.id, body('UserPromptSubmit', unseen.claude, { prompt: 'hi' }));
+		await client.ok('openSession', { sessionId: seen.id });
+		await hub.hook(seen.id, body('UserPromptSubmit', seen.claude, { prompt: 'hi' }));
+		await hub.hook(seen.id, body('Stop', seen.claude));
+		await saved((state) => state.sessions.some((session) => session.lastTurnEndedAt !== null));
+		// The transcript stamps an entry a moment before its hook reaches the hub.
+		const stamped = (at: number) => [entry('user', 'hi'), { ...entry('assistant', [{ type: 'text', text: 'done' }], 'end_turn'), timestamp: new Date(at).toISOString() }];
+		transcripts.set(seen.claude, stamped(Date.now() - 1000));
+		transcripts.set(unseen.claude, stamped(Date.now() + 30_000));
+		client.close();
+
+		const after = await restart([unseen, seen].map(({ id }) => `orfoni-${id}`));
+		const states = Object.fromEntries(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => [session.id, session.state]));
+		expect(states).toEqual({ [unseen.id]: 'answered', [seen.id]: 'idle' });
+	});
+
 	test('an answered session opened after the restart turns idle and stays read through the next restart', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);

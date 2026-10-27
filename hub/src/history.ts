@@ -89,6 +89,13 @@ export function turnEnded(messages: SessionMessage[]): boolean {
 	return last.success && last.data.type === 'assistant' && last.data.message?.stop_reason === 'end_turn';
 }
 
+const Stamped = z.object({ timestamp: z.iso.datetime() });
+
+export function lastEntryAt(messages: SessionMessage[]): number | null {
+	const last = Stamped.safeParse(messages.findLast((message) => message.type !== 'system'));
+	return last.success ? Date.parse(last.data.timestamp) : null;
+}
+
 function sameEvent(a: ChatItem, b: ChatItem): boolean {
 	if (a.kind === 'user' && b.kind === 'user') return a.text === b.text;
 	if (a.kind === 'tool' && b.kind === 'tool') return a.toolUseId === b.toolUseId;
