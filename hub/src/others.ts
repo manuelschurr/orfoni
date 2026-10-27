@@ -10,7 +10,7 @@ const Entry = z.object({
 	sessionId: ClaudeSessionId,
 	cwd: z.string(),
 	name: z.string().nullish(),
-	status: z.string(),
+	status: z.string().optional(),
 	statusUpdatedAt: z.number().optional(),
 	startedAt: z.number(),
 	kind: z.string().optional(),

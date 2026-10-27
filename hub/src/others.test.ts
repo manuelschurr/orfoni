@@ -90,6 +90,15 @@ describe('Registry', () => {
 		]);
 	});
 
+	test('a session that just started and has no status yet is busy since it started, as Claude Code writes the status a moment later', async () => {
+		writeEntry(1874618, { status: undefined, statusUpdatedAt: undefined, updatedAt: undefined });
+		writeProcess(1874618, '66936127');
+		expect((await registry().read()).map(({ session }) => session)).toEqual([
+			{ pid: 1874618, claudeSessionId: SWARM, projectDir: '/root/projects/swarm', name: 'swarm-73', status: 'busy', statusSince: T, startedAt: T, tmux: 'swarm', background: false },
+		]);
+		expect(logs).toEqual([]);
+	});
+
 	test('a status other than idle reads as busy', async () => {
 		writeEntry(1172033, { status: 'waiting' });
 		writeProcess(1172033, '66936127');
