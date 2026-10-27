@@ -1,5 +1,5 @@
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeAll, expect, test } from 'vitest';
 import App from './App.svelte';
 import type { Settings } from './lib/tauri-transport';
@@ -11,6 +11,7 @@ type Internals = {
 };
 type Handler = (cmd: string, args: Record<string, unknown>, push: (message: unknown) => void) => unknown;
 
+const GB = 1024 ** 3;
 const settings: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect' };
 const globals = window as unknown as { __TAURI_INTERNALS__: Internals; isTauri?: boolean };
 
@@ -132,4 +133,38 @@ test('the window title counts the sessions that need you or have an unread answe
 	hubLine({ type: 'sessionUpdated', session: summary('a5', 'working', { stateSince: 2000 }) });
 	await waitFor(() => expect(document.title).toBe('orfoni'));
 	await waitFor(() => expect(titles.at(-1)).toBe('main: orfoni'));
+});
+
+test('a session started while the VPS is low on memory says so until dismissed', async () => {
+	const started = summary('n1', 'idle', { title: 'Check the logs' });
+	let hubLine: (message: unknown) => void = () => {};
+	inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				hubLine = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string };
+				const results: Record<string, unknown> = {
+					listSessions: [],
+					startSession: { session: started, needsTrust: false, memoryWarning: { availableBytes: 1.2 * GB, totalBytes: 11.7 * GB } },
+					openSession: { session: started, chat: [] },
+				};
+				if (request.method in results) hubLine({ type: 'response', id: request.id, ok: true, result: results[request.method] });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	render(App);
+	await fireEvent.click(within(await screen.findByRole('navigation', { name: 'Sessions' })).getByRole('button', { name: 'New session' }));
+	await fireEvent.input(screen.getByLabelText('Folder', { exact: true }), { target: { value: '/root/projects/alpha' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+	const note = await screen.findByText('The VPS had 1.2 GB of 11.7 GB free when this session started. Stop sessions you no longer need before it runs out.');
+	await fireEvent.click(within(note.closest('[role="note"]') as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+	await waitFor(() => expect(screen.queryByText(/free when this session started/)).toBeNull());
 });

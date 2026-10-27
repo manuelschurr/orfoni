@@ -1,16 +1,16 @@
 <script lang="ts">
-	import type { SessionId, SessionSummary } from '@orfoni/protocol';
+	import type { HubStatus, SessionId, SessionSummary } from '@orfoni/protocol';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { onMount } from 'svelte';
 	import { createTransports } from './lib/connect';
-	import { HubClient } from './lib/hub-client.svelte';
+	import { HubClient, type Result } from './lib/hub-client.svelte';
 	import { Setup } from './lib/setup.svelte';
 	import { loadSettings, saveSettings } from './lib/tauri-transport';
 	import type { TerminalTransport } from './lib/transport';
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
-	import { folderName, sessionTitle, windowTitle } from './lib/ui/format';
+	import { bytes, folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
 	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
@@ -30,12 +30,14 @@
 	let failure = $state<string | null>(null);
 	let creating = $state(false);
 	let untrusted = $state<SessionId[]>([]);
+	let lowMemory = $state<{ id: SessionId; memory: HubStatus['memory'] }[]>([]);
 	let terminals = $state<OpenTerminal[]>([]);
 	let shownTerminal = $state<string | null>(null);
 	let composer: Composer | undefined = $state();
 	const panels: Record<string, TerminalPanel> = $state({});
 	const session = $derived(client?.selected ? client.sessions.get(client.selected) : undefined);
 	const trustHint = $derived(session !== undefined && untrusted.includes(session.id) && (client?.chats.get(session.id)?.length ?? 0) === 0);
+	const memoryHint = $derived(session && lowMemory.find((entry) => entry.id === session.id)?.memory);
 	const step = $derived(setup?.step);
 	const title = $derived(windowTitle(client?.sessions.values() ?? []));
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
@@ -64,8 +66,9 @@
 		if (isTauri()) getCurrentWindow().setTitle(title).catch((error: unknown) => console.warn('set_title', error));
 	});
 
-	function started(created: SessionSummary, needsTrust: boolean): void {
+	function started({ session: created, needsTrust, memoryWarning }: Result<'startSession'>): void {
 		if (needsTrust) untrusted = [...untrusted, created.id];
+		if (memoryWarning) lowMemory = [...lowMemory, { id: created.id, memory: memoryWarning }];
 		void client?.select(created.id).catch(() => {});
 	}
 
@@ -106,8 +109,14 @@
 					<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} />
 					<ChatView {client} sessionId={session.id}>
 						{#snippet banner()}
+							{#if memoryHint}
+								<div class="note" role="note">
+									<p>The VPS had {bytes(memoryHint.availableBytes)} of {bytes(memoryHint.totalBytes)} free when this session started. Stop sessions you no longer need before it runs out.</p>
+									<button class="btn btn-quiet" onclick={() => (lowMemory = lowMemory.filter((entry) => entry.id !== session.id))}>Dismiss</button>
+								</div>
+							{/if}
 							{#if trustHint}
-								<div class="trust" role="note">
+								<div class="note" role="note">
 									<p>Claude Code asks whether you trust this folder before it starts. Open the terminal and choose "Yes, I trust this folder".</p>
 									<button class="btn btn-primary" onclick={() => sessionTerminal(session)}>Open terminal</button>
 									<button class="btn btn-quiet" onclick={() => (untrusted = untrusted.filter((id) => id !== session.id))}>Dismiss</button>
@@ -223,7 +232,7 @@
 		gap: 0.5rem;
 	}
 
-	.trust {
+	.note {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -236,7 +245,7 @@
 		font-size: 0.9375rem;
 	}
 
-	.trust p {
+	.note p {
 		flex: 1 1 20rem;
 		margin: 0;
 	}

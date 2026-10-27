@@ -1,13 +1,13 @@
 <script lang="ts">
-	import type { PermissionMode, ProjectDir, SessionSummary } from '@orfoni/protocol';
-	import type { HubClient } from '../hub-client.svelte';
+	import type { PermissionMode, ProjectDir } from '@orfoni/protocol';
+	import type { HubClient, Result } from '../hub-client.svelte';
 	import { folderName } from './format';
 
 	let {
 		client,
 		open = $bindable(false),
 		onstarted,
-	}: { client: HubClient; open: boolean; onstarted: (session: SessionSummary, needsTrust: boolean) => void } = $props();
+	}: { client: HubClient; open: boolean; onstarted: (started: Result<'startSession'>) => void } = $props();
 	let dialog: HTMLDialogElement | undefined = $state();
 	let dirs = $state<ProjectDir[]>([]);
 	let folder = $state('');
@@ -46,7 +46,7 @@
 		busy = true;
 		error = null;
 		try {
-			const { session, needsTrust } = await client.startSession({
+			const started = await client.startSession({
 				projectDir,
 				prompt: prompt.trim() || undefined,
 				title: titleFrom(prompt),
@@ -55,7 +55,7 @@
 			});
 			prompt = '';
 			open = false;
-			onstarted(session, needsTrust);
+			onstarted(started);
 		} catch (e) {
 			error = (e as Error).message;
 		} finally {

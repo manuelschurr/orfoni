@@ -21,7 +21,7 @@ export type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }
 const done = z.object({});
 const results = {
 	listSessions: z.array(SessionSummary),
-	startSession: z.object({ session: SessionSummary, needsTrust: z.boolean() }),
+	startSession: z.object({ session: SessionSummary, needsTrust: z.boolean(), memoryWarning: HubStatus.shape.memory.optional() }),
 	openSession: z.object({ session: SessionSummary, chat: z.array(ChatItem) }),
 	send: done,
 	decide: z.object({ outcome: z.enum(['allowed', 'denied', 'answered', 'approved', 'rejected']) }),
