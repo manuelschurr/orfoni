@@ -161,4 +161,14 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const memoryMax = execFileSync('systemctl', ['--user', 'show', cgroup, '-p', 'MemoryMax'], { encoding: 'utf8' }).trim();
 		expect(memoryMax).toBe('MemoryMax=8589934592');
 	});
+
+	test('a session reports its task progress and its memory against the pane cap', async () => {
+		const { id } = await start({
+			prompt: 'Use the TaskCreate tool to create two tasks, one named alpha and one named beta. Then use the TaskUpdate tool to mark alpha as completed. Do not work on beta. Then reply with exactly: tasks set',
+		});
+		const session = await client.waitForSession(id, (s) => s.state === 'answered' && s.tasks?.done === 1 && s.memory !== null);
+		expect(session.tasks).toEqual({ done: 1, total: 2 });
+		expect(session.memory?.maxBytes).toBe(8589934592);
+		expect(session.memory?.currentBytes).toBeGreaterThan(0);
+	});
 });
