@@ -47,6 +47,19 @@ describe('normalizeHistory', () => {
 		]);
 	});
 
+	test('a command run in the terminal shows as typed, without the tags Claude Code records it in or its output', () => {
+		const at = Date.parse('2026-10-26T12:00:00.000Z');
+		const items = normalizeHistory([
+			message('user', '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>'),
+			message('user', '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>'),
+			message('user', '<local-command-stdout>Set model to opus</local-command-stdout>'),
+			message('user', '<bash-input>ls -la</bash-input>'),
+			message('user', '<bash-stdout>a.txt</bash-stdout><bash-stderr></bash-stderr>'),
+		]);
+		expect(items.map((item) => (item.kind === 'user' ? item.text : item.kind))).toEqual(['/clear', '/model opus', '!ls -la']);
+		expect(items.every((item) => item.kind === 'user' && item.at === at)).toBe(true);
+	});
+
 	test('every item gets its own ID', () => {
 		const ids = normalizeHistory(recorded).flatMap((item) => ('id' in item ? [item.id] : []));
 		expect(ids).toHaveLength(5);

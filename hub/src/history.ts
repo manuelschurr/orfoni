@@ -15,6 +15,21 @@ const Text = z.object({ type: z.literal('text'), text: z.string() });
 const ToolUse = z.object({ type: z.literal('tool_use'), id: z.string(), name: z.string(), input: z.unknown() });
 const ToolResult = z.object({ type: z.literal('tool_result'), tool_use_id: z.string(), content: z.unknown(), is_error: z.boolean().optional() });
 
+const TERMINAL_OUTPUT = /^\s*<(bash-stdout|bash-stderr|local-command-stdout|local-command-stderr)>/;
+
+// Claude Code records what you run in its terminal wrapped in tags, the output included. The chat shows the command as you typed it, as the live chat does, and leaves the output to the terminal.
+function typed(text: string): string | null {
+	const command = /^\s*<command-name>([^<]*)<\/command-name>/.exec(text);
+	if (command) {
+		const name = command[1]!.startsWith('/') ? command[1]! : `/${command[1]}`;
+		const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim();
+		return args ? `${name} ${args}` : name;
+	}
+	const shell = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(text);
+	if (shell) return `!${shell[1]}`;
+	return TERMINAL_OUTPUT.test(text) ? null : text;
+}
+
 function textOf(content: string | { type: string }[]): string {
 	if (typeof content === 'string') return content;
 	return content.flatMap((block) => {
@@ -30,7 +45,12 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 	function block(role: 'user' | 'assistant', id: string, at: number, raw: unknown): void {
 		const text = Text.safeParse(raw);
 		if (text.success) {
-			items.push(role === 'user' ? { kind: 'user', id: `user-${id}`, text: text.data.text, at } : { kind: 'assistant', id: `assistant-${id}`, text: text.data.text, done: true });
+			if (role === 'assistant') {
+				items.push({ kind: 'assistant', id: `assistant-${id}`, text: text.data.text, done: true });
+				return;
+			}
+			const shown = typed(text.data.text);
+			if (shown !== null) items.push({ kind: 'user', id: `user-${id}`, text: shown, at });
 			return;
 		}
 		const use = ToolUse.safeParse(raw);

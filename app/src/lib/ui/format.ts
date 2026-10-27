@@ -25,7 +25,7 @@ function firstLine(text: string): string {
 
 export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string {
 	if (session.title) return session.title;
-	const prompt = chat?.find((item) => item.kind === 'user');
+	const prompt = chat?.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
 	return prompt?.kind === 'user' ? firstLine(prompt.text) : 'Untitled session';
 }
 
