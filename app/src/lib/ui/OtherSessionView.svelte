@@ -13,7 +13,7 @@
 	const view = $derived(client.other);
 	const ended = $derived(view !== null && !client.others.some((other) => other.pid === view.session.pid));
 	const busy = $derived(!ended && view?.session.status === 'busy');
-	// Ported from another device: the conversation went on in an orfoni session.
+	// A port keeps the conversation ID, so an orfoni session that holds it is where this session went.
 	const continued = $derived(ended && view ? [...client.sessions.values()].find((session) => session.claudeSessionId === view.session.claudeSessionId) : undefined);
 	const refusals: Partial<Record<HubRequestError['code'], string>> = {
 		not_ready: 'Claude is working in this session, so orfoni changed nothing. Port it once the turn ends.',
@@ -78,7 +78,8 @@
 		</div>
 	{/if}
 
-	<dialog bind:this={dialog} class="dialog" aria-labelledby="port-title">
+	<!-- The hub finishes a port it has begun, so the dialog stays until the answer comes. -->
+	<dialog bind:this={dialog} class="dialog" aria-labelledby="port-title" oncancel={(event) => porting && event.preventDefault()}>
 		<form onsubmit={port}>
 			<h2 id="port-title">Port "{otherName(session)}" into orfoni?</h2>
 			<p>{otherEnding(session)} and continues the conversation here as a new orfoni session.</p>
@@ -86,7 +87,7 @@
 			<PermissionModeField bind:value={permissionMode} />
 			{#if error}<p class="error" role="alert">{error}</p>{/if}
 			<div class="buttons">
-				<button type="button" class="btn" onclick={() => dialog?.close()}>Cancel</button>
+				<button type="button" class="btn" disabled={porting} onclick={() => dialog?.close()}>Cancel</button>
 				<button type="submit" class="btn btn-primary" disabled={porting}>{porting ? 'Porting' : 'Port session'}</button>
 			</div>
 		</form>

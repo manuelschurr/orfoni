@@ -64,6 +64,10 @@ test('the port dialog says what happens where the session runs now, starts on Au
 	await fireEvent.change(mode, { target: { value: 'plan' } });
 	await fireEvent.click(within(dialog).getByRole('button', { name: 'Port session' }));
 	expect(transport.requests('portSession')).toMatchObject([{ pid: 1172033, claudeSessionId: swarm.claudeSessionId, permissionMode: 'plan' }]);
+	expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
+	const escape = new Event('cancel', { cancelable: true });
+	dialog.dispatchEvent(escape);
+	expect(escape.defaultPrevented).toBe(true);
 	const ported = { session: summary('p1', 'idle', { title: 'swarm-73', projectDir: swarm.projectDir }), needsTrust: false };
 	transport.respond('portSession', ported);
 	await vi.waitFor(() => expect(onported).toHaveBeenCalledWith(ported));
