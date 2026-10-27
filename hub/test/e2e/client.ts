@@ -60,8 +60,8 @@ export class HubClient {
 		return message.item;
 	}
 
-	async waitForSession(sessionId: SessionId, predicate: (session: SessionSummary) => boolean, since?: number): Promise<SessionSummary> {
-		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && predicate(m.session), since);
+	async waitForSession(sessionId: SessionId, predicate: (session: SessionSummary) => boolean, since?: number, timeoutMs?: number): Promise<SessionSummary> {
+		const message = await this.waitFor((m) => m.type === 'sessionUpdated' && m.session.id === sessionId && predicate(m.session), since, timeoutMs);
 		if (message.type !== 'sessionUpdated') throw new Error('unreachable');
 		return message.session;
 	}
