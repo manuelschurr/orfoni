@@ -106,6 +106,14 @@ function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
 }
 
+function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientRequest, { method: 'startSession' | 'portSession' }>, 'model' | 'effort' | 'permissionMode'>): string[] {
+	return [
+		...(model ? ['--model', model] : []),
+		...(effort ? ['--effort', effort] : []),
+		...(permissionMode ? ['--permission-mode', permissionMode] : []),
+	];
+}
+
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
 	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null };
@@ -342,8 +350,7 @@ export class Hub {
 	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const options = [
-			...(request.model ? ['--model', request.model] : []),
-			...(request.permissionMode ? ['--permission-mode', request.permissionMode] : []),
+			...claudeOptions(request),
 			...(request.title ? ['--name', request.title] : []),
 			...(request.prompt ? ['--', request.prompt] : []),
 		];
@@ -356,7 +363,7 @@ export class Hub {
 	}
 
 	private async port(request: Extract<ClientRequest, { method: 'portSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
-		const { pid, claudeSessionId, permissionMode } = request;
+		const { pid, claudeSessionId } = request;
 		if (this.porting.has(claudeSessionId)) throw new HubError('not_ready', `conversation ${claudeSessionId} is being ported already`);
 		this.porting.add(claudeSessionId);
 		try {
@@ -379,7 +386,7 @@ export class Hub {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : [], 'keep');
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), 'keep');
 			await this.refreshOthers();
 			return ported;
 		} finally {

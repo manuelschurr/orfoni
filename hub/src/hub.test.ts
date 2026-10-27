@@ -274,13 +274,13 @@ describe('startSession', () => {
 
 	test('starts claude in its own tmux session with the hook settings and the prompt as the last argument', async () => {
 		const client = await startHub();
-		const { id, claude, started, settings } = await start(client, { prompt: '-x write a.txt', title: 'Notes', model: 'haiku', permissionMode: 'plan' });
+		const { id, claude, started, settings } = await start(client, { prompt: '-x write a.txt', title: 'Notes', model: 'haiku', effort: 'low', permissionMode: 'plan' });
 		expect(fake.of('newSession')).toEqual([
 			[
 				`orfoni-${id}`,
 				PROJECT,
 				{ ORFONI_SESSION: id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' },
-				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
+				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--effort', 'low', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
 			],
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
@@ -981,11 +981,11 @@ describe('portSession', () => {
 		return client.request('portSession', { pid, claudeSessionId: OTHER, ...params });
 	}
 
-	test('ends the session with SIGTERM, waits until it exits, then resumes its conversation in a new orfoni session under its name and in the requested mode', async () => {
+	test('ends the session with SIGTERM, waits until it exits, then resumes its conversation in a new orfoni session under its name and on the requested model, effort, and mode', async () => {
 		runOther(4321);
 		const client = await startHub(fakeTmux(), recordOnly);
 		let response: Response | undefined;
-		void port(client, 4321, { permissionMode: 'auto' }).then((r) => (response = r));
+		void port(client, 4321, { model: 'sonnet', effort: 'high', permissionMode: 'auto' }).then((r) => (response = r));
 		await untilRealTime(() => kills.length > 0);
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
 		await step(2000);
@@ -997,7 +997,7 @@ describe('portSession', () => {
 		const { session } = response.result as Started;
 		const settings = join(dir, 'settings', `${session.id}.json`);
 		expect(fake.of('newSession')).toEqual([
-			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--permission-mode', 'auto']],
+			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--model', 'sonnet', '--effort', 'high', '--permission-mode', 'auto']],
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({
