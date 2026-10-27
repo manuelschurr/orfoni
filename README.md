@@ -22,6 +22,10 @@ hub/scripts/install.sh
 
 The script builds the code, links `orfoni-hub` and `orfoni` into `~/.local/bin`, installs both user services, and starts them. Run it again after pulling changes. It restarts the hub but never the tmux server, because restarting the tmux server ends every session.
 
+Each session gets a one-sentence summary of what it is about and where it stands, written by Claude Haiku 5.5 through the Claude API. To turn summaries on, write an API key to `~/.config/orfoni/anthropic-api-key` and run `chmod 600` on it, or set `ANTHROPIC_API_KEY` in the hub's environment. The hub reads the key each time it writes a summary, so it needs no restart. Without a key everything else works and the summaries stay empty. The hub stops writing summaries for the day after 1,000 summaries or $2 of estimated spend. `ORFONI_SUMMARY_MODEL` picks another model.
+
+Sessions that orfoni starts keep a task list, which is where the progress you see comes from. Claude Code hides its task tools from current models unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set, so the hub sets it for its sessions. Set `ORFONI_TASK_TOOLS=0` in the hub's environment to leave them off.
+
 ## Use the command-line client
 
 On the server:

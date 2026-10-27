@@ -29,6 +29,7 @@ async function daemon(): Promise<void> {
 			client: (apiKey) => claudeClient(apiKey),
 		},
 		systemRoot: '/',
+		taskTools: process.env.ORFONI_TASK_TOOLS !== '0',
 		log,
 	});
 	await listenHooks(hub, hookSocket, log);

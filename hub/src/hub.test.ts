@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, SessionId, SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Hub } from './hub.js';
+import { Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
 import type { ApiKey, SummaryClient } from './summaries.js';
 import type { Tmux } from './tmux.js';
@@ -150,7 +150,7 @@ const summaryClient: SummaryClient = async ({ prompt }) => {
 	return { kind: 'summary', about: `About #${summaryPrompts.length}`, status: `Status #${summaryPrompts.length}`, usage: { inputTokens: 900, outputTokens: 40 } };
 };
 
-async function startHub(tmux = fakeTmux()): Promise<TestClient> {
+async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): Promise<TestClient> {
 	fake = tmux;
 	hub = await Hub.start({
 		tmux: fake.tmux,
@@ -166,6 +166,7 @@ async function startHub(tmux = fakeTmux()): Promise<TestClient> {
 		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
 		systemRoot: join(dir, 'root'),
 		log: (line) => logs.push(line),
+		...options,
 	});
 	return new TestClient(hub);
 }
@@ -202,6 +203,12 @@ afterEach(() => {
 });
 
 describe('startSession', () => {
+	test('a hub started without task tools leaves them off in the sessions it starts', async () => {
+		const client = await startHub(fakeTmux(), { taskTools: false });
+		const { id } = await start(client);
+		expect(fake.of('newSession')[0]?.[2]).toEqual({ ORFONI_SESSION: id });
+	});
+
 	test('starts claude in its own tmux session with the hook settings and the prompt as the last argument', async () => {
 		const client = await startHub();
 		const { id, claude, started, settings } = await start(client, { prompt: '-x write a.txt', title: 'Notes', model: 'haiku', permissionMode: 'plan' });
@@ -209,7 +216,7 @@ describe('startSession', () => {
 			[
 				`orfoni-${id}`,
 				PROJECT,
-				{ ORFONI_SESSION: id },
+				{ ORFONI_SESSION: id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' },
 				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
 			],
 		]);
@@ -351,7 +358,7 @@ describe('send', () => {
 		let response: Response | undefined;
 		void client.request('send', { sessionId: id, text: 'continue' }).then((r) => (response = r));
 		await untilRealTime(() => fake.of('newSession').length === 2);
-		expect(fake.of('newSession')[1]).toEqual([`orfoni-${id}`, PROJECT, { ORFONI_SESSION: id }, ['claude', `--resume=${claude}`, '--settings', settings, '--', 'continue']]);
+		expect(fake.of('newSession')[1]).toEqual([`orfoni-${id}`, PROJECT, { ORFONI_SESSION: id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${claude}`, '--settings', settings, '--', 'continue']]);
 		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
 		await untilRealTime(() => response !== undefined);

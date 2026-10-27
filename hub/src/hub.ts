@@ -45,6 +45,8 @@ export interface HubOptions {
 	readHistory(claudeSessionId: ClaudeSessionId, projectDir: string): Promise<SessionMessage[]>;
 	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
 	systemRoot: string;
+	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
+	taskTools?: boolean;
 	log(line: string): void;
 }
 
@@ -328,12 +330,16 @@ export class Hub {
 		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		try {
-			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, { ORFONI_SESSION: session.id }, ['claude', ...identity, '--settings', settings, ...rest]);
+			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', settings, ...rest]);
 		} catch (error) {
 			session.claude = { kind: 'exited' };
 			throw error;
 		}
 		if (session.claude.kind === 'launching') session.claude = { kind: 'launching', createdAt: Date.now() };
+	}
+
+	private sessionEnv(id: SessionId): Record<string, string> {
+		return { ORFONI_SESSION: id, ...(this.options.taskTools === false ? {} : { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }) };
 	}
 
 	private async resumeIdentity(session: Session): Promise<string[]> {
