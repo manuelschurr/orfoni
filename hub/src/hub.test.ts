@@ -141,7 +141,6 @@ function writeStat(pid: number, startTime: string): void {
 	writeFileSync(join(dir, 'root/proc', String(pid), 'stat'), `${pid} (claude) S 1 ${pid} 1 34821 ${pid} 4194304 0 0 0 0 0 0 0 0 20 0 11 0 ${startTime} 0 0\n`);
 }
 
-// A Claude Code session that orfoni did not start: its registry file, and its process with the start time the file records.
 function runOther(pid: number, fields: Record<string, unknown> = {}): void {
 	const procStart = String(pid * 10);
 	writeStat(pid, procStart);
