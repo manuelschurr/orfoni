@@ -23,6 +23,10 @@ describe('parseClientRequest', () => {
 		expect(request).toEqual({ id: 2, method: 'startSession', projectDir: '/p', model: 'haiku', permissionMode: 'plan' });
 	});
 
+	test('a session can start in auto mode', () => {
+		expect(parseClientRequest('{"id":2,"method":"startSession","projectDir":"/p","permissionMode":"auto"}')).toMatchObject({ permissionMode: 'auto' });
+	});
+
 	test('accepts listProjectDirs without params and removeSession with a session', () => {
 		expect(parseClientRequest('{"id":3,"method":"listProjectDirs"}')).toEqual({ id: 3, method: 'listProjectDirs' });
 		expect(parseClientRequest('{"id":4,"method":"removeSession","sessionId":"s"}')).toEqual({ id: 4, method: 'removeSession', sessionId: 's' });

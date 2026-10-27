@@ -89,7 +89,7 @@ export type Decision = z.infer<typeof Decision>;
 
 export type RequestOutcome = 'allowed' | 'denied' | 'answered' | 'approved' | 'rejected';
 
-export const PermissionMode = z.enum(['default', 'plan', 'acceptEdits']);
+export const PermissionMode = z.enum(['auto', 'default', 'acceptEdits', 'plan']);
 export type PermissionMode = z.infer<typeof PermissionMode>;
 
 const id = z.number().int();

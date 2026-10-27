@@ -13,7 +13,13 @@
 	let folder = $state('');
 	let prompt = $state('');
 	let model = $state('');
-	let permissionMode = $state<PermissionMode>('default');
+	let permissionMode = $state<PermissionMode>('auto');
+	const modeHints: Record<PermissionMode, string> = {
+		auto: 'Works without asking. A classifier checks shell commands and network requests against your request before they run.',
+		default: 'Asks before edits and before commands that change things. Read-only commands such as ls and grep run without asking.',
+		acceptEdits: 'Edits files and runs common file commands without asking, and asks before other commands.',
+		plan: 'Reads and plans without editing anything, then asks you to approve the plan.',
+	};
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	const recent = $derived(dirs.filter((dir) => dir.lastActive !== null).slice(0, 5));
@@ -98,12 +104,14 @@
 			<label class="row">
 				<span>Permissions</span>
 				<select class="field" bind:value={permissionMode}>
-					<option value="default">Ask before each tool</option>
-					<option value="acceptEdits">Accept file edits</option>
-					<option value="plan">Plan first</option>
+					<option value="auto">Auto</option>
+					<option value="default">Manual</option>
+					<option value="acceptEdits">Accept edits</option>
+					<option value="plan">Plan</option>
 				</select>
 			</label>
 		</div>
+		<p class="hint">{modeHints[permissionMode]}</p>
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<div class="buttons">
 			<button type="button" class="btn" onclick={() => (open = false)}>Cancel</button>
@@ -140,5 +148,11 @@
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 0.8rem;
+	}
+
+	.hint {
+		margin: -0.3rem 0 0;
+		color: var(--muted);
+		font-size: 0.8125rem;
 	}
 </style>
