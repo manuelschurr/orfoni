@@ -973,6 +973,67 @@ describe('other sessions', () => {
 	});
 });
 
+describe('relaunchSession', () => {
+	const statusLine = (model: string, name: string, effort?: string) => JSON.stringify({ model: { id: model, display_name: name }, ...(effort ? { effort: { level: effort } } : {}) });
+
+	async function idle(client: TestClient) {
+		const session = await ready(client);
+		transcripts.set(session.claude, [entry('user', 'hi'), entry('assistant', [{ type: 'text', text: 'done' }], 'end_turn')]);
+		await hub.hook(session.id, body('UserPromptSubmit', session.claude, { prompt: 'hi', permission_mode: 'plan' }));
+		await hub.hook(session.id, body('Stop', session.claude, { permission_mode: 'plan' }));
+		hub.status(session.id, statusLine('claude-haiku-5-5', 'Haiku 5.5', 'low'));
+		return session;
+	}
+
+	// /model and /effort typed into Claude Code also become the defaults for every new session, and can stop at a dialog orfoni cannot see.
+	test('restarts Claude on the same conversation with the new model, the effort it reported, and the permission mode it ran in, and leaves its shells open', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await idle(client);
+		const shell = (await client.ok('openShell', { sessionId: id })) as { target: string };
+		expect(await client.ok('relaunchSession', { sessionId: id, model: 'sonnet' })).toMatchObject({ session: { id, claudeSessionId: claude } });
+		expect(fake.of('killSession')).toEqual([[`orfoni-${id}`]]);
+		expect(fake.live.has(shell.target.replace(/^=/, '').replace(/:$/, ''))).toBe(true);
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--model', 'sonnet', '--effort', 'low', '--permission-mode', 'plan']);
+	});
+
+	test('a new effort keeps the model Claude Code reported', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await idle(client);
+		await client.ok('relaunchSession', { sessionId: id, effort: 'max' });
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--model', 'claude-haiku-5-5', '--effort', 'max', '--permission-mode', 'plan']);
+	});
+
+	test('waits for the old Claude to exit before it starts the new one', async () => {
+		const client = await startHub();
+		const { id } = await idle(client);
+		writeStat(1000, '1');
+		let response: Response | undefined;
+		void client.request('relaunchSession', { sessionId: id, effort: 'high' }).then((r) => (response = r));
+		await untilRealTime(() => fake.of('killSession').length > 0);
+		await step(1000);
+		expect(fake.of('newSession')).toHaveLength(1);
+		rmSync(join(dir, 'root/proc/1000'), { recursive: true, force: true });
+		await stepUntil(() => response !== undefined);
+		expect(response).toMatchObject({ ok: true });
+		expect(fake.of('newSession')).toHaveLength(2);
+	});
+
+	test('a session that is working or waiting on you is refused with not_ready, and nothing restarts', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		expect(await client.request('relaunchSession', { sessionId: id, model: 'sonnet' })).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		expect(fake.of('killSession')).toEqual([]);
+	});
+
+	test('a relaunch that names neither a model nor an effort is refused', async () => {
+		const client = await startHub();
+		const { id } = await idle(client);
+		expect(await client.request('relaunchSession', { sessionId: id })).toMatchObject({ ok: false, error: { code: 'bad_message' } });
+		expect(fake.of('killSession')).toEqual([]);
+	});
+});
+
 describe('portSession', () => {
 	const NOTES = '94917ae8-57a9-4474-abc5-f812984ab86d' as ClaudeSessionId;
 	const recordOnly = { kill: (pid: number, signal: NodeJS.Signals) => void kills.push([pid, signal]) };

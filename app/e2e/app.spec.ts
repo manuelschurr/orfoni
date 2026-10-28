@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import type { Effort, HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
@@ -201,18 +202,27 @@ test('a summary shows on the row and in the header when the hub has an API key',
 	await expect(page.getByRole('main').getByText(summary.status, { exact: true })).toBeVisible();
 });
 
-test('change the effort from the header and see the level Claude Code reports there', async ({ page }) => {
-	const session = await startReady({ title: 'effort check', effort: 'low' });
+// /model and /effort typed into Claude Code also change the defaults of every new session, so the header restarts this one session and leaves the user's settings alone.
+test('change the effort from the header and see the level Claude Code reports there, with the user settings unchanged', async ({ page }) => {
+	const defaults = () => {
+		const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+		return { model, effortLevel, modelSettings };
+	};
+	const before = defaults();
+	const session = await startReady({ title: 'effort check', effort: 'low', prompt: 'Reply with exactly: ok' });
 	await openSession(page, session);
 	const main = page.getByRole('main');
+	await expect(claude(page).last()).toContainText(/ok/i, { timeout: REPLY_MS });
 	const effort = main.getByRole('combobox', { name: 'Effort' });
 	await expect(effort).toHaveValue('low', { timeout: 60_000 });
 	await expect(main.getByRole('combobox', { name: 'Model' }).locator('option:checked')).toHaveText(/Haiku/);
 	await effort.selectOption('high');
-	await expect(effort).toHaveValue('high', { timeout: 30_000 });
+	await expect(effort).toHaveValue('high', { timeout: 60_000 });
 	await expect(effort.locator('option:checked')).toHaveText('High');
 	await expect(main.getByRole('status')).toHaveCount(0);
+	await expect(main.getByRole('alert')).toHaveCount(0);
 	expect((await hub.sessions()).find((s) => s.id === session.id)?.effort).toBe('high');
+	expect(defaults()).toEqual(before);
 });
 
 test('remove a session', async ({ page }) => {

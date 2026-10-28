@@ -49,8 +49,8 @@ export class Registry {
 		return entries.filter((entry) => entry !== null).sort((a, b) => b.session.startedAt - a.session.startedAt || a.session.pid - b.session.pid);
 	}
 
-	// A pid alone may belong to a process started after the registered one ended, so the start time has to match too.
-	async running(pid: number, procStart: string): Promise<boolean> {
+	// A pid alone may belong to a process started after the registered one ended, so the start time has to match too when it is known.
+	async running(pid: number, procStart?: string): Promise<boolean> {
 		let stat: string;
 		try {
 			stat = await readFile(join(this.systemRoot, 'proc', String(pid), 'stat'), 'utf8');
@@ -59,7 +59,7 @@ export class Registry {
 		}
 		// The process name before these fields may hold spaces and parentheses. State is field 3 and the start time field 22.
 		const [state, ...fields] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-		return state !== 'Z' && fields[18] === procStart;
+		return state !== 'Z' && (procStart === undefined || fields[18] === procStart);
 	}
 
 	private async entry(path: string): Promise<OtherProcess | null> {

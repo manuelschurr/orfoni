@@ -13,15 +13,19 @@ export interface Choices {
 }
 
 // Claude Code reports a model ID, such as claude-opus-5-5[1m], with a display name, which the select shows also when the ID matches no alias.
-export function modelChoices(model: { id: string; name: string }): Choices {
+const unknown = { value: '', label: 'Unknown' };
+
+export function modelChoices(model: { id: string; name: string } | null): Choices {
+	if (model === null) return { value: '', options: [unknown, ...models.map((alias) => ({ value: alias, label: modelLabel[alias] }))] };
 	const words = model.id.split(/[^a-z0-9]+/);
 	const current = models.find((alias) => words.includes(alias));
 	const options = models.map((alias) => ({ value: alias, label: alias === current ? model.name : modelLabel[alias] }));
 	return current ? { value: current, options } : { value: '', options: [{ value: '', label: model.name }, ...options] };
 }
 
-export function effortChoices(level: string): Choices {
+export function effortChoices(level: string | null): Choices {
 	const options = Effort.options.map((value) => ({ value, label: effortLabel[value] }));
+	if (level === null) return { value: '', options: [unknown, ...options] };
 	return { value: level, options: options.some((option) => option.value === level) ? options : [{ value: level, label: level }, ...options] };
 }
 

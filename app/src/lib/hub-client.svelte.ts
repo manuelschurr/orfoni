@@ -1,4 +1,5 @@
 import {
+	Effort,
 	HubStatus,
 	ChatItem,
 	OtherSession,
@@ -32,6 +33,7 @@ const results = {
 	listProjectDirs: z.object({ dirs: z.array(ProjectDir) }),
 	removeSession: done,
 	hubStatus: HubStatus,
+	relaunchSession: z.object({ session: SessionSummary }),
 	listOtherSessions: z.array(OtherSession),
 	openOtherSession: z.object({ session: OtherSession, chat: z.array(ChatItem) }),
 	portSession: z.object({ session: SessionSummary, needsTrust: z.boolean() }),
@@ -109,20 +111,20 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 	return index === -1 ? [...chat, item] : chat.with(index, item);
 }
 
-// The settings the app changes with the slash command of the same name.
+// The settings a session restarts on with the flag of the same name.
 export type Setting = 'model' | 'effort';
 
-// A change sent to a session. `from` is what Claude Code reported when it was sent, and any other report settles the change, so the app never shows a value before Claude Code reports it.
+// A change sent to a session. `from` is what Claude Code reported when it was sent, and a report of another value settles the change, so the app never shows a value before Claude Code reports it. The restart passes through offline, where Claude Code reports nothing, and that settles nothing.
 export interface Change {
 	sessionId: SessionId;
 	setting: Setting;
 	to: string;
 	from: string | null;
-	phase: 'sending' | 'sent' | 'unreported';
+	phase: 'restarting' | 'restarted' | 'unreported';
 }
 
-// Claude Code's status line reports to the hub every 10 seconds, so a change it has not reported after three of those most likely did not take effect.
-const REPORT_WAIT_MS = 30_000;
+// A restarted session reports its model and effort at once, so a change it has not reported after 20 seconds most likely did not take effect.
+const REPORT_WAIT_MS = 20_000;
 
 function reported(session: SessionSummary, setting: Setting): string | null {
 	return setting === 'model' ? (session.model?.id ?? null) : session.effort;
@@ -206,19 +208,23 @@ export class HubClient {
 		await this.request('send', { sessionId, text });
 	}
 
-	// Sends /model or /effort as if typed in the terminal.
+	// /model and /effort typed into Claude Code also become the defaults of every new session, so the hub restarts this one session on the flags instead.
 	async change(sessionId: SessionId, setting: Setting, to: string): Promise<void> {
 		const session = this.sessions.get(sessionId);
-		const sending: Change = { sessionId, setting, to, from: session ? reported(session, setting) : null, phase: 'sending' };
-		this.changes = [...this.changes.filter((change) => change.sessionId !== sessionId || change.setting !== setting), sending];
+		const restarting: Change = { sessionId, setting, to, from: session ? reported(session, setting) : null, phase: 'restarting' };
+		this.changes = [...this.changes.filter((change) => change.sessionId !== sessionId || change.setting !== setting), restarting];
 		try {
-			await this.send(sessionId, `/${setting} ${to}`);
+			await this.request('relaunchSession', setting === 'model' ? { sessionId, model: to } : { sessionId, effort: Effort.parse(to) });
 		} catch (error) {
-			this.replaceChange(sending, null);
+			this.replaceChange(restarting, null);
 			throw error;
 		}
-		const sent: Change = { ...sending, phase: 'sent' };
-		if (this.replaceChange(sending, sent)) setTimeout(() => this.replaceChange(sent, { ...sent, phase: 'unreported' }), REPORT_WAIT_MS);
+		const restarted: Change = { ...restarting, phase: 'restarted' };
+		if (this.replaceChange(restarting, restarted)) setTimeout(() => this.replaceChange(restarted, { ...restarted, phase: 'unreported' }), REPORT_WAIT_MS);
+	}
+
+	dismissChange(change: Change): void {
+		this.replaceChange(change, null);
 	}
 
 	async decide(requestId: RequestId, decision: Decision): Promise<RequestOutcome> {
@@ -275,7 +281,8 @@ export class HubClient {
 		this.sessions = sessions;
 		const waiting = this.changes.filter((change) => {
 			const session = sessions.get(change.sessionId);
-			return session !== undefined && reported(session, change.setting) === change.from;
+			const now = session && reported(session, change.setting);
+			return session !== undefined && (now === null || now === change.from);
 		});
 		if (waiting.length !== this.changes.length) this.changes = waiting;
 	}

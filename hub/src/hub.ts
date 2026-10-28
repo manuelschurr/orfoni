@@ -4,6 +4,8 @@ import { basename, join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
+	Effort,
+	PermissionMode,
 	SessionId,
 	type ChatItem,
 	type ClientRequest,
@@ -40,6 +42,8 @@ const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
+const RELAUNCHABLE = new Set<SessionStateKind>(['idle', 'answered', 'failed', 'offline']);
+const HookPermissionMode = z.object({ permission_mode: PermissionMode });
 const NOT_IDLE: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
 	busy: 'is working',
 	waiting: 'waits for an answer in its terminal',
@@ -85,6 +89,8 @@ interface Session {
 	readonly createdAt: number;
 	model: SessionModel;
 	claude: ClaudeProcess;
+	// The mode Claude Code last reported in a hook, so a relaunch keeps it.
+	permissionMode?: PermissionMode;
 }
 
 type ClaudeProcess = { kind: 'exited' } | { kind: 'launching'; createdAt: number | null } | { kind: 'running'; inputReadyAt: number };
@@ -239,6 +245,8 @@ export class Hub {
 			this.options.log(`orfoni-hub: dropped a hook for unknown session ${sessionHeader ?? '(no X-Orfoni-Session header)'}`);
 			return {};
 		}
+		const mode = HookPermissionMode.safeParse(body);
+		if (mode.success) session.permissionMode = mode.data.permission_mode;
 		let event: HookEvent;
 		try {
 			event = parseHookEvent(hookName(body), body);
@@ -329,6 +337,8 @@ export class Hub {
 				return {};
 			case 'hubStatus':
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
+			case 'relaunchSession':
+				return this.relaunch(this.session(request.sessionId), request);
 			case 'listOtherSessions':
 				return (await this.refreshOthers()).map(({ session }) => session);
 			case 'openOtherSession':
@@ -382,7 +392,7 @@ export class Hub {
 				// The session exited on its own after the check, so there is nothing left to end.
 				if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
 			}
-			if (!(await this.exited(other))) {
+			if (!(await this.ended(pid, other.procStart))) {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
@@ -394,7 +404,28 @@ export class Hub {
 		}
 	}
 
-	private async exited({ session: { pid }, procStart }: OtherProcess): Promise<boolean> {
+	// /model and /effort typed into Claude Code also become the defaults of every new session and can stop at a dialog orfoni cannot see, so a session changes model or effort by resuming its conversation on the flags.
+	private async relaunch(session: Session, { model, effort }: Extract<ClientRequest, { method: 'relaunchSession' }>): Promise<{ session: SessionSummary }> {
+		if (model === undefined && effort === undefined) throw new HubError('bad_message', 'relaunchSession needs a model or an effort');
+		if (!RELAUNCHABLE.has(session.model.state)) throw new HubError('not_ready', `session ${session.id} is ${session.model.state}`);
+		const reported = session.model.statusLine;
+		const reportedEffort = Effort.safeParse(reported?.effort);
+		const options = claudeOptions({
+			model: model ?? reported?.model.id,
+			effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined),
+			permissionMode: session.permissionMode,
+		});
+		const pane = (await this.options.tmux.listSessions()).find((candidate) => candidate.name === tmuxName(session.id) && !candidate.paneDead);
+		await this.killTmux((name) => name === tmuxName(session.id));
+		if (pane && !(await this.ended(pane.panePid))) {
+			throw new HubError('internal', `Claude Code (process ${pane.panePid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after its tmux session ended, so orfoni started nothing`);
+		}
+		this.paneExited(session);
+		await this.launch(session, await this.resumeIdentity(session), options);
+		return { session: summary(session) };
+	}
+
+	private async ended(pid: number, procStart?: string): Promise<boolean> {
 		const deadline = Date.now() + EXIT_TIMEOUT_MS;
 		while (await this.registry.running(pid, procStart)) {
 			if (Date.now() >= deadline) return false;

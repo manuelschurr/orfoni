@@ -79,33 +79,32 @@ test('the header shows the model and effort Claude Code reports, among the model
 	expect(select('Effort').disabled).toBe(false);
 });
 
-test('a new effort goes to Claude Code as /effort, shows as sent, and shows as the effort only once Claude Code reports it', async () => {
-	const { transport, report } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
+// /model and /effort typed into Claude Code also become the defaults of every new session, so the header restarts this one session on the flags instead.
+test('a new effort restarts the session on it, and shows as the effort only once Claude Code reports it', async () => {
+	const { transport, report, session } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
 	await pick('Effort', 'high');
-	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/effort high' }]);
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', effort: 'high' }]);
+	expect(transport.requests('send')).toEqual([]);
 	expect(chosen('Effort')).toBe('Extra high');
-	expect(note()).toBe('Sending /effort high');
+	expect(note()).toBe('Restarting on High');
+	expect(select('Effort').disabled).toBe(true);
 
-	transport.respond('send', {});
-	await vi.waitFor(() => expect(note()).toBe('Sent /effort high, waiting for Claude Code'));
-	expect(chosen('Effort')).toBe('Extra high');
-
-	report({ effort: 'high' });
+	report({ state: 'offline', model: null, effort: null });
+	expect(note()).toBe('Restarting on High');
+	transport.respond('relaunchSession', { session: { ...session, state: 'offline', model: null, effort: null } });
+	report({ state: 'idle', model: opus, effort: 'high' });
 	expect(chosen('Effort')).toBe('High');
 	expect(note()).toBeNull();
-
-	report({ effort: 'xhigh' });
-	expect(chosen('Effort')).toBe('Extra high');
-	expect(note()).toBeNull();
+	expect(select('Effort').disabled).toBe(false);
 });
 
-test('a new model goes to Claude Code as /model with its alias, and shows under the name Claude Code reports', async () => {
-	const { transport, report } = await header({ state: 'answered', model: opus, effort: 'xhigh' });
+test('a new model restarts the session on its alias, and shows under the name Claude Code reports', async () => {
+	const { transport, report, session } = await header({ state: 'answered', model: opus, effort: 'xhigh' });
 	await pick('Model', 'sonnet');
-	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/model sonnet' }]);
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', model: 'sonnet' }]);
 	expect(chosen('Model')).toBe('Opus 5.5');
-	transport.respond('send', {});
-	await vi.waitFor(() => expect(note()).toBe('Sent /model sonnet, waiting for Claude Code'));
+	expect(note()).toBe('Restarting on Sonnet');
+	transport.respond('relaunchSession', { session });
 
 	report({ model: { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' } });
 	expect(chosen('Model')).toBe('Sonnet 5.5');
@@ -113,7 +112,7 @@ test('a new model goes to Claude Code as /model with its alias, and shows under 
 	expect(note()).toBeNull();
 });
 
-test.each(['working', 'needs_approval', 'needs_answer', 'offline'] as const)('while the session is %s, its model and effort show but wait until it is idle', async (state) => {
+test.each(['working', 'needs_approval', 'needs_answer'] as const)('while the session is %s, its model and effort show but wait until it is idle', async (state) => {
 	await header({ state, model: opus, effort: 'xhigh' });
 	expect(chosen('Model')).toBe('Opus 5.5');
 	expect(select('Model').disabled).toBe(true);
@@ -122,34 +121,46 @@ test.each(['working', 'needs_approval', 'needs_answer', 'offline'] as const)('wh
 	expect(select('Effort').title).toBe('You can change the effort while the session is idle.');
 });
 
-// A failed turn leaves Claude Code at its prompt, and another model is the usual way out of an API error there.
-test('after a failed turn the model and effort can change', async () => {
-	const { transport } = await header({ state: 'failed', model: opus, effort: 'xhigh' });
+// Another model is the usual way out of an API error, and an offline session starts on the model picked.
+test.each(['failed', 'offline'] as const)('a session that is %s can change its model and effort', async (state) => {
+	const { transport } = await header({ state, model: opus, effort: 'xhigh' });
 	expect(select('Model').disabled).toBe(false);
 	await pick('Model', 'sonnet');
-	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/model sonnet' }]);
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', model: 'sonnet' }]);
+});
+
+// A session started before orfoni read the status line reports nothing until it restarts, and a pick restarts it.
+test('a session whose model and effort are unknown shows them as unknown, and a pick restarts it on the choice', async () => {
+	const { transport } = await header({ state: 'idle', model: null, effort: null });
+	expect(chosen('Model')).toBe('Unknown');
+	expect(chosen('Effort')).toBe('Unknown');
+	await pick('Model', 'opus');
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', model: 'opus' }]);
 });
 
 test('a change the hub refuses says so and leaves the model Claude Code reports', async () => {
 	const { transport } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
 	await pick('Model', 'haiku');
-	transport.fail('send', 'not_ready', 'session s1 is waiting for an answer to a request');
-	await vi.waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Changing the model failed: session s1 is waiting for an answer to a request'));
+	transport.fail('relaunchSession', 'not_ready', 'session s1 is working');
+	await vi.waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Changing the model failed: session s1 is working'));
 	expect(note()).toBeNull();
 	expect(chosen('Model')).toBe('Opus 5.5');
 });
 
-test('a change Claude Code has not reported 30 seconds after it was sent says so', async () => {
-	const { transport } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
+test('a change Claude Code has not reported 20 seconds after the restart says so, and the note can be dismissed', async () => {
+	const { transport, session } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 	try {
 		await pick('Model', 'fable');
-		transport.respond('send', {});
-		await vi.advanceTimersByTimeAsync(29_000);
-		expect(note()).toBe('Sent /model fable, waiting for Claude Code');
+		transport.respond('relaunchSession', { session });
+		await vi.advanceTimersByTimeAsync(19_000);
+		expect(note()).toBe('Restarting on Fable');
 		await vi.advanceTimersByTimeAsync(1_000);
-		expect(note()).toBe('Claude Code reported no change after /model fable. Check the terminal.');
+		expect(note()).toBe('Claude Code has not reported Fable yet. Check the terminal.');
 		expect(chosen('Model')).toBe('Opus 5.5');
+		expect(select('Model').disabled).toBe(false);
+		await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+		expect(note()).toBeNull();
 	} finally {
 		vi.useRealTimers();
 	}
@@ -158,11 +169,11 @@ test('a change Claude Code has not reported 30 seconds after it was sent says so
 test('a change still waiting for Claude Code shows again after switching to another session and back', async () => {
 	const { client, transport, session, unmount } = await header({ state: 'idle', model: opus, effort: 'xhigh' });
 	await pick('Effort', 'max');
-	transport.respond('send', {});
-	await vi.waitFor(() => expect(note()).toBe('Sent /effort max, waiting for Claude Code'));
+	transport.respond('relaunchSession', { session });
+	await vi.waitFor(() => expect(transport.requests('relaunchSession')).toHaveLength(1));
 	unmount();
 	render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {} });
-	expect(note()).toBe('Sent /effort max, waiting for Claude Code');
+	expect(note()).toBe('Restarting on Max');
 });
 
 test('a model that reports no effort level shows no effort to change', async () => {
@@ -179,7 +190,7 @@ test('a model and an effort level outside the known ones still show as Claude Co
 	expect(chosen('Effort')).toBe('ultra');
 	expect(options('Effort')).toEqual(['ultra', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 	await pick('Model', 'opus');
-	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/model opus' }]);
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', model: 'opus' }]);
 	expect(chosen('Model')).toBe('Mythos 1');
 
 	report({ model: opus, effort: 'high' });

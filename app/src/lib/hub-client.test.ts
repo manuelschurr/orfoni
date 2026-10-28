@@ -175,11 +175,13 @@ describe('HubClient', () => {
 		const reporting: SessionSummary = { ...a1, model: { id: 'claude-opus-5-5', name: 'Opus 5.5' }, effort: 'xhigh' };
 		await connect([reporting]);
 		const changing = client.change(a1.id, 'effort', 'high');
-		expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/effort high' }]);
-		transport.respond('send', {});
+		expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 'a1', effort: 'high' }]);
+		transport.respond('relaunchSession', { session: reporting });
 		await changing;
 		transport.push({ type: 'sessionUpdated', session: { ...reporting, memory: { currentBytes: 300 * 1024 ** 2, maxBytes: null, oomKills: 0 } } });
-		expect(client.changes).toEqual([{ sessionId: a1.id, setting: 'effort', to: 'high', from: 'xhigh', phase: 'sent' }]);
+		// The restart passes through offline, where Claude Code reports nothing, which settles no change.
+		transport.push({ type: 'sessionUpdated', session: { ...reporting, state: 'offline', model: null, effort: null } });
+		expect(client.changes).toEqual([{ sessionId: a1.id, setting: 'effort', to: 'high', from: 'xhigh', phase: 'restarted' }]);
 
 		transport.status({ kind: 'reconnecting', attempt: 1, error: 'socket closed' });
 		transport.status({ kind: 'connected' });

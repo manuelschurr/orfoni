@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
 	import type { Change, HubClient, Setting } from '../hub-client.svelte';
-	import { bytes, effortChoices, modelChoices, oomKills, sessionTitle, stateLabel, tasksDone, type Choices } from './format';
+	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, type Choices } from './format';
 
 	let {
 		client,
@@ -16,17 +16,23 @@
 	const memory = $derived(session.memory);
 	const limit = $derived(memory?.maxBytes ? { max: memory.maxBytes, warning: memory.currentBytes > 0.8 * memory.maxBytes } : null);
 	const used = $derived(memory && limit ? `${bytes(memory.currentBytes)} of ${bytes(limit.max)}` : '');
-	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed');
+	// A change restarts the session, which a failed turn leaves at its prompt and an offline one does not need.
+	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed' || session.state === 'offline');
 	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
-	const notes: Record<Change['phase'], (command: string) => string> = {
-		sending: (command) => `Sending ${command}`,
-		sent: (command) => `Sent ${command}, waiting for Claude Code`,
-		unreported: (command) => `Claude Code reported no change after ${command}. Check the terminal.`,
+	const restarting = $derived(changes.some((change) => change.phase !== 'unreported'));
+	const notes: Record<Change['phase'], (to: string) => string> = {
+		restarting: (to) => `Restarting on ${to}`,
+		restarted: (to) => `Restarting on ${to}`,
+		unreported: (to) => `Claude Code has not reported ${to} yet. Check the terminal.`,
 	};
+
+	function label({ setting, to }: Change): string {
+		return (setting === 'model' ? modelLabel[to as keyof typeof modelLabel] : effortLabel[to as keyof typeof effortLabel]) ?? to;
+	}
 
 	async function change(setting: Setting, select: HTMLSelectElement, reported: string): Promise<void> {
 		const to = select.value;
-		// The select keeps showing what Claude Code reports, and the note says what was sent until Claude Code reports it.
+		// The select keeps showing what Claude Code reports, and the note says what the session restarts on until Claude Code reports it.
 		select.value = reported;
 		error = null;
 		try {
@@ -88,7 +94,7 @@
 		>
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
-	{#if session.tasks || memory || session.model}
+	{#if session.tasks || memory || session.model || takesChanges}
 		<div class="gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
@@ -125,11 +131,15 @@
 				</div>
 			{/if}
 			<!-- Last in the row, so a note that comes and goes moves nothing else. -->
-			{#if session.model}
+			<!-- A model that reports no effort shows none, and a session that has reported nothing yet shows both as unknown. -->
+			{#if session.model || takesChanges}
 				{@render setting('model', 'Model', modelChoices(session.model))}
-				{#if session.effort !== null}{@render setting('effort', 'Effort', effortChoices(session.effort))}{/if}
+				{#if session.effort !== null || session.model === null}{@render setting('effort', 'Effort', effortChoices(session.effort))}{/if}
 				{#each changes as pending (pending.setting)}
-					<span class="change" data-phase={pending.phase} role="status">{notes[pending.phase](`/${pending.setting} ${pending.to}`)}</span>
+					<span class="change" data-phase={pending.phase}>
+						<span role="status">{notes[pending.phase](label(pending))}</span>
+						{#if pending.phase === 'unreported'}<button class="dismiss" onclick={() => client.dismissChange(pending)}>Dismiss</button>{/if}
+					</span>
 				{/each}
 			{/if}
 		</div>
@@ -143,7 +153,7 @@
 		<span class="select" class:fixed={!takesChanges}>
 			<select
 				value={choices.value}
-				disabled={!takesChanges}
+				disabled={!takesChanges || restarting}
 				title={takesChanges ? undefined : `You can change the ${name} while the session is idle.`}
 				onchange={(event) => void change(name, event.currentTarget, choices.value)}
 			>
@@ -315,6 +325,18 @@
 	.change[data-phase='unreported']::before {
 		background: var(--state-needs);
 		animation: none;
+	}
+
+	.dismiss {
+		margin-left: 0.2rem;
+		padding: 0 0.35rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-control);
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+		font-weight: 400;
+		cursor: pointer;
 	}
 
 	.bar {

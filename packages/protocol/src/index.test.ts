@@ -151,4 +151,10 @@ describe('model and effort', () => {
 		expect(parseClientRequest('{"id":8,"method":"portSession","pid":7,"claudeSessionId":"dc5b988b-a782-4352-9056-0c133ae7370a","model":"opus","effort":"low"}')).toMatchObject({ model: 'opus', effort: 'low' });
 		expect(() => parseClientRequest('{"id":9,"method":"startSession","projectDir":"/p","effort":"extreme"}')).toThrow(ProtocolError);
 	});
+
+	// /model and /effort typed into Claude Code also become the defaults for every new session, so a running session changes by restarting on the flags instead.
+	test('a running session changes its model or effort by relaunching', () => {
+		expect(parseClientRequest('{"id":10,"method":"relaunchSession","sessionId":"s1","model":"sonnet"}')).toEqual({ id: 10, method: 'relaunchSession', sessionId: 's1', model: 'sonnet' });
+		expect(parseClientRequest('{"id":11,"method":"relaunchSession","sessionId":"s1","effort":"high"}')).toMatchObject({ effort: 'high' });
+	});
 });

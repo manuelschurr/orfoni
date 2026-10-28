@@ -220,14 +220,23 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		}
 	});
 
-	test('a session shows the model and effort it runs on, and follows an /effort sent to it', async () => {
-		const { id } = await start({ effort: 'low', dir: TRUSTED_DIR });
-		const reported = await client.waitForSession(id, (s) => s.model !== null, undefined, 30_000);
+	// /model and /effort typed into Claude Code also change the defaults of every new session, so a change restarts this one session on the flags and leaves the user's settings alone.
+	test('a session shows the model and effort it runs on, and a relaunch changes the effort of that session only', async () => {
+		const defaults = () => {
+			const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+			return { model, effortLevel, modelSettings };
+		};
+		const before = defaults();
+		const { id } = await start({ prompt: 'Reply with exactly: ok', effort: 'low', dir: TRUSTED_DIR });
+		const reported = await client.waitForSession(id, (s) => s.model !== null && s.state === 'answered', undefined, 60_000);
 		expect(reported.model?.name).toContain('Haiku');
 		expect(reported.effort).toBe('low');
 		const since = client.mark();
-		await client.request('send', { sessionId: id, text: '/effort high' });
-		await client.waitForSession(id, (s) => s.effort === 'high', since, 20_000);
+		await client.request('relaunchSession', { sessionId: id, effort: 'high' });
+		const relaunched = await client.waitForSession(id, (s) => s.effort === 'high', since, 60_000);
+		expect(relaunched.claudeSessionId).toBe(reported.claudeSessionId);
+		expect(relaunched.model?.name).toContain('Haiku');
+		expect(defaults()).toEqual(before);
 	});
 
 	test('a session reports its task progress and its memory against the pane cap', async () => {
