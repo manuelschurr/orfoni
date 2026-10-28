@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind } from '@orfoni/protocol';
 import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
+import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
 
 export interface SessionModel {
@@ -15,6 +16,7 @@ export interface SessionModel {
 	summary: Summary | null;
 	tasks: Record<string, boolean>;
 	memory: PaneMemory | null;
+	statusLine: StatusLine | null;
 	lastTurnEndedAt: number | null;
 	lastViewedAt: number | null;
 }
@@ -28,7 +30,8 @@ export type SessionInput =
 	| { kind: 'interrupted'; at: number }
 	| { kind: 'pane_exited'; at: number }
 	| { kind: 'summarized'; summary: Summary; at: number }
-	| { kind: 'memory_read'; memory: PaneMemory | null; at: number };
+	| { kind: 'memory_read'; memory: PaneMemory | null; at: number }
+	| { kind: 'status_line'; statusLine: StatusLine; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -38,7 +41,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null, statusLine: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -47,6 +50,11 @@ export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'la
 
 function endTurn(model: SessionModel, at: number): SessionModel {
 	return enter({ ...model, lastTurnEndedAt: at, lastViewedAt: model.viewing ? at : model.lastViewedAt }, model.viewing ? 'idle' : 'answered', at);
+}
+
+// No Claude Code runs to report a model or effort for a session that is offline.
+function goOffline(model: SessionModel, at: number): SessionModel {
+	return enter({ ...model, statusLine: null }, 'offline', at);
 }
 
 const MEMORY_STEP_BYTES = 50 * 1024 * 1024;
@@ -63,6 +71,12 @@ function readMemory(model: SessionModel, memory: PaneMemory | null, at: number):
 	if (kills <= 0) return { ...model, memory };
 	const text = kills === 1 ? 'A process in this session ran out of memory and was killed.' : `${kills} processes in this session ran out of memory and were killed.`;
 	return { ...model, memory, chat: [...model.chat, { kind: 'notice', id: `notice-${randomUUID()}`, text, at }] };
+}
+
+function readStatusLine(model: SessionModel, statusLine: StatusLine): SessionModel {
+	const kept = model.statusLine;
+	const same = kept !== null && kept.model.id === statusLine.model.id && kept.model.name === statusLine.model.name && kept.effort === statusLine.effort;
+	return same ? model : { ...model, statusLine };
 }
 
 export function taskProgress({ tasks }: SessionModel): { done: number; total: number } | null {
@@ -188,7 +202,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 						at,
 					);
 				case 'session_end':
-					return endsSession(event) ? enter(model, 'offline', at) : model;
+					return endsSession(event) ? goOffline(model, at) : model;
 				case 'notification':
 					return event.kind === 'idle_prompt' && model.state === 'working' ? endTurn(model, at) : model;
 				case 'task_created':
@@ -216,10 +230,12 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 		case 'interrupted':
 			return model.state === 'offline' ? model : enter(model, 'idle', at);
 		case 'pane_exited':
-			return enter(model, 'offline', at);
+			return goOffline(model, at);
 		case 'summarized':
 			return { ...model, summary: input.summary };
 		case 'memory_read':
 			return readMemory(model, input.memory, at);
+		case 'status_line':
+			return readStatusLine(model, input.statusLine);
 	}
 }

@@ -26,7 +26,8 @@ import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
-import { hookSettings } from './settings.js';
+import { hookSettings, statusLineCommand } from './settings.js';
+import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { sessionTarget, type Tmux } from './tmux.js';
@@ -105,12 +106,20 @@ function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
 }
 
-function summary(session: Session): SessionSummary {
-	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: null, effort: null };
+function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientRequest, { method: 'startSession' | 'portSession' }>, 'model' | 'effort' | 'permissionMode'>): string[] {
+	return [
+		...(model ? ['--model', model] : []),
+		...(effort ? ['--effort', effort] : []),
+		...(permissionMode ? ['--permission-mode', permissionMode] : []),
+	];
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory'] as const satisfies (keyof SessionModel)[];
+function summary(session: Session): SessionSummary {
+	const { id, projectDir, title, model } = session;
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null };
+}
+
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId', 'summary', 'tasks', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
@@ -170,6 +179,7 @@ export class Hub {
 	private shownOthers: OtherSession[] = [];
 	private readonly porting = new Set<ClaudeSessionId>();
 	private readonly summarizer: Summarizer;
+	private readonly reported = new Set<string>();
 
 	private constructor(
 		private readonly options: HubOptions,
@@ -224,8 +234,7 @@ export class Hub {
 	}
 
 	async hook(sessionHeader: string | undefined, body: unknown, closed?: AbortSignal): Promise<HookResponse> {
-		const id = SessionId.safeParse(sessionHeader);
-		const session = id.success ? this.sessions.get(id.data) : undefined;
+		const session = this.known(sessionHeader);
 		if (!session) {
 			this.options.log(`orfoni-hub: dropped a hook for unknown session ${sessionHeader ?? '(no X-Orfoni-Session header)'}`);
 			return {};
@@ -241,6 +250,35 @@ export class Hub {
 		if (event.type === 'permission_request') return this.openRequest(session, event, closed);
 		this.receive(session, event);
 		return {};
+	}
+
+	// Claude Code reruns the status line every 10 s, so each problem with it is logged once.
+	status(sessionHeader: string | undefined, text: string): void {
+		const session = this.known(sessionHeader);
+		if (!session) {
+			this.report(`orfoni-hub: ignored the status line of unknown session ${sessionHeader ?? '(no X-Orfoni-Session header)'}`);
+			return;
+		}
+		let statusLine: StatusLine;
+		try {
+			statusLine = parseStatusLine(text);
+		} catch (error) {
+			if (!(error instanceof StatusLineParseError)) throw error;
+			this.report(`orfoni-hub: ignored the status line of session ${session.id}: ${error.message}`);
+			return;
+		}
+		this.apply(session, { kind: 'status_line', statusLine, at: Date.now() });
+	}
+
+	private known(sessionHeader: string | undefined): Session | undefined {
+		const id = SessionId.safeParse(sessionHeader);
+		return id.success ? this.sessions.get(id.data) : undefined;
+	}
+
+	private report(line: string): void {
+		if (this.reported.has(line)) return;
+		this.reported.add(line);
+		this.options.log(line);
 	}
 
 	private async respond(send: Send, request: ClientRequest): Promise<void> {
@@ -312,8 +350,7 @@ export class Hub {
 	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const options = [
-			...(request.model ? ['--model', request.model] : []),
-			...(request.permissionMode ? ['--permission-mode', request.permissionMode] : []),
+			...claudeOptions(request),
 			...(request.title ? ['--name', request.title] : []),
 			...(request.prompt ? ['--', request.prompt] : []),
 		];
@@ -326,7 +363,7 @@ export class Hub {
 	}
 
 	private async port(request: Extract<ClientRequest, { method: 'portSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
-		const { pid, claudeSessionId, permissionMode } = request;
+		const { pid, claudeSessionId } = request;
 		if (this.porting.has(claudeSessionId)) throw new HubError('not_ready', `conversation ${claudeSessionId} is being ported already`);
 		this.porting.add(claudeSessionId);
 		try {
@@ -349,7 +386,7 @@ export class Hub {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], permissionMode ? ['--permission-mode', permissionMode] : [], 'keep');
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), 'keep');
 			await this.refreshOthers();
 			return ported;
 		} finally {
@@ -410,7 +447,8 @@ export class Hub {
 
 	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
 		const settings = this.settingsPath(session.id);
-		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket), null, '\t')}\n`);
+		const statusLine = await statusLineCommand(session.projectDir, this.options.home);
+		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		try {
 			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', settings, ...rest]);

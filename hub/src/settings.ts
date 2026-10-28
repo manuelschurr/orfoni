@@ -1,3 +1,7 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { z } from 'zod';
+
 const HOOK_TIMEOUTS = {
 	SessionStart: 5,
 	SessionEnd: 5,
@@ -18,7 +22,15 @@ function shellQuote(text: string): string {
 	return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-export function hookSettings(socket: string): object {
+// The terminal shows what the original command prints, and eval runs that command as whatever shell script it is, with the input on its stdin.
+function statusLine(socket: string, original: string | null): object {
+	const copy = `input=$(cat); printf '%s' "$input" | curl -sS -m 1 --unix-socket ${shellQuote(socket)} -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" --data-binary @- http://localhost/status >/dev/null 2>&1 || true`;
+	const command = original === null ? copy : `${copy}; printf '%s' "$input" | eval ${shellQuote(original)}`;
+	// Claude Code reruns it by itself on /model and /effort; the interval brings both back within 10 s of a hub restart.
+	return { type: 'command', command, refreshInterval: 10 };
+}
+
+export function hookSettings(socket: string, originalStatusLine: string | null): object {
 	const hooks = Object.fromEntries(
 		Object.entries(HOOK_TIMEOUTS).map(([hook, timeout]) => [
 			hook,
@@ -35,5 +47,20 @@ export function hookSettings(socket: string): object {
 			],
 		]),
 	);
-	return { hooks };
+	return { hooks, statusLine: statusLine(socket, originalStatusLine) };
+}
+
+const StatusLineSettings = z.object({ statusLine: z.object({ command: z.string() }) });
+
+// Without orfoni, Claude Code would run the status line of the first of these settings files that has one.
+export async function statusLineCommand(projectDir: string, home: string): Promise<string | null> {
+	for (const path of [join(projectDir, '.claude/settings.local.json'), join(projectDir, '.claude/settings.json'), join(home, '.claude/settings.json')]) {
+		try {
+			const settings = StatusLineSettings.safeParse(JSON.parse(await readFile(path, 'utf8')));
+			if (settings.success) return settings.data.statusLine.command;
+		} catch {
+			// A settings file that is missing or does not parse has no status line to wrap.
+		}
+	}
+	return null;
 }

@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -8,22 +9,28 @@ import { listenHooks } from './hook-server.js';
 import type { HookResponse } from './requests.js';
 import { hookSettings } from './settings.js';
 
-let server: Server;
+let server: Server | undefined;
 let logs: string[];
 let calls: { header: string | undefined; body: unknown; closed: AbortSignal | undefined }[];
+let statusLines: { header: string | undefined; text: string }[];
 
 function socketPath(): string {
 	return join(mkdtempSync(join(tmpdir(), 'orfoni-hooks-')), 'orfoni', 'hooks.sock');
 }
 
-async function serve(answer: () => Promise<HookResponse>, path = socketPath()): Promise<string> {
+async function serve(answer: () => Promise<HookResponse>, path = socketPath(), status = (_header: string | undefined, _text: string) => {}): Promise<string> {
 	logs = [];
 	calls = [];
+	statusLines = [];
 	server = await listenHooks(
 		{
 			hook: (header, body, closed) => {
 				calls.push({ header, body, closed });
 				return answer();
+			},
+			status: (header, text) => {
+				statusLines.push({ header, text });
+				status(header, text);
 			},
 		},
 		path,
@@ -32,8 +39,19 @@ async function serve(answer: () => Promise<HookResponse>, path = socketPath()): 
 	return path;
 }
 
+function runStatusLine(path: string, original: string | null, input: string): Promise<{ stdout: string; ms: number }> {
+	const { command } = (hookSettings(path, original) as { statusLine: { command: string } }).statusLine;
+	const startedAt = performance.now();
+	return new Promise((resolve, reject) => {
+		const child = execFile('/bin/sh', ['-c', command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
+			error ? reject(error) : resolve({ stdout, ms: performance.now() - startedAt }),
+		);
+		child.stdin?.end(input);
+	});
+}
+
 function runHookCommand(path: string, hook: 'Stop' | 'PermissionRequest', body: object): Promise<string> {
-	const entry = (hookSettings(path) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
+	const entry = (hookSettings(path, null) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', entry.command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
 			error ? reject(error) : resolve(stdout),
@@ -63,8 +81,9 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 afterEach(() => {
-	server.closeAllConnections();
-	server.close();
+	server?.closeAllConnections();
+	server?.close();
+	server = undefined;
 });
 
 describe('hook server', () => {
@@ -92,7 +111,7 @@ describe('hook server', () => {
 
 	test('killing the curl of a held PermissionRequest, as Claude Code does on a terminal No or Escape, tells the hub the connection closed', async () => {
 		const path = await serve(never);
-		const entry = (hookSettings(path) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.PermissionRequest![0]!.hooks[0]!;
+		const entry = (hookSettings(path, null) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.PermissionRequest![0]!.hooks[0]!;
 		const child = spawn('/bin/sh', ['-c', entry.command], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ORFONI_SESSION: 'session-1' } });
 		child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: 'c1', tool_name: 'Write', tool_input: {} }));
 		await until(() => calls.length === 1);
@@ -123,9 +142,62 @@ describe('hook server', () => {
 		expect(logs).toHaveLength(1);
 	});
 
-	test('anything but POST /hook gets 404', async () => {
+	test('anything but POST /hook and POST /status gets 404', async () => {
 		const path = await serve(never);
 		expect((await send(path, 'GET', '/hook')).status).toBe(404);
+		expect((await send(path, 'GET', '/status')).status).toBe(404);
 		expect((await send(path, 'POST', '/other', '{}')).status).toBe(404);
+	});
+});
+
+describe('status line', () => {
+	const input = '{"model":{"id":"claude-haiku-5-5","display_name":"Haiku 5.5"},"effort":{"level":"low"}}';
+
+	test('the status line command hands its input to the hub with the session header, and prints what the original command prints for it', async () => {
+		const path = await serve(never);
+		const { stdout } = await runStatusLine(path, `sed 's/^/shown: /'`, input);
+		expect(stdout).toBe(`shown: ${input}`);
+		expect(statusLines).toEqual([{ header: 'session-1', text: input }]);
+	});
+
+	test('an original command written as a small script, with quotes, separators, and a comment, gets the input too', async () => {
+		const path = await serve(never);
+		const { stdout } = await runStatusLine(path, `x=$(cat) && printf '%s\\n' "it's $x" | tr a-z A-Z; echo done # a 'comment'`, input);
+		expect(stdout).toBe(`IT'S ${input.toUpperCase()}\ndone\n`);
+	});
+
+	test('without an original command the status line command prints nothing', async () => {
+		const path = await serve(never);
+		expect((await runStatusLine(path, null, input)).stdout).toBe('');
+		expect(statusLines).toEqual([{ header: 'session-1', text: input }]);
+	});
+
+	test('with the hub down, the original line prints at once', async () => {
+		const { stdout, ms } = await runStatusLine(socketPath(), 'cat', input);
+		expect(stdout).toBe(input);
+		expect(ms).toBeLessThan(900);
+	});
+
+	test('a hub that never answers holds the original line back by about a second at most', async () => {
+		const path = socketPath();
+		mkdirSync(join(path, '..'), { recursive: true });
+		const silent = createNetServer(() => {});
+		await new Promise<void>((resolve) => silent.listen(path, resolve));
+		try {
+			const { stdout, ms } = await runStatusLine(path, 'cat', input);
+			expect(stdout).toBe(input);
+			expect(ms).toBeLessThan(3000);
+		} finally {
+			silent.close();
+		}
+	});
+
+	test('a status line the hub fails on still gets its empty answer, and the failure is logged', async () => {
+		const path = await serve(never, socketPath(), () => {
+			throw new Error('broken');
+		});
+		expect(await send(path, 'POST', '/status', input)).toEqual({ status: 200, text: '' });
+		expect(statusLines).toEqual([{ header: undefined, text: input }]);
+		expect(logs).toEqual([expect.stringContaining('broken')]);
 	});
 });

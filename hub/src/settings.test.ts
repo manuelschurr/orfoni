@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { hookSettings } from './settings.js';
+import { hookSettings, statusLineCommand } from './settings.js';
 
 interface HookEntry {
 	type: string;
@@ -8,7 +11,7 @@ interface HookEntry {
 }
 
 const SOCKET = '/run/user/0/orfoni/hooks.sock';
-const settings = hookSettings(SOCKET) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
+const settings = hookSettings(SOCKET, null) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
 
 function entry(hook: string): HookEntry {
 	const groups = settings.hooks[hook];
@@ -45,7 +48,7 @@ describe('hookSettings', () => {
 	});
 
 	it('quotes a socket path that contains a quote or a space for the shell', () => {
-		const command = (hookSettings("/run/it's here/hooks.sock") as typeof settings).hooks.Stop![0]!.hooks[0]!.command;
+		const command = (hookSettings("/run/it's here/hooks.sock", null) as typeof settings).hooks.Stop![0]!.hooks[0]!.command;
 		expect(command).toContain(`--unix-socket '/run/it'\\''s here/hooks.sock'`);
 	});
 
@@ -59,6 +62,67 @@ describe('hookSettings', () => {
 	});
 
 	it('keeps $ORFONI_SESSION literal in the serialized JSON', () => {
-		expect(JSON.stringify(hookSettings(SOCKET))).toContain('X-Orfoni-Session: $ORFONI_SESSION');
+		expect(JSON.stringify(hookSettings(SOCKET, null))).toContain('X-Orfoni-Session: $ORFONI_SESSION');
+	});
+});
+
+describe('the status line in hookSettings', () => {
+	const copy = `input=$(cat); printf '%s' "$input" | curl -sS -m 1 --unix-socket '${SOCKET}' -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" --data-binary @- http://localhost/status >/dev/null 2>&1 || true`;
+
+	it('copies its input to the hub, then pipes the same input into the status line command Claude Code would run without orfoni, every 10 s', () => {
+		expect((hookSettings(SOCKET, '/root/.claude/statusline.sh') as { statusLine: unknown }).statusLine).toEqual({
+			type: 'command',
+			command: `${copy}; printf '%s' "$input" | eval '/root/.claude/statusline.sh'`,
+			refreshInterval: 10,
+		});
+	});
+
+	it('quotes the original command for the shell, so a quote inside it survives', () => {
+		const { command } = (hookSettings(SOCKET, `echo "it's on"`) as { statusLine: { command: string } }).statusLine;
+		expect(command.endsWith(`| eval 'echo "it'\\''s on"'`)).toBe(true);
+	});
+
+	it('without an original command only copies the input and prints nothing', () => {
+		expect((hookSettings(SOCKET, null) as { statusLine: unknown }).statusLine).toEqual({ type: 'command', command: copy, refreshInterval: 10 });
+	});
+});
+
+describe('statusLineCommand', () => {
+	function folders() {
+		const root = mkdtempSync(join(tmpdir(), 'orfoni-settings-'));
+		const project = join(root, 'project');
+		const home = join(root, 'home');
+		for (const dir of [project, home]) mkdirSync(join(dir, '.claude'), { recursive: true });
+		return {
+			project,
+			home,
+			local: (text: string) => writeFileSync(join(project, '.claude/settings.local.json'), text),
+			shared: (text: string) => writeFileSync(join(project, '.claude/settings.json'), text),
+			user: (text: string) => writeFileSync(join(home, '.claude/settings.json'), text),
+			statusLine: (command: string) => JSON.stringify({ model: 'opus', statusLine: { type: 'command', command } }),
+		};
+	}
+
+	it("takes the project's local settings first, then the project settings, then the user settings", async () => {
+		const { project, home, local, shared, user, statusLine } = folders();
+		user(statusLine('user-line'));
+		expect(await statusLineCommand(project, home)).toBe('user-line');
+		shared(statusLine('project-line'));
+		expect(await statusLineCommand(project, home)).toBe('project-line');
+		local(statusLine('local-line'));
+		expect(await statusLineCommand(project, home)).toBe('local-line');
+	});
+
+	it('skips a file that does not parse or has no status line command', async () => {
+		const { project, home, local, shared, user, statusLine } = folders();
+		local('{ not json');
+		shared(JSON.stringify({ model: 'opus', statusLine: { type: 'command' } }));
+		user(statusLine('user-line'));
+		expect(await statusLineCommand(project, home)).toBe('user-line');
+	});
+
+	it('is null when no settings file has a status line, as in a folder that does not exist', async () => {
+		const { home } = folders();
+		expect(await statusLineCommand('/no/such/folder', home)).toBeNull();
 	});
 });

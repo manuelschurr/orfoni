@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, OtherSession, PermissionMode, SessionId } from '@orfoni/protocol';
+import type { ChatItem, Effort, OtherSession, PermissionMode, SessionId } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -19,8 +19,7 @@ afterEach(async () => {
 	client.close();
 });
 
-async function start(params: { prompt?: string; permissionMode?: PermissionMode } = {}): Promise<{ id: SessionId; dir: string }> {
-	const dir = newProjectDir();
+async function start({ dir = newProjectDir(), ...params }: { prompt?: string; permissionMode?: PermissionMode; effort?: Effort; dir?: string } = {}): Promise<{ id: SessionId; dir: string }> {
 	const result = (await client.request('startSession', { projectDir: dir, model: 'haiku', permissionMode: 'default', ...params })) as Started;
 	started.push(result.session.id);
 	await acceptTrustPrompt(result);
@@ -29,7 +28,7 @@ async function start(params: { prompt?: string; permissionMode?: PermissionMode 
 
 const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.status === 'pending';
 
-// A folder Claude Code already trusts, so no trust dialog holds up the session started outside orfoni.
+// A folder Claude Code already trusts, so no trust dialog holds up a session started there, and its status line runs from the start.
 const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
 
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
@@ -219,6 +218,16 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 			outside('kill-server');
 			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
 		}
+	});
+
+	test('a session shows the model and effort it runs on, and follows an /effort sent to it', async () => {
+		const { id } = await start({ effort: 'low', dir: TRUSTED_DIR });
+		const reported = await client.waitForSession(id, (s) => s.model !== null, undefined, 30_000);
+		expect(reported.model?.name).toContain('Haiku');
+		expect(reported.effort).toBe('low');
+		const since = client.mark();
+		await client.request('send', { sessionId: id, text: '/effort high' });
+		await client.waitForSession(id, (s) => s.effort === 'high', since, 20_000);
 	});
 
 	test('a session reports its task progress and its memory against the pane cap', async () => {
