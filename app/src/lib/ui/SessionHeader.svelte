@@ -16,7 +16,7 @@
 	const memory = $derived(session.memory);
 	const limit = $derived(memory?.maxBytes ? { max: memory.maxBytes, warning: memory.currentBytes > 0.8 * memory.maxBytes } : null);
 	const used = $derived(memory && limit ? `${bytes(memory.currentBytes)} of ${bytes(limit.max)}` : '');
-	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered');
+	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed');
 	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
 	const notes: Record<Change['phase'], (command: string) => string> = {
 		sending: (command) => `Sending ${command}`,

@@ -113,13 +113,21 @@ test('a new model goes to Claude Code as /model with its alias, and shows under 
 	expect(note()).toBeNull();
 });
 
-test.each(['working', 'needs_approval', 'needs_answer', 'offline', 'failed'] as const)('while the session is %s, its model and effort show but wait until it is idle', async (state) => {
+test.each(['working', 'needs_approval', 'needs_answer', 'offline'] as const)('while the session is %s, its model and effort show but wait until it is idle', async (state) => {
 	await header({ state, model: opus, effort: 'xhigh' });
 	expect(chosen('Model')).toBe('Opus 5.5');
 	expect(select('Model').disabled).toBe(true);
 	expect(select('Model').title).toBe('You can change the model while the session is idle.');
 	expect(select('Effort').disabled).toBe(true);
 	expect(select('Effort').title).toBe('You can change the effort while the session is idle.');
+});
+
+// A failed turn leaves Claude Code at its prompt, and another model is the usual way out of an API error there.
+test('after a failed turn the model and effort can change', async () => {
+	const { transport } = await header({ state: 'failed', model: opus, effort: 'xhigh' });
+	expect(select('Model').disabled).toBe(false);
+	await pick('Model', 'sonnet');
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/model sonnet' }]);
 });
 
 test('a change the hub refuses says so and leaves the model Claude Code reports', async () => {
