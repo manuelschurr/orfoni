@@ -26,7 +26,7 @@ import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
-import { hookSettings, statusLineCommand } from './settings.js';
+import { hookSettings, originalStatusLine } from './settings.js';
 import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
@@ -447,7 +447,7 @@ export class Hub {
 
 	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
 		const settings = this.settingsPath(session.id);
-		const statusLine = await statusLineCommand(session.projectDir, this.options.home);
+		const statusLine = await originalStatusLine(session.projectDir, this.options.home);
 		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		try {

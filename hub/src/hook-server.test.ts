@@ -40,7 +40,7 @@ async function serve(answer: () => Promise<HookResponse>, path = socketPath(), s
 }
 
 function runStatusLine(path: string, original: string | null, input: string): Promise<{ stdout: string; ms: number }> {
-	const { command } = (hookSettings(path, original) as { statusLine: { command: string } }).statusLine;
+	const { command } = (hookSettings(path, original === null ? null : { command: original }) as { statusLine: { command: string } }).statusLine;
 	const startedAt = performance.now();
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
@@ -151,24 +151,28 @@ describe('hook server', () => {
 });
 
 describe('status line', () => {
-	const input = '{"model":{"id":"claude-haiku-5-5","display_name":"Haiku 5.5"},"effort":{"level":"low"}}';
+	// Claude Code writes the JSON and a newline.
+	const json = '{"model":{"id":"claude-haiku-5-5","display_name":"Haiku 5.5"},"effort":{"level":"low"}}';
+	const input = `${json}\n`;
 
 	test('the status line command hands its input to the hub with the session header, and prints what the original command prints for it', async () => {
 		const path = await serve(never);
 		const { stdout } = await runStatusLine(path, `sed 's/^/shown: /'`, input);
 		expect(stdout).toBe(`shown: ${input}`);
+		await until(() => statusLines.length === 1);
 		expect(statusLines).toEqual([{ header: 'session-1', text: input }]);
 	});
 
 	test('an original command written as a small script, with quotes, separators, and a comment, gets the input too', async () => {
 		const path = await serve(never);
 		const { stdout } = await runStatusLine(path, `x=$(cat) && printf '%s\\n' "it's $x" | tr a-z A-Z; echo done # a 'comment'`, input);
-		expect(stdout).toBe(`IT'S ${input.toUpperCase()}\ndone\n`);
+		expect(stdout).toBe(`IT'S ${json.toUpperCase()}\ndone\n`);
 	});
 
 	test('without an original command the status line command prints nothing', async () => {
 		const path = await serve(never);
 		expect((await runStatusLine(path, null, input)).stdout).toBe('');
+		await until(() => statusLines.length === 1);
 		expect(statusLines).toEqual([{ header: 'session-1', text: input }]);
 	});
 
@@ -178,7 +182,7 @@ describe('status line', () => {
 		expect(ms).toBeLessThan(900);
 	});
 
-	test('a hub that never answers holds the original line back by about a second at most', async () => {
+	test('a hub that takes the copy and never answers does not hold the original line back', async () => {
 		const path = socketPath();
 		mkdirSync(join(path, '..'), { recursive: true });
 		const silent = createNetServer(() => {});
@@ -186,7 +190,7 @@ describe('status line', () => {
 		try {
 			const { stdout, ms } = await runStatusLine(path, 'cat', input);
 			expect(stdout).toBe(input);
-			expect(ms).toBeLessThan(3000);
+			expect(ms).toBeLessThan(500);
 		} finally {
 			silent.close();
 		}

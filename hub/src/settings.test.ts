@@ -1,8 +1,10 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { hookSettings, statusLineCommand } from './settings.js';
+import { hookSettings, originalStatusLine } from './settings.js';
 
 interface HookEntry {
 	type: string;
@@ -67,27 +69,61 @@ describe('hookSettings', () => {
 });
 
 describe('the status line in hookSettings', () => {
-	const copy = `input=$(cat); printf '%s' "$input" | curl -sS -m 1 --unix-socket '${SOCKET}' -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" --data-binary @- http://localhost/status >/dev/null 2>&1 || true`;
+	const copy = `input=$(cat); printf '%s\\n' "$input" | curl -sS -m 1 --unix-socket '${SOCKET}' -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" --data-binary @- http://localhost/status >/dev/null 2>&1 &`;
+	const statusLine = (original: Parameters<typeof hookSettings>[1]) => (hookSettings(SOCKET, original) as { statusLine: { type: string; command: string; refreshInterval: number; padding?: number } }).statusLine;
 
-	it('copies its input to the hub, then pipes the same input into the status line command Claude Code would run without orfoni, every 10 s', () => {
-		expect((hookSettings(SOCKET, '/root/.claude/statusline.sh') as { statusLine: unknown }).statusLine).toEqual({
+	// Claude Code runs the command with sh and writes the JSON and a newline to its stdin.
+	function run(command: string, input = '{"model":{"id":"claude-opus-5-5"}}\n'): { stdout: string; ms: number } {
+		const started = performance.now();
+		const result = spawnSync('/bin/sh', ['-c', command], { input, encoding: 'utf8', env: { ...process.env, ORFONI_SESSION: 's1' } });
+		return { stdout: result.stdout, ms: performance.now() - started };
+	}
+
+	it('copies its input to the hub in the background, then pipes the same input into the status line command Claude Code would run without orfoni, every 10 s', () => {
+		expect(statusLine({ command: '/root/.claude/statusline.sh' })).toEqual({
 			type: 'command',
-			command: `${copy}; printf '%s' "$input" | eval '/root/.claude/statusline.sh'`,
+			command: `${copy} printf '%s\\n' "$input" | eval '/root/.claude/statusline.sh'`,
 			refreshInterval: 10,
 		});
 	});
 
 	it('quotes the original command for the shell, so a quote inside it survives', () => {
-		const { command } = (hookSettings(SOCKET, `echo "it's on"`) as { statusLine: { command: string } }).statusLine;
+		const { command } = statusLine({ command: `echo "it's on"` });
 		expect(command.endsWith(`| eval 'echo "it'\\''s on"'`)).toBe(true);
+		expect(run(command).stdout).toBe("it's on\n");
 	});
 
 	it('without an original command only copies the input and prints nothing', () => {
-		expect((hookSettings(SOCKET, null) as { statusLine: unknown }).statusLine).toEqual({ type: 'command', command: copy, refreshInterval: 10 });
+		expect(statusLine(null)).toEqual({ type: 'command', command: copy, refreshInterval: 10 });
+	});
+
+	it('a status line script that reads one line gets the whole input with its newline, as without orfoni', () => {
+		const original = 'read -r line; echo "got:${#line}"';
+		expect(run(statusLine({ command: original }).command).stdout).toBe(run(original).stdout);
+		expect(run(original).stdout).toBe('got:34\n');
+	});
+
+	it('a hub that takes the copy and never answers does not hold up the status line', async () => {
+		const socket = join(mkdtempSync(join(tmpdir(), 'orfoni-statusline-')), 'hub.sock');
+		const server: Server = createServer(() => {});
+		await new Promise<void>((resolve) => server.listen(socket, resolve));
+		try {
+			const command = (hookSettings(socket, { command: 'echo shown' }) as { statusLine: { command: string } }).statusLine.command;
+			const { stdout, ms } = run(command);
+			expect(stdout).toBe('shown\n');
+			expect(ms).toBeLessThan(500);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("keeps the original status line's padding and vim mode setting, and a refresh interval shorter than 10 s", () => {
+		expect(statusLine({ command: 'x', padding: 2, hideVimModeIndicator: true, refreshInterval: 3 })).toMatchObject({ padding: 2, hideVimModeIndicator: true, refreshInterval: 3 });
+		expect(statusLine({ command: 'x', refreshInterval: 60 }).refreshInterval).toBe(10);
 	});
 });
 
-describe('statusLineCommand', () => {
+describe('originalStatusLine', () => {
 	function folders() {
 		const root = mkdtempSync(join(tmpdir(), 'orfoni-settings-'));
 		const project = join(root, 'project');
@@ -106,11 +142,11 @@ describe('statusLineCommand', () => {
 	it("takes the project's local settings first, then the project settings, then the user settings", async () => {
 		const { project, home, local, shared, user, statusLine } = folders();
 		user(statusLine('user-line'));
-		expect(await statusLineCommand(project, home)).toBe('user-line');
+		expect((await originalStatusLine(project, home))?.command).toBe('user-line');
 		shared(statusLine('project-line'));
-		expect(await statusLineCommand(project, home)).toBe('project-line');
+		expect((await originalStatusLine(project, home))?.command).toBe('project-line');
 		local(statusLine('local-line'));
-		expect(await statusLineCommand(project, home)).toBe('local-line');
+		expect((await originalStatusLine(project, home))?.command).toBe('local-line');
 	});
 
 	it('skips a file that does not parse or has no status line command', async () => {
@@ -118,11 +154,17 @@ describe('statusLineCommand', () => {
 		local('{ not json');
 		shared(JSON.stringify({ model: 'opus', statusLine: { type: 'command' } }));
 		user(statusLine('user-line'));
-		expect(await statusLineCommand(project, home)).toBe('user-line');
+		expect((await originalStatusLine(project, home))?.command).toBe('user-line');
+	});
+
+	it('keeps the padding, vim mode setting, and refresh interval of the status line it finds', async () => {
+		const { project, home, user } = folders();
+		user(JSON.stringify({ statusLine: { type: 'command', command: 'line', padding: 1, hideVimModeIndicator: true, refreshInterval: 5 } }));
+		expect(await originalStatusLine(project, home)).toEqual({ command: 'line', padding: 1, hideVimModeIndicator: true, refreshInterval: 5 });
 	});
 
 	it('is null when no settings file has a status line, as in a folder that does not exist', async () => {
 		const { home } = folders();
-		expect(await statusLineCommand('/no/such/folder', home)).toBeNull();
+		expect(await originalStatusLine('/no/such/folder', home)).toBeNull();
 	});
 });
