@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { ChatItem, TaskItem } from '@orfoni/protocol';
+	import type { ChatItem, SessionSummary, TaskItem } from '@orfoni/protocol';
 	import { elapsed } from './format';
 	import TaskList from './TaskList.svelte';
 
-	let { since, chat, tasks = null }: { since: number; chat: ChatItem[]; tasks?: TaskItem[] | null } = $props();
+	let { since, chat, activity = null, tasks = null }: { since: number; chat: ChatItem[]; activity?: SessionSummary['activity']; tasks?: TaskItem[] | null } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -11,7 +11,8 @@
 		return () => clearInterval(timer);
 	});
 
-	const activity = $derived.by(() => {
+	// What the chat tells, for when the hub does not know the line Claude Code shows.
+	const guess = $derived.by(() => {
 		const last = chat.at(-1);
 		if (last?.kind === 'tool' && last.status === 'running') return `Running ${last.name}`;
 		if (last?.kind === 'assistant' && !last.done) return 'Writing';
@@ -22,11 +23,16 @@
 <div class="working">
 	<span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>
 	<div class="body">
-		<!-- Only the activity is announced; a time that changes every second would interrupt a screen reader all the time. -->
+		<!-- Only the text is announced. The time and details such as the token count change every second and would interrupt a screen reader all the time. -->
 		<p class="line">
 			<span class="time" aria-hidden="true">{elapsed(now - since)}</span>
 			<span aria-hidden="true">·</span>
-			<span role="status">{activity}</span>
+			<span role="status">{activity?.text ?? guess}</span>
+			<!-- The gap spaces the details on screen, and the space keeps them apart in the text a screen reader or a copy gets. -->
+			{#each activity?.details ?? [] as detail}
+				{' '}<span aria-hidden="true">·</span>
+				<span>{detail}</span>
+			{/each}
 		</p>
 		{#if tasks?.length}<TaskList {tasks} />{/if}
 	</div>

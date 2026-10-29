@@ -216,7 +216,7 @@ test('porting a session outside orfoni opens the new orfoni session in its place
 	expect(screen.getByRole('button', { name: /^swarm-73/ }).getAttribute('aria-current')).toBe('true');
 });
 
-test('a working session shows its task list under the conversation', async () => {
+test('a working session shows the line Claude Code shows and its task list under the conversation', async () => {
 	const working = summary('w1', 'working', {
 		title: 'Range the pairs',
 		tasks: { done: 1, total: 2 },
@@ -224,6 +224,7 @@ test('a working session shows its task list under the conversation', async () =>
 			{ id: '1', subject: 'Get the laptop tunnel up', status: 'completed', activeForm: null },
 			{ id: '2', subject: 'Test 1: two pairs ranging at once', status: 'in_progress', activeForm: 'Running the two-pair test' },
 		],
+		activity: { text: 'Running the two-pair test…', details: ['↓ 69.3k tokens'] },
 	});
 	let hubLine: (message: unknown) => void = () => {};
 	inTauri((cmd, args, push) => {
@@ -249,6 +250,7 @@ test('a working session shows its task list under the conversation', async () =>
 	const conversation = await screen.findByRole('region', { name: 'Conversation' });
 	const tasks = await within(conversation).findByRole('list', { name: 'Tasks' });
 	expect(within(tasks).getAllByRole('listitem').map(spoken)).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once']);
+	expect(within(conversation).getByRole('status').textContent).toBe('Running the two-pair test…');
 });
 
 test('in Tauri, the sidebar shows the installed version next to the app name', async () => {

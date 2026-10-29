@@ -44,6 +44,24 @@ test('the activity names the tool that runs, and says writing while a reply come
 	expect(screen.getByRole('status').textContent).toBe('Writing');
 });
 
+function line(container: HTMLElement): string {
+	return container.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
+test('the line Claude Code shows while it works takes the place of the own activity, after the timer, and only its text is announced', () => {
+	const tool: ChatItem = { kind: 'tool', toolUseId: 't1', name: 'Bash', input: { command: 'python3 range.py' }, status: 'running' };
+	const activity = { text: 'Running the two-pair test…', details: ['↓ 69.3k tokens', 'thinking with high effort'] };
+	const { container } = render(WorkingIndicator, { since: T0, chat: [prompt, tool], activity });
+	expect(line(container)).toBe('43s · Running the two-pair test… · ↓ 69.3k tokens · thinking with high effort');
+	expect(screen.getByRole('status').textContent).toBe('Running the two-pair test…');
+});
+
+test('a line from Claude Code without details shows only its text after the timer', () => {
+	const { container } = render(WorkingIndicator, { since: T0, chat: [prompt], activity: { text: 'Brewing…', details: [] } });
+	expect(line(container)).toBe('43s · Brewing…');
+	expect(screen.getByRole('status').textContent).toBe('Brewing…');
+});
+
 test('the time reads in seconds, then minutes, then hours', () => {
 	expect(elapsed(43_000)).toBe('43s');
 	expect(elapsed(125_000)).toBe('2m 05s');
@@ -66,6 +84,13 @@ test('while a turn runs, the task list shows under the indicator in its order, e
 	expect(shownTasks()).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once', 'Pending: Test 2: four pairs ranging at once']);
 	await rerender({ ...props, working: null });
 	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
+});
+
+test('the conversation passes on the line Claude Code shows while it works', async () => {
+	const { client } = await connectedClient([]);
+	render(ChatView, { client, chat: [prompt], error: null, empty: '', onretry: () => {}, working: T0, activity: { text: 'Writing the story…', details: ['↓ 965 tokens'] } });
+	expect(screen.getByRole('status').textContent).toBe('Writing the story…');
+	expect(screen.getByText('↓ 965 tokens')).toBeTruthy();
 });
 
 test('a turn in a session without tasks shows no task list', async () => {
