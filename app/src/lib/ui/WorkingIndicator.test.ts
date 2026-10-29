@@ -1,0 +1,51 @@
+import type { ChatItem } from '@orfoni/protocol';
+import { render, screen } from '@testing-library/svelte';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { connectedClient } from '../testing';
+import ChatView from './ChatView.svelte';
+import { elapsed } from './format';
+import WorkingIndicator from './WorkingIndicator.svelte';
+
+const T0 = Date.parse('2026-10-29T10:00:00.000Z');
+const prompt: ChatItem = { kind: 'user', id: 'u1', text: 'Plan the ranging tests.', at: T0 };
+
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+	vi.setSystemTime(T0 + 43_000);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+test('a running turn shows how long it has run and that Claude is thinking, and the time keeps counting', async () => {
+	render(WorkingIndicator, { since: T0, chat: [prompt] });
+	expect(screen.getByRole('status').textContent).toBe('Thinking');
+	expect(screen.getByText('43s')).toBeTruthy();
+	await vi.advanceTimersByTimeAsync(2_000);
+	expect(screen.getByText('45s')).toBeTruthy();
+});
+
+test('the activity names the tool that runs, and says writing while a reply comes in', () => {
+	const tool: ChatItem = { kind: 'tool', toolUseId: 't1', name: 'Bash', input: { command: 'pytest -q' }, status: 'running' };
+	const { unmount } = render(WorkingIndicator, { since: T0, chat: [prompt, tool] });
+	expect(screen.getByRole('status').textContent).toBe('Running Bash');
+	unmount();
+	render(WorkingIndicator, { since: T0, chat: [prompt, { kind: 'assistant', id: 'a1', text: 'The plan has', done: false }] });
+	expect(screen.getByRole('status').textContent).toBe('Writing');
+});
+
+test('the time reads in seconds, then minutes, then hours', () => {
+	expect(elapsed(43_000)).toBe('43s');
+	expect(elapsed(125_000)).toBe('2m 05s');
+	expect(elapsed(3_720_000)).toBe('1h 02m');
+});
+
+test('the conversation shows the indicator after its last item while a turn runs, and not otherwise', async () => {
+	const { client } = await connectedClient([]);
+	const props = { client, chat: [prompt], error: null, empty: '', onretry: () => {} };
+	const { rerender } = render(ChatView, { ...props, working: T0 });
+	expect(screen.getByRole('status').textContent).toBe('Thinking');
+	await rerender({ ...props, working: null });
+	expect(screen.queryByRole('status')).toBeNull();
+});

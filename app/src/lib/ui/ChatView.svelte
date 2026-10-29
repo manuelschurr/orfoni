@@ -7,6 +7,7 @@
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
 	import ToolCard from './ToolCard.svelte';
+	import WorkingIndicator from './WorkingIndicator.svelte';
 
 	let {
 		client,
@@ -15,7 +16,8 @@
 		empty,
 		onretry,
 		banner,
-	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet } = $props();
+		working = null,
+	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null } = $props();
 	let scroller: HTMLElement | undefined = $state();
 	let pinned = true;
 
@@ -25,6 +27,7 @@
 
 	$effect(() => {
 		void chat;
+		void working;
 		if (pinned && scroller) scroller.scrollTop = scroller.scrollHeight;
 	});
 </script>
@@ -69,6 +72,8 @@
 				</div>
 			{/each}
 		{/if}
+		<!-- While a turn runs, this says Claude is at work and for how long, so a long think does not look stuck. -->
+		{#if working !== null && chat !== undefined}<WorkingIndicator since={working} {chat} />{/if}
 	</div>
 </section>
 

@@ -340,3 +340,17 @@ test('the app scrolls inside its panes and never as a whole page', async ({ page
 	await expect(page.getByRole('main').getByRole('button', { name: /echo done/ })).not.toBeInViewport();
 	expect(await page.evaluate(() => document.scrollingElement?.scrollHeight)).toBe(await page.evaluate(() => innerHeight));
 });
+
+test('while Claude works the conversation shows a timer and what it is doing, and that goes away once the reply is in', async ({ page }) => {
+	const session = await startReady({ title: 'working check' });
+	await openSession(page, session);
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.fill('Write a 600-word story about a terminal that learns to dream. No tools.');
+	await box.press('Enter');
+	const main = page.getByRole('main');
+	const working = main.getByRole('status').filter({ hasText: /^(Thinking|Writing)$/ });
+	await expect(working).toBeVisible({ timeout: 15_000 });
+	await expect(main.getByText(/^\d+s$/)).toBeVisible();
+	await expect(working).toHaveCount(0, { timeout: REPLY_MS });
+	await expect(claude(page).last()).toContainText(/\w{3}/);
+});

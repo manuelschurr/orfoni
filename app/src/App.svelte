@@ -115,6 +115,7 @@
 					<ChatView
 						{client}
 						chat={client.chats.get(session.id)}
+						working={session.state === 'working' ? session.stateSince : null}
 						error={client.openError}
 						empty="No messages yet. What you send here goes to Claude in this session's terminal."
 						onretry={() => void client?.select(session.id).catch(() => {})}

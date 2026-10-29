@@ -82,7 +82,14 @@
 			</div>
 		{/if}
 	</header>
-	<ChatView {client} chat={view.chat} error={view.error} empty="No messages in this conversation yet." onretry={() => void client.openOther(session.pid).catch(() => {})} />
+	<ChatView
+		{client}
+		chat={view.chat}
+		error={view.error}
+		working={!ended && session.status === 'busy' ? session.statusSince : null}
+		empty="No messages in this conversation yet."
+		onretry={() => void client.openOther(session.pid).catch(() => {})}
+	/>
 	{#if !ended}
 		<div class="readonly">
 			<p>This session runs outside orfoni, so orfoni can only show it. Port it into orfoni to send messages here.</p>
