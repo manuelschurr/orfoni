@@ -260,6 +260,19 @@ test('Fork starts a second session on its own first message from the conversatio
 	expect(userDefaults()).toEqual(before);
 });
 
+test('rename a session from its header, and the list shows the new name', async ({ page }) => {
+	const session = await startReady({ title: 'rename me' });
+	await openSession(page, session);
+	const main = page.getByRole('main');
+	await main.getByRole('button', { name: 'Rename' }).click();
+	const field = main.getByRole('textbox', { name: 'Session name' });
+	await expect(field).toHaveValue('rename me');
+	await field.fill('renamed in the header');
+	await field.press('Enter');
+	await expect(main.getByRole('heading', { level: 1 })).toHaveText('renamed in the header');
+	await expect(page.getByRole('navigation', { name: 'Sessions' }).getByText('renamed in the header')).toBeVisible();
+});
+
 test('remove a session', async ({ page }) => {
 	const { session } = await hub.start({ projectDir: newProjectDir(), title: 'remove me' });
 	await openSession(page, session);

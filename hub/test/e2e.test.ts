@@ -297,6 +297,26 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(defaults()).toEqual(before);
 	});
 
+	test('renameSession gives the session a new title, and Claude Code takes it as its own name', async () => {
+		const { id } = await start({ prompt: 'Reply with exactly: ok' });
+		const answered = await client.waitForSession(id, (s) => s.state === 'answered');
+		await client.request('renameSession', { sessionId: id, title: 'rename check' });
+		expect(((await client.request('listSessions', {})) as SessionSummary[]).find((s) => s.id === id)?.title).toBe('rename check');
+		// Claude Code's own record of the session, which claude.ai and claude --resume show.
+		const registered = () => {
+			for (const name of readdirSync(join(homedir(), '.claude/sessions')).filter((file) => file.endsWith('.json'))) {
+				try {
+					const entry = JSON.parse(readFileSync(join(homedir(), '.claude/sessions', name), 'utf8')) as { sessionId?: string; name?: string };
+					if (entry.sessionId === answered.claudeSessionId) return entry.name;
+				} catch {
+					// The entry was being written or removed.
+				}
+			}
+			return undefined;
+		};
+		await until(() => registered() === 'rename check', 15_000);
+	});
+
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
 		const before = defaults();
 		const { id } = await start({
