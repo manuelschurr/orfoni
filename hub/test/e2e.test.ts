@@ -327,7 +327,8 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		try {
 			answers = (await Promise.all([1, 2, 3].map(() => client.request('listCommands', { projectDir: dir })))) as { commands: SlashCommand[] }[];
 			const answered = performance.now();
-			await until(() => listingProcesses(dir).length === 0, 10_000);
+			// The hub ends the listing's process group after answering, and kills what is left of it after 5 s.
+			await until(() => listingProcesses(dir).length === 0 && [...seen].every((listing) => processGroup(listing).length === 0), 10_000).catch(() => {});
 			expect(lastRunning).toBeGreaterThan(answered);
 			await expect(client.request('listCommands', { projectDir: `${dir}-missing` })).rejects.toThrow(/^not_found/);
 		} finally {
