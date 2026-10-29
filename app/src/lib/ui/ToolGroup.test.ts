@@ -1,9 +1,9 @@
-import type { ChatItem } from '@orfoni/protocol';
+import { RequestId, type ChatItem } from '@orfoni/protocol';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { expect, test } from 'vitest';
 import { connectedClient } from '../testing';
 import ChatView from './ChatView.svelte';
-import { describeTools } from './format';
+import { describeRunning, describeTools } from './format';
 
 type Tool = Extract<ChatItem, { kind: 'tool' }>;
 let next = 0;
@@ -17,6 +17,27 @@ test('a group of tool calls reads like the terminal, in the order the kinds firs
 	expect(describeTools([tool('mcp__claude_ai_Google_Drive__search_files'), tool('mcp__claude_ai_Google_Drive__search_files')])).toBe('Used search_files from claude_ai_Google_Drive 2 times');
 	expect(describeTools([tool('LSP')])).toBe('Used LSP');
 	expect(describeTools([tool('ToolSearch'), tool('TaskCreate')])).toBe('Loaded tools and updated the task list');
+	expect(describeTools([tool('AskUserQuestion'), tool('ExitPlanMode')])).toBe('Asked a question and proposed a plan');
+});
+
+test('one running call says what it works on, the way the terminal does, and several say how many of each kind run', () => {
+	const running = (name: string, input: Record<string, unknown> = {}) => tool(name, input, 'running');
+	expect(describeRunning([running('Bash', { command: 'pytest -q\n' })])).toBe('running pytest -q');
+	expect(describeRunning([running('Read', { file_path: '/root/x.ts' })])).toBe('reading /root/x.ts');
+	expect(describeRunning([running('Edit', { file_path: '/p/a.py' })])).toBe('editing /p/a.py');
+	expect(describeRunning([running('Write', { file_path: '/p/b.py' })])).toBe('writing /p/b.py');
+	expect(describeRunning([running('Grep', { pattern: 'TODO' })])).toBe('searching the code for TODO');
+	expect(describeRunning([running('Glob', { pattern: '**/*.ts' })])).toBe('looking for **/*.ts');
+	expect(describeRunning([running('WebFetch', { url: 'https://code.claude.com/docs' })])).toBe('fetching https://code.claude.com/docs');
+	expect(describeRunning([running('WebSearch', { query: 'tmux capture-pane' })])).toBe('searching the web for tmux capture-pane');
+	expect(describeRunning([running('Agent', { description: 'Find hub entry points', prompt: 'Look for…' })])).toBe('running an agent: Find hub entry points');
+	expect(describeRunning([running('Skill', { skill: 'pstack:poteto-mode' })])).toBe('using pstack:poteto-mode');
+	expect(describeRunning([running('TaskUpdate', { taskId: '1', status: 'completed' })])).toBe('updating the task list');
+	expect(describeRunning([running('mcp__claude_ai_Google_Drive__search_files', { query: 'notes' })])).toBe('using search_files from claude_ai_Google_Drive');
+	expect(describeRunning([running('LSP', { file: 'a.ts' })])).toBe('using LSP');
+	expect(describeRunning([running('Read')])).toBe('reading a file');
+	expect(describeRunning([running('Agent', { description: 'One' }), running('Agent', { description: 'Two' }), running('Read', { file_path: '/p/a.py' })])).toBe('running 2 agents and reading a file');
+	expect(describeRunning([running('Bash', { command: 'ls' }), running('Bash', { command: 'pwd' })])).toBe('running 2 commands');
 });
 
 async function chat(items: ChatItem[]) {
@@ -36,6 +57,28 @@ test('consecutive tool calls fold into one line that opens to show them, and tex
 	expect(first.getAttribute('aria-expanded')).toBe('true');
 	expect(screen.getByRole('button', { name: /Bash pytest -q/ })).toBeTruthy();
 	expect(screen.getByRole('button', { name: /Read \/p\/a\.py/ })).toBeTruthy();
+});
+
+test('a group with several calls running says how many run, and the first word of a line is capitalized', async () => {
+	await chat([user, tool('Agent', { description: 'One' }, 'running'), tool('Agent', { description: 'Two' }, 'running')]);
+	expect(screen.getByRole('button', { name: 'Running 2 agents' })).toBeTruthy();
+});
+
+test('a question or plan shows only as its card, without the tool call that asked for it, and history, which has no cards, names the call', async () => {
+	const question = { question: 'Which color do you prefer?', header: 'Color', options: [{ label: 'Red' }, { label: 'Blue' }] };
+	await chat([
+		user,
+		tool('Read', { file_path: '/p/a.py' }),
+		tool('AskUserQuestion', { questions: [question] }, 'running'),
+		{ kind: 'question', requestId: RequestId.parse('r1'), questions: [question], status: 'pending' },
+		tool('ExitPlanMode', { plan: 'Ship it' }, 'running'),
+		{ kind: 'plan', requestId: RequestId.parse('r2'), plan: 'Ship it', status: 'pending' },
+	]);
+	const groupLines = screen.getAllByRole('button').filter((button) => button.hasAttribute('aria-expanded'));
+	expect(groupLines.map((line) => line.textContent?.trim())).toEqual(['Read a file']);
+	await chat([user, tool('AskUserQuestion', { questions: [question] }), { kind: 'assistant', id: 'a1', text: 'Blue it is.', done: true }, tool('ExitPlanMode', { plan: 'Ship it' })]);
+	expect(screen.getByRole('button', { name: 'Asked a question' })).toBeTruthy();
+	expect(screen.getByRole('button', { name: 'Proposed a plan' })).toBeTruthy();
 });
 
 test('a group says which tool runs and how many failed', async () => {

@@ -1,21 +1,21 @@
 <script lang="ts">
 	import type { ChatItem } from '@orfoni/protocol';
-	import { describeTools, toolSummary } from './format';
+	import { capitalize, describeRunning, describeTools } from './format';
 	import ToolCard from './ToolCard.svelte';
 
 	let { tools }: { tools: Extract<ChatItem, { kind: 'tool' }>[] } = $props();
 	let open = $state(false);
 	const finished = $derived(tools.filter((tool) => tool.status !== 'running'));
-	const running = $derived(tools.findLast((tool) => tool.status === 'running'));
+	const running = $derived(tools.filter((tool) => tool.status === 'running'));
 	const failed = $derived(tools.filter((tool) => tool.status === 'failed').length);
-	const doing = $derived(running ? `${finished.length > 0 ? 'running' : 'Running'} ${toolSummary(running.name, running.input) || running.name}` : null);
+	const doing = $derived(running.length === 0 ? null : finished.length > 0 ? describeRunning(running) : capitalize(describeRunning(running)));
 </script>
 
 <!-- Tool calls take a lot of room, so a run of them folds into one quiet line that opens to show them. -->
 <div class="group">
 	<button class="line" aria-expanded={open} onclick={() => (open = !open)}>
 		<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
-		{#if running}<span class="spinner" aria-hidden="true"></span>{/if}
+		{#if running.length > 0}<span class="spinner" aria-hidden="true"></span>{/if}
 		<span class="text"
 			>{#if finished.length > 0}{describeTools(finished)}{/if}{#if doing}{finished.length > 0 ? ', ' : ''}<span class="doing">{doing}</span>{/if}{#if failed > 0}{', '}<span class="failed"
 					>{failed} failed</span

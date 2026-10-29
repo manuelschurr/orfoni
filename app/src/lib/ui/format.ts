@@ -123,21 +123,48 @@ function text(value: unknown): string {
 	return typeof value === 'string' ? value : '';
 }
 
-// Phrases for a group of tool calls, worded like the lines Claude Code's terminal folds them into.
-const toolPhrases: Record<string, (count: number) => string> = {
-	command: (n) => (n === 1 ? 'ran a command' : `ran ${n} commands`),
-	read: (n) => (n === 1 ? 'read a file' : `read ${n} files`),
-	edit: (n) => (n === 1 ? 'edited a file' : `edited ${n} files`),
-	notebook: (n) => (n === 1 ? 'edited a notebook' : `edited ${n} notebooks`),
-	write: (n) => (n === 1 ? 'wrote a file' : `wrote ${n} files`),
-	grep: (n) => (n === 1 ? 'searched the code' : `searched the code ${n} times`),
-	glob: (n) => (n === 1 ? 'looked for files' : `looked for files ${n} times`),
-	fetch: (n) => (n === 1 ? 'fetched a page' : `fetched ${n} pages`),
-	websearch: (n) => (n === 1 ? 'searched the web' : `searched the web ${n} times`),
-	agent: (n) => (n === 1 ? 'ran an agent' : `ran ${n} agents`),
-	tasks: () => 'updated the task list',
-	skill: (n) => (n === 1 ? 'used a skill' : `used ${n} skills`),
-	toolsearch: () => 'loaded tools',
+type Tense = 'did' | 'doing';
+
+// A kind of tool call in the past and the present tense, worded like the lines Claude Code's terminal folds tool calls into, and the words one running call puts before what it works on.
+interface ToolWords {
+	did(count: number): string;
+	doing(count: number): string;
+	on?: string;
+}
+
+// Calls that count what they act on, as in "read 2 files".
+function things(verbs: [string, string], [one, many]: [string, string], on?: string): ToolWords {
+	const say = (verb: string) => (count: number) => (count === 1 ? `${verb} ${one}` : `${verb} ${count} ${many}`);
+	return { did: say(verbs[0]), doing: say(verbs[1]), on };
+}
+
+// Calls that count how often they acted, as in "searched the code 2 times".
+function times(verbs: [string, string], what: string, on: string): ToolWords {
+	const say = (verb: string) => (count: number) => (count === 1 ? `${verb} ${what}` : `${verb} ${what} ${count} times`);
+	return { did: say(verbs[0]), doing: say(verbs[1]), on };
+}
+
+// Calls that read the same however many ran, as in "updated the task list".
+function once(verbs: [string, string], what: string): ToolWords {
+	return { did: () => `${verbs[0]} ${what}`, doing: () => `${verbs[1]} ${what}` };
+}
+
+const toolWords: Record<string, ToolWords> = {
+	command: things(['ran', 'running'], ['a command', 'commands'], 'running'),
+	read: things(['read', 'reading'], ['a file', 'files'], 'reading'),
+	edit: things(['edited', 'editing'], ['a file', 'files'], 'editing'),
+	notebook: things(['edited', 'editing'], ['a notebook', 'notebooks'], 'editing'),
+	write: things(['wrote', 'writing'], ['a file', 'files'], 'writing'),
+	grep: times(['searched', 'searching'], 'the code', 'searching the code for'),
+	glob: times(['looked', 'looking'], 'for files', 'looking for'),
+	fetch: things(['fetched', 'fetching'], ['a page', 'pages'], 'fetching'),
+	websearch: times(['searched', 'searching'], 'the web', 'searching the web for'),
+	agent: things(['ran', 'running'], ['an agent', 'agents'], 'running an agent:'),
+	tasks: once(['updated', 'updating'], 'the task list'),
+	skill: things(['used', 'using'], ['a skill', 'skills'], 'using'),
+	toolsearch: once(['loaded', 'loading'], 'tools'),
+	question: things(['asked', 'asking'], ['a question', 'questions']),
+	plan: things(['proposed', 'proposing'], ['a plan', 'plans']),
 };
 const toolKinds: Record<string, string> = {
 	Bash: 'command',
@@ -159,24 +186,45 @@ const toolKinds: Record<string, string> = {
 	TodoWrite: 'tasks',
 	Skill: 'skill',
 	ToolSearch: 'toolsearch',
+	AskUserQuestion: 'question',
+	ExitPlanMode: 'plan',
 };
 
-function otherTool(name: string, count: number): string {
+function kindOf(name: string): string {
+	return toolKinds[name] ?? `other:${name}`;
+}
+
+function otherTool(name: string, count: number, tense: Tense): string {
 	const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
-	const used = mcp ? `used ${mcp[2]} from ${mcp[1]}` : `used ${name}`;
+	const verb = tense === 'did' ? 'used' : 'using';
+	const used = mcp ? `${verb} ${mcp[2]} from ${mcp[1]}` : `${verb} ${name}`;
 	return count === 1 ? used : `${used} ${count} times`;
 }
 
-export function describeTools(tools: { name: string }[]): string {
+function phrases(tools: { name: string }[], tense: Tense): string {
 	const counts = new Map<string, { name: string; count: number }>();
 	for (const { name } of tools) {
-		const kind = toolKinds[name] ?? `other:${name}`;
-		const seen = counts.get(kind);
-		counts.set(kind, { name, count: (seen?.count ?? 0) + 1 });
+		const kind = kindOf(name);
+		counts.set(kind, { name, count: (counts.get(kind)?.count ?? 0) + 1 });
 	}
-	const phrases = [...counts].map(([kind, { name, count }]) => toolPhrases[kind]?.(count) ?? otherTool(name, count));
-	const text = phrases.length > 1 ? `${phrases.slice(0, -1).join(', ')} and ${phrases.at(-1)}` : (phrases[0] ?? '');
+	const said = [...counts].map(([kind, { name, count }]) => toolWords[kind]?.[tense](count) ?? otherTool(name, count, tense));
+	return said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said.at(-1)}` : (said[0] ?? '');
+}
+
+export function capitalize(text: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function describeTools(tools: { name: string }[]): string {
+	return capitalize(phrases(tools, 'did'));
+}
+
+// One running call names what it works on, as the terminal does.
+export function describeRunning(tools: { name: string; input: unknown }[]): string {
+	const [only] = tools;
+	const on = only && tools.length === 1 ? toolWords[kindOf(only.name)]?.on : undefined;
+	const target = only && on ? toolSummary(only.name, only.input) : '';
+	return on && target ? `${on} ${target}` : phrases(tools, 'doing');
 }
 
 export function toolSummary(name: string, input: unknown): string {

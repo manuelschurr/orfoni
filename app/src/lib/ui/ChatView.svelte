@@ -20,11 +20,25 @@
 		activity = null,
 		tasks = null,
 	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; activity?: SessionSummary['activity']; tasks?: TaskItem[] | null } = $props();
+	// A question or a plan shows as its own card, so the tool call that asked for it stays out of the groups, though history, which has no cards, keeps it.
+	const cardOf: Record<string, ChatItem['kind']> = { AskUserQuestion: 'question', ExitPlanMode: 'plan' };
+
+	function hasCard(items: ChatItem[], after: number, kind: ChatItem['kind']): boolean {
+		for (const item of items.slice(after + 1)) {
+			if (item.kind === kind) return true;
+			if (item.kind === 'user') return false;
+		}
+		return false;
+	}
+
 	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added.
 	const segments = $derived.by(() => {
 		const groups: ({ kind: 'tools'; key: string; tools: Extract<ChatItem, { kind: 'tool' }>[] } | { kind: 'item'; key: string; item: ChatItem })[] = [];
-		for (const item of chat ?? []) {
+		const items = chat ?? [];
+		for (const [index, item] of items.entries()) {
 			const last = groups.at(-1);
+			const card = item.kind === 'tool' ? cardOf[item.name] : undefined;
+			if (card && hasCard(items, index, card)) continue;
 			if (item.kind !== 'tool') groups.push({ kind: 'item', key: itemKey(item), item });
 			else if (last?.kind === 'tools') last.tools.push(item);
 			else groups.push({ kind: 'tools', key: `tools-${item.toolUseId}`, tools: [item] });
