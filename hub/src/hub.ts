@@ -97,7 +97,7 @@ class HubError extends Error {
 interface Session {
 	readonly id: SessionId;
 	readonly projectDir: string;
-	readonly title: string | null;
+	title: string | null;
 	readonly createdAt: number;
 	model: SessionModel;
 	claude: ClaudeProcess;
@@ -105,6 +105,8 @@ interface Session {
 	permissionMode?: PermissionMode;
 	// A fork's conversation as it was forked, which Claude Code copies into the fork's own transcript only with the fork's first message.
 	inherited?: { from: ClaudeSessionId; messages: SessionMessage[] };
+	// A rename Claude Code has not heard of yet, since it was asking you something or was starting.
+	namePending?: boolean;
 }
 
 type ClaudeProcess = { kind: 'exited' } | { kind: 'launching'; createdAt: number | null } | { kind: 'running'; inputReadyAt: number };
@@ -424,6 +426,8 @@ export class Hub {
 				return this.relaunch(this.session(request.sessionId), request);
 			case 'forkSession':
 				return this.fork(this.session(request.sessionId), request);
+			case 'renameSession':
+				return this.rename(this.session(request.sessionId), request.title);
 			case 'listCommands':
 				return { commands: await this.commands(resolve(request.projectDir)) };
 			case 'listOtherSessions':
@@ -446,12 +450,7 @@ export class Hub {
 		request: Extract<ClientRequest, { method: 'startSession' }>,
 	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
-		const options = [
-			...claudeOptions(request),
-			...(request.title ? ['--name', request.title] : []),
-			...(request.prompt ? ['--', request.prompt] : []),
-		];
-		return this.withMemoryWarning(await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], options));
+		return this.withMemoryWarning(await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], claudeOptions(request), { prompt: request.prompt }));
 	}
 
 	// Claude Code copies the conversation into the fork's own transcript under the ID --session-id names, so the two sessions go on from the same point.
@@ -463,8 +462,30 @@ export class Hub {
 		const name = title ?? (original.title ? `${original.title} ⑂` : null);
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const identity = [`--resume=${from}`, '--fork-session', `--session-id=${claudeSessionId}`];
-		const options = [...reportedOptions(original), ...(name ? ['--name', name] : []), '--', prompt];
-		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, options, { inherited: { from, messages } }));
+		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, reportedOptions(original), { inherited: { from, messages }, prompt }));
+	}
+
+	private async rename(session: Session, title: string): Promise<{ session: SessionSummary }> {
+		session.title = title;
+		session.namePending = true;
+		this.save();
+		this.broadcast({ type: 'sessionUpdated', session: summary(session) });
+		await this.tellName(session);
+		return { session: summary(session) };
+	}
+
+	// Claude Code shows its own name for a session on claude.ai and in claude --resume. /rename sets it at once, in the middle of a turn too, but typed while Claude asks you something it would land in the question.
+	private async tellName(session: Session): Promise<void> {
+		const { claude, title } = session;
+		if (!session.namePending || title === null || claude.kind !== 'running' || waitsOnYou(session.model.state)) return;
+		session.namePending = false;
+		const untilInputReady = claude.inputReadyAt - Date.now();
+		if (untilInputReady > 0) await delay(untilInputReady);
+		try {
+			await this.options.tmux.submit(tmuxName(session.id), `/rename ${title}`);
+		} catch (error) {
+			this.options.log(`orfoni-hub: telling Claude Code the new name of session ${session.id} failed: ${(error as Error).message}`);
+		}
 	}
 
 	private async withMemoryWarning<T extends object>(started: T): Promise<T & { memoryWarning?: HubStatus['memory'] }> {
@@ -498,7 +519,7 @@ export class Hub {
 			if (!(await this.ended(pid, other.procStart))) {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
-			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
+			// The registry name becomes the orfoni title, which the start of Claude Code carries as its name.
 			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), { onFailure: 'keep' });
 			await this.refreshOthers();
 			return ported;
@@ -537,14 +558,14 @@ export class Hub {
 		claudeSessionId: ClaudeSessionId,
 		identity: string[],
 		options: string[],
-		{ onFailure = 'drop', inherited }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited'] } = {},
+		{ onFailure = 'drop', inherited, prompt }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited']; prompt?: string } = {},
 	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const now = Date.now();
 		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' }, inherited };
 		const needsTrust = await this.needsTrust(projectDir);
 		this.sessions.set(session.id, session);
 		try {
-			await this.launch(session, identity, options);
+			await this.launch(session, identity, options, prompt);
 		} catch (error) {
 			if (onFailure === 'drop') {
 				this.sessions.delete(session.id);
@@ -573,13 +594,16 @@ export class Hub {
 		return join(this.options.stateDir, 'settings', `${id}.json`);
 	}
 
-	private async launch(session: Session, identity: string[], rest: string[]): Promise<void> {
+	private async launch(session: Session, identity: string[], options: string[], prompt?: string): Promise<void> {
 		const settings = this.settingsPath(session.id);
 		const statusLine = await originalStatusLine(session.projectDir, this.options.home);
 		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
+		// Every start of Claude Code carries the title as its name, so a rename also reaches a Claude Code that was not running.
+		const name = session.title ? ['--name', session.title] : [];
+		session.namePending = false;
 		try {
-			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', settings, ...rest]);
+			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', settings, ...options, ...name, ...(prompt ? ['--', prompt] : [])]);
 		} catch (error) {
 			session.claude = { kind: 'exited' };
 			throw error;
@@ -675,7 +699,7 @@ export class Hub {
 		if (session.claude.kind === 'exited') {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
-			await this.launch(session, await this.resumeIdentity(session), ['--', text]);
+			await this.launch(session, await this.resumeIdentity(session), [], text);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
 		}
@@ -890,6 +914,7 @@ export class Hub {
 		if (readsTasks(event)) void this.readTasks(session);
 		if (event.type === 'session_start' && session.claude.kind === 'launching') session.claude = { kind: 'running', inputReadyAt: at + INPUT_READY_DELAY_MS };
 		if (endsSession(event)) session.claude = { kind: 'exited' };
+		void this.tellName(session);
 		for (const waiter of this.waiters) {
 			if (waiter.session === session && waiter.matches(event)) {
 				this.waiters.delete(waiter);
@@ -907,6 +932,7 @@ export class Hub {
 		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);
+		void this.tellName(session);
 	}
 
 	private broadcast(message: HubMessage): void {

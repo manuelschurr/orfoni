@@ -37,6 +37,7 @@ const results = {
 	hubStatus: HubStatus,
 	relaunchSession: z.object({ session: SessionSummary }),
 	forkSession: started,
+	renameSession: z.object({ session: SessionSummary }),
 	listCommands: z.object({ commands: z.array(SlashCommand) }),
 	listOtherSessions: z.array(OtherSession),
 	openOtherSession: z.object({ session: OtherSession, chat: z.array(ChatItem) }),

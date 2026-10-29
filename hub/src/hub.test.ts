@@ -1431,6 +1431,64 @@ describe('forkSession', () => {
 	});
 });
 
+describe('renameSession', () => {
+	test('gives the session a new title that every client sees and a restart keeps', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id } = await ready(client);
+		expect(await client.ok('renameSession', { sessionId: id, title: 'Radio choice' })).toEqual({ session: expect.objectContaining({ id, title: 'Radio choice' }) });
+		expect(other.session(id)).toMatchObject({ title: 'Radio choice' });
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes('Radio choice'));
+		hub.close();
+		const after = await startHub(fakeTmux([`orfoni-${id}`]));
+		expect(await after.ok('listSessions', {})).toEqual([expect.objectContaining({ id, title: 'Radio choice' })]);
+	});
+
+	// Claude Code shows its own name for a session on claude.ai and in claude --resume, and /rename sets it at once, in the middle of a turn too, but not while Claude asks you something.
+	test('tells Claude Code the name with /rename while it takes input, in the middle of a turn too', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await client.ok('renameSession', { sessionId: id, title: 'Radio choice' });
+		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, '/rename Radio choice']]);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'Which radio?' }));
+		await client.ok('renameSession', { sessionId: id, title: 'Radio pick' });
+		expect(fake.of('submit').at(-1)).toEqual([`orfoni-${id}`, '/rename Radio pick']);
+	});
+
+	test('while Claude asks you something, Claude Code learns the name once you have answered', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'write' }));
+		void hub.hook(id, body('PermissionRequest', claude));
+		const approval = client.chat(id).at(-1);
+		if (approval?.kind !== 'approval') throw new Error('expected an approval');
+		await client.ok('renameSession', { sessionId: id, title: 'Radio choice' });
+		expect(fake.of('submit')).toEqual([]);
+		await client.ok('decide', { requestId: approval.requestId, decision: { type: 'allow' } });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, '/rename Radio choice']]);
+	});
+
+	test('a session whose Claude Code is not running learns the name from --name when it starts again, as every start of Claude Code carries the title', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		fake.live.delete(`orfoni-${id}`);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(client.state(id)).toBe('offline');
+		await client.ok('renameSession', { sessionId: id, title: 'Radio choice' });
+		expect(fake.of('submit')).toEqual([]);
+		void client.request('send', { sessionId: id, text: 'go on' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(expect.arrayContaining(['--name', 'Radio choice', '--', 'go on']));
+		expect(fake.of('submit')).toEqual([]);
+	});
+
+	test('an unknown session is refused with not_found', async () => {
+		const client = await startHub();
+		expect(await client.request('renameSession', { sessionId: 'nope' as SessionId, title: 'x' })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+	});
+});
+
 describe('portSession', () => {
 	const NOTES = '94917ae8-57a9-4474-abc5-f812984ab86d' as ClaudeSessionId;
 	const recordOnly = { kill: (pid: number, signal: NodeJS.Signals) => void kills.push([pid, signal]) };
@@ -1455,7 +1513,7 @@ describe('portSession', () => {
 		const { session } = response.result as Started;
 		const settings = join(dir, 'settings', `${session.id}.json`);
 		expect(fake.of('newSession')).toEqual([
-			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--model', 'sonnet', '--effort', 'high', '--permission-mode', 'auto']],
+			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--model', 'sonnet', '--effort', 'high', '--permission-mode', 'auto', '--name', 'swarm-73']],
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({

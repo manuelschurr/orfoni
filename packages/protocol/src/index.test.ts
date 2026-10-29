@@ -36,6 +36,15 @@ describe('parseClientRequest', () => {
 		expectBadMessage('{"id":1,"method":"removeSession"}');
 	});
 
+	// Claude Code takes the name as typed text, where a line break would end it early.
+	test('renameSession takes a title of one line and at most 200 characters, trimmed', () => {
+		expect(parseClientRequest('{"id":5,"method":"renameSession","sessionId":"s","title":"  Radio choice  "}')).toEqual({ id: 5, method: 'renameSession', sessionId: 's', title: 'Radio choice' });
+		expect(parseClientRequest(`{"id":5,"method":"renameSession","sessionId":"s","title":"${'x'.repeat(200)}"}`)).toMatchObject({ title: 'x'.repeat(200) });
+		expectBadMessage('{"id":5,"method":"renameSession","sessionId":"s","title":"   "}');
+		expectBadMessage('{"id":5,"method":"renameSession","sessionId":"s","title":"two\\nlines"}');
+		expectBadMessage(`{"id":5,"method":"renameSession","sessionId":"s","title":"${'x'.repeat(201)}"}`);
+	});
+
 	test('rejects text that is not JSON', () => {
 		expectBadMessage('not json');
 	});

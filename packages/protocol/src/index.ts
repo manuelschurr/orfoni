@@ -147,6 +147,8 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional() }),
 	z.object({ id, method: z.literal('forkSession'), sessionId: SessionId, prompt: z.string().min(1), title: z.string().min(1).optional() }),
+	// Claude Code takes the name as typed text, where a line break would end it early.
+	z.object({ id, method: z.literal('renameSession'), sessionId: SessionId, title: z.string().trim().min(1).max(200).regex(/^[^\r\n]*$/) }),
 	z.object({ id, method: z.literal('listCommands'), projectDir: z.string().min(1) }),
 	z.object({ id, method: z.literal('listOtherSessions') }),
 	z.object({ id, method: z.literal('openOtherSession'), pid: z.number().int() }),
