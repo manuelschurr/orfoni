@@ -149,6 +149,18 @@ test('Enter sends a command typed in full, by its name or its alias, as typed', 
 	expect(transport.requests('send').at(-1)).toMatchObject({ text: '/poteto-mode' });
 });
 
+test('Enter sends a command typed in full as typed while a longer command is highlighted, as /new is while /new-project ranks first', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: 'a1' });
+	await typed('/');
+	transport.respond('listCommands', { commands: [...commands, command('new-project', 'Start a project from a template')] });
+	await screen.findByRole('listbox', { name: 'Commands' });
+	await typed('/new');
+	expect(screen.getAllByRole('option')[0]!.textContent).toContain('/new-project');
+	await fireEvent.keyDown(box(), { key: 'Enter' });
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/new' }]);
+});
+
 test('a command found by its alias is taken by its name', async () => {
 	await withCommands();
 	await typed('/poteto-m');
