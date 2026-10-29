@@ -78,6 +78,8 @@
 				case 'Tab':
 				case 'Enter':
 					if (event.shiftKey) break;
+					// A command typed in full, by name or alias, goes as typed, the way Claude Code runs it on the first Enter.
+					if (event.key === 'Enter' && [highlighted.name, ...highlighted.aliases].some((name) => text === `/${name}`)) break;
 					event.preventDefault();
 					take(highlighted);
 					return;

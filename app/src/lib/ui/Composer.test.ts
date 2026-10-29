@@ -137,6 +137,18 @@ test('Enter takes the highlighted command instead of sending, and the next Enter
 	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/clear ' }]);
 });
 
+// Claude Code runs a fully typed command on the first Enter, so the suggestion of the same command must not ask for a second one.
+test('Enter sends a command typed in full, by its name or its alias, as typed', async () => {
+	const { transport } = await withCommands();
+	await typed('/clear');
+	await fireEvent.keyDown(box(), { key: 'Enter' });
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/clear' }]);
+	transport.respond('send', {});
+	await typed('/poteto-mode');
+	await fireEvent.keyDown(box(), { key: 'Enter' });
+	expect(transport.requests('send').at(-1)).toMatchObject({ text: '/poteto-mode' });
+});
+
 test('a command found by its alias is taken by its name', async () => {
 	await withCommands();
 	await typed('/poteto-m');
