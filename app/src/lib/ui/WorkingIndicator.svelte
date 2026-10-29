@@ -1,8 +1,9 @@
 <script lang="ts">
-	import type { ChatItem } from '@orfoni/protocol';
+	import type { ChatItem, TaskItem } from '@orfoni/protocol';
 	import { elapsed } from './format';
+	import TaskList from './TaskList.svelte';
 
-	let { since, chat }: { since: number; chat: ChatItem[] } = $props();
+	let { since, chat, tasks = null }: { since: number; chat: ChatItem[]; tasks?: TaskItem[] | null } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -18,32 +19,54 @@
 	});
 </script>
 
-<!-- Only the activity is announced; a time that changes every second would interrupt a screen reader all the time. -->
 <div class="working">
 	<span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>
-	<span class="time" aria-hidden="true">{elapsed(now - since)}</span>
-	<span aria-hidden="true">·</span>
-	<span role="status">{activity}</span>
+	<div class="body">
+		<!-- Only the activity is announced; a time that changes every second would interrupt a screen reader all the time. -->
+		<p class="line">
+			<span class="time" aria-hidden="true">{elapsed(now - since)}</span>
+			<span aria-hidden="true">·</span>
+			<span role="status">{activity}</span>
+		</p>
+		{#if tasks?.length}<TaskList {tasks} />{/if}
+	</div>
 </div>
 
 <style>
 	.working {
 		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		align-items: flex-start;
+		gap: 0.65rem;
+		margin-top: 0.6rem;
 		padding: 0.2rem 0.1rem;
 		color: var(--muted);
 		font-size: 0.9375rem;
+	}
+
+	.body {
+		display: grid;
+		gap: 0.35rem;
+		min-width: 0;
+	}
+
+	.line {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 0.5rem;
+		margin: 0;
 	}
 
 	.time {
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* As tall as a line of text, so the dots stay level with the first line when the line wraps. */
 	.dots {
 		display: inline-flex;
+		flex: none;
+		align-items: center;
 		gap: 0.22rem;
-		margin-right: 0.15rem;
+		height: 1lh;
 	}
 
 	.dots span {

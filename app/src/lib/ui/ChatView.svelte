@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ChatItem } from '@orfoni/protocol';
+	import type { ChatItem, TaskItem } from '@orfoni/protocol';
 	import type { Snippet } from 'svelte';
 	import { itemKey, type HubClient } from '../hub-client.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
@@ -17,7 +17,8 @@
 		onretry,
 		banner,
 		working = null,
-	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null } = $props();
+		tasks = null,
+	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; tasks?: TaskItem[] | null } = $props();
 	let scroller: HTMLElement | undefined = $state();
 	let pinned = true;
 
@@ -28,6 +29,7 @@
 	$effect(() => {
 		void chat;
 		void working;
+		void tasks;
 		if (pinned && scroller) scroller.scrollTop = scroller.scrollHeight;
 	});
 </script>
@@ -73,7 +75,7 @@
 			{/each}
 		{/if}
 		<!-- While a turn runs, this says Claude is at work and for how long, so a long think does not look stuck. -->
-		{#if working !== null && chat !== undefined}<WorkingIndicator since={working} {chat} />{/if}
+		{#if working !== null && chat !== undefined}<WorkingIndicator since={working} {chat} {tasks} />{/if}
 	</div>
 </section>
 
