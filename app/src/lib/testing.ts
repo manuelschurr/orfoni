@@ -48,6 +48,13 @@ export async function connectedClient(sessions: SessionSummary[], others: OtherS
 	return { client, transport };
 }
 
+// The text assistive technology reads from an element, which leaves out what is hidden from it.
+export function spoken(element: Element): string {
+	const copy = element.cloneNode(true) as Element;
+	for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+	return copy.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+}
+
 // jsdom has no modal dialogs, and the dialogs open themselves with showModal.
 export function stubDialogs(): void {
 	HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
