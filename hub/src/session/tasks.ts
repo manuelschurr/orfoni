@@ -2,7 +2,6 @@ import { TaskItem } from '@orfoni/protocol';
 import { z } from 'zod';
 import type { HookEvent } from '../hooks/events.js';
 
-// Of Claude Code's TaskCreate and TaskUpdate inputs, orfoni reads what its task list shows.
 const CreateInput = z.object({ subject: z.string(), activeForm: z.string().optional() });
 const UpdateInput = z.object({
 	taskId: z.string(),
@@ -15,12 +14,11 @@ const Refused = z.object({ success: z.literal(false) });
 
 type Update = z.infer<typeof UpdateInput>;
 
-// A TaskCreate or TaskUpdate call between its PreToolUse and PostToolUse hooks.
-export type TaskCall = { toolUseId: string } & ({ tool: 'TaskCreate'; subject: string; activeForm: string | null } | { tool: 'TaskUpdate'; update: Update });
+export type PendingTaskCall = { toolUseId: string } & ({ tool: 'TaskCreate'; subject: string; activeForm: string | null } | { tool: 'TaskUpdate'; update: Update });
 
 export interface Tasks {
 	taskList: TaskItem[];
-	taskCalls: TaskCall[];
+	pendingTaskCalls: PendingTaskCall[];
 }
 
 export function unnamedTask(id: string): string {
@@ -31,7 +29,7 @@ export function taskProgress({ taskList }: Pick<Tasks, 'taskList'>): { done: num
 	return taskList.length === 0 ? null : { done: taskList.filter((task) => task.status === 'completed').length, total: taskList.length };
 }
 
-function taskCall(event: Extract<HookEvent, { type: 'tool_start' }>): TaskCall | null {
+function taskCall(event: Extract<HookEvent, { type: 'tool_start' }>): PendingTaskCall | null {
 	const { toolUseId, name, input } = event;
 	if (name === 'TaskCreate') {
 		const create = CreateInput.safeParse(input);
@@ -66,31 +64,31 @@ function update(list: TaskItem[], { taskId, subject, activeForm, status }: Updat
 	}));
 }
 
-// The TaskCreated hook carries the new task's ID and its TaskCreate input the activeForm, so the two meet by subject.
+// The TaskCreated hook names a task before the PostToolUse of its TaskCreate call does, and carries no tool use ID, so the call that gave the activeForm is found by subject.
 export function trackTasks(tasks: Tasks, event: HookEvent): Tasks {
 	switch (event.type) {
 		case 'tool_start': {
 			const started = taskCall(event);
-			return started ? { ...tasks, taskCalls: [...tasks.taskCalls, started] } : tasks;
+			return started ? { ...tasks, pendingTaskCalls: [...tasks.pendingTaskCalls, started] } : tasks;
 		}
 		case 'task_created': {
-			const index = tasks.taskCalls.findIndex((pending) => pending.tool === 'TaskCreate' && pending.subject === event.subject);
-			const create = tasks.taskCalls[index];
+			const index = tasks.pendingTaskCalls.findIndex((pending) => pending.tool === 'TaskCreate' && pending.subject === event.subject);
+			const create = tasks.pendingTaskCalls[index];
 			const activeForm = create?.tool === 'TaskCreate' ? create.activeForm : null;
 			return {
 				taskList: upsert(tasks.taskList, event.taskId, (task) => ({ id: event.taskId, subject: event.subject, status: task?.status ?? 'pending', activeForm: activeForm ?? task?.activeForm ?? null })),
-				taskCalls: index === -1 ? tasks.taskCalls : tasks.taskCalls.toSpliced(index, 1),
+				pendingTaskCalls: index === -1 ? tasks.pendingTaskCalls : tasks.pendingTaskCalls.toSpliced(index, 1),
 			};
 		}
 		case 'task_completed':
 			return { ...tasks, taskList: upsert(tasks.taskList, event.taskId, (task) => ({ id: event.taskId, subject: event.subject, status: 'completed', activeForm: task?.activeForm ?? null })) };
 		case 'tool_end':
 		case 'tool_failed': {
-			const finished = tasks.taskCalls.find((pending) => pending.toolUseId === event.toolUseId);
+			const finished = tasks.pendingTaskCalls.find((pending) => pending.toolUseId === event.toolUseId);
 			if (!finished) return tasks;
-			const taskCalls = tasks.taskCalls.filter((pending) => pending !== finished);
+			const pendingTaskCalls = tasks.pendingTaskCalls.filter((pending) => pending !== finished);
 			const accepted = event.type === 'tool_end' && finished.tool === 'TaskUpdate' && !Refused.safeParse(event.output).success;
-			return { taskCalls, taskList: accepted ? update(tasks.taskList, finished.update) : tasks.taskList };
+			return { pendingTaskCalls, taskList: accepted ? update(tasks.taskList, finished.update) : tasks.taskList };
 		}
 		default:
 			return tasks;

@@ -55,7 +55,7 @@ function signalGroup(group: number, signal: NodeJS.Signals | 0): boolean {
 	}
 }
 
-// A spike saw the SDK's Claude Code outlive abort(), so the listing waits until Claude Code and every process it started in its group have ended, and kills what is left after the grace period.
+// close() returns before Claude Code exits, and the SDK can signal only Claude Code itself, not the processes it started.
 export async function ended(group: number, graceMs: number): Promise<void> {
 	const killAt = Date.now() + graceMs;
 	while (signalGroup(group, 0) && Date.now() < killAt + KILL_WAIT_MS) {

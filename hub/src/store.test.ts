@@ -52,7 +52,7 @@ const milestone1 = {
 	],
 };
 
-// Written by the hub at commit 888c86e, which counted tasks by number without their subjects.
+// Written by the hub at commit 888c86e.
 const beforeTaskLists = {
 	version: 2,
 	sessions: [

@@ -70,7 +70,7 @@ export interface HubOptions {
 	systemRoot: string;
 	claudeSessionsDir: string;
 	kill(pid: number, signal: NodeJS.Signals): void;
-	// Lists the slash commands Claude Code takes in a folder, and has ended every process it started by the time it settles.
+	// Settles only once every process it started has ended.
 	listCommands(projectDir: string, signal: AbortSignal): Promise<ClaudeCommand[]>;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
@@ -118,7 +118,7 @@ const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
 });
 
-// Claude Code trusts a folder when the folder or one above it accepted the trust dialog.
+// Claude Code trusts a folder when the folder or one above it accepted the trust dialog, whatever it recorded for the folder itself.
 function trusts({ projects }: z.infer<typeof ClaudeConfig>, projectDir: string): boolean {
 	for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
 		if (projects?.[dir]?.hasTrustDialogAccepted === true) return true;
@@ -692,7 +692,6 @@ export class Hub {
 			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0) || a.path.localeCompare(b.path));
 	}
 
-	// One listing answers every request for its folder for 10 minutes, and one that failed is tried again on the next request.
 	private commands(projectDir: string): Promise<SlashCommand[]> {
 		const kept = this.commandLists.get(projectDir);
 		if (kept && Date.now() - kept.since < COMMANDS_KEPT_MS) return kept.commands;
@@ -762,7 +761,7 @@ export class Hub {
 		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'memory_read', memory, at: Date.now() });
 	}
 
-	// Claude Code shows what it is doing only on its screen, so the hub reads the screen of each working session a client views, one read at a time.
+	// Claude Code shows what it is doing only on its screen.
 	private async checkActivity(): Promise<void> {
 		if (this.checkingActivity) return;
 		this.checkingActivity = true;

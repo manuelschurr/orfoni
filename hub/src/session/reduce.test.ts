@@ -333,7 +333,7 @@ describe('reduce', () => {
 		expect(reduce(cleared, hook('prompt', { text: 'new' }, 4, second)).chatStartedAt).toBe(4);
 	});
 
-	// Claude Code 2.1.312 sends these for one TaskCreate call: the input carries the activeForm, the TaskCreated hook in between carries the ID.
+	// The hooks Claude Code 2.1.312 sends for one TaskCreate call.
 	function createTask(id: string, subject: string, activeForm?: string, agentId?: string): SessionInput[] {
 		const toolUseId = `create-${id}`;
 		const input = { subject, description: `${subject}, in detail`, ...(activeForm === undefined ? {} : { activeForm }) };

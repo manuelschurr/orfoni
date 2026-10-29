@@ -5,7 +5,7 @@ import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
-import { trackTasks, type TaskCall } from './tasks.js';
+import { trackTasks, type PendingTaskCall } from './tasks.js';
 
 export interface SessionModel {
 	state: SessionStateKind;
@@ -17,7 +17,7 @@ export interface SessionModel {
 	chatStartedAt: number | null;
 	summary: Summary | null;
 	taskList: TaskItem[];
-	taskCalls: TaskCall[];
+	pendingTaskCalls: PendingTaskCall[];
 	memory: PaneMemory | null;
 	statusLine: StatusLine | null;
 	activity: Activity | null;
@@ -46,7 +46,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], taskCalls: [], memory: null, statusLine: null, activity: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, activity: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -113,8 +113,8 @@ function closeRequest(model: SessionModel, requestId: RequestId, outcome: Reques
 }
 
 function withTasks(model: SessionModel, event: HookEvent): SessionModel {
-	const { taskList, taskCalls } = trackTasks(model, event);
-	return taskList === model.taskList && taskCalls === model.taskCalls ? model : { ...model, taskList, taskCalls };
+	const { taskList, pendingTaskCalls } = trackTasks(model, event);
+	return taskList === model.taskList && pendingTaskCalls === model.pendingTaskCalls ? model : { ...model, taskList, pendingTaskCalls };
 }
 
 // Claude Code shows the line only while it works, and the hub reads it only while a client views the session.
@@ -138,7 +138,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			switch (event.type) {
 				case 'session_start': {
 					const fresh = event.source === 'clear' || event.claudeSessionId !== model.claudeSessionId;
-					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, taskList: [], taskCalls: [] } : model;
+					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, taskList: [], pendingTaskCalls: [] } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt':

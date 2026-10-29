@@ -1704,7 +1704,6 @@ describe('listCommands', () => {
 		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>', aliases: [] },
 	];
 
-	// Claude Code trusts every folder below one that accepted its trust dialog.
 	function trustedFolder(name = 'project'): string {
 		const folder = join(dir, 'trusted', name);
 		mkdirSync(folder, { recursive: true });

@@ -26,7 +26,7 @@ export type StoredSession = z.infer<typeof StoredSession>;
 const HubState = z.object({ version: z.literal(3), sessions: z.array(StoredSession), summaries: SummaryBudget.nullable() });
 export type HubState = z.infer<typeof HubState>;
 
-// Version 2 counted each task by its number and whether it was done, without its subject.
+// Version 2 kept no task subjects, so its tasks come back named by their number.
 const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSessionV2), summaries: SummaryBudget.nullable() }).transform(
 	({ sessions, summaries }): HubState => ({
 		version: 3,

@@ -33,7 +33,6 @@ const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
 
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
 
-// /model and /effort typed into Claude Code save these as the defaults of every new session, so no check may change them.
 function defaults(): Record<string, unknown> {
 	const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
 	return { model, effortLevel, modelSettings };

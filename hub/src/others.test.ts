@@ -207,11 +207,11 @@ describe('Registry', () => {
 			await once(child, 'spawn');
 			const pid = child.pid as number;
 			const startTime = readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[21] as string;
+			const notThisProcess = 0;
 			writeEntry(pid, { procStart: startTime });
-			// This test process started sleep as a session outside orfoni would be started, so the hub is another process here.
-			expect(await pids(registry('/', 0))).toEqual([pid]);
+			expect(await pids(registry('/', notThisProcess))).toEqual([pid]);
 			writeEntry(pid, { procStart: String(Number(startTime) + 1) });
-			expect(await pids(registry('/', 0))).toEqual([]);
+			expect(await pids(registry('/', notThisProcess))).toEqual([]);
 		} finally {
 			child.kill();
 		}
