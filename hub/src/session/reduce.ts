@@ -86,7 +86,8 @@ function readMemory(model: SessionModel, memory: PaneMemory | null, at: number):
 
 function readStatusLine(model: SessionModel, statusLine: StatusLine): SessionModel {
 	const kept = model.statusLine;
-	const same = kept !== null && kept.model.id === statusLine.model.id && kept.model.name === statusLine.model.name && kept.effort === statusLine.effort;
+	// The plan usage is the account's, which the hub keeps apart, so it alone changes no session.
+	const same = kept !== null && kept.model.id === statusLine.model.id && kept.model.name === statusLine.model.name && kept.effort === statusLine.effort && kept.context === statusLine.context;
 	return same ? model : { ...model, statusLine, ranOn: statusLine };
 }
 

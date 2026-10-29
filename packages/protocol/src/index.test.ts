@@ -84,7 +84,7 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
@@ -98,6 +98,7 @@ describe('milestone 3 fields', () => {
 			taskList: null,
 			activity: null,
 			permissionMode: 'plan',
+			context: 42,
 		};
 		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
 	});
@@ -108,7 +109,12 @@ describe('milestone 3 fields', () => {
 
 	test('a hub status carries the VPS memory, the summary budget, and why summaries are not working', () => {
 		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42, problem: 'the last summary failed, timeout' } };
-		expect(HubStatus.parse(status)).toEqual(status);
+		expect(HubStatus.parse(status)).toEqual({ ...status, plan: null });
+	});
+
+	test('a hub status carries the plan windows, or null for one Claude Code did not report', () => {
+		const plan = { fiveHour: { usedPercent: 89, resetsAt: 1793124600000 }, sevenDay: null };
+		expect(HubStatus.parse({ memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: false, spentTodayUsd: 0 }, plan })).toMatchObject({ plan });
 	});
 
 	test('a hub status from a hub without problem reports none', () => {

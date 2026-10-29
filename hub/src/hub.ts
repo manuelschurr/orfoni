@@ -188,7 +188,7 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null };
 }
 
 const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode'] as const satisfies (keyof SessionModel)[];
@@ -274,6 +274,7 @@ export class Hub {
 	private readonly summarizer: Summarizer;
 	private readonly reported = new Set<string>();
 	private readonly commandLists = new Map<string, { since: number; commands: Promise<SlashCommand[]> }>();
+	private plan: HubStatus['plan'] = null;
 
 	private constructor(
 		private readonly options: HubOptions,
@@ -366,6 +367,7 @@ export class Hub {
 			this.report(`orfoni-hub: ignored the status line of session ${session.id}: ${error.message}`);
 			return;
 		}
+		if (statusLine.plan) this.plan = statusLine.plan;
 		this.apply(session, { kind: 'status_line', statusLine, at: Date.now() });
 	}
 
@@ -427,7 +429,7 @@ export class Hub {
 				await this.remove(this.session(request.sessionId));
 				return {};
 			case 'hubStatus':
-				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
+				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.plan };
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
 			case 'forkSession':

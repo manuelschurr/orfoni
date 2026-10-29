@@ -40,12 +40,19 @@ export const SessionSummary = z.object({
 	activity: z.object({ text: z.string(), details: z.array(z.string()) }).nullable().default(null),
 	// The mode Claude Code last reported in a hook, and null until it has.
 	permissionMode: PermissionMode.nullable().default(null),
+	// How full the conversation fills the model's context window, in percent, which Claude Code compacts near the end. Null until Claude Code reports it after the first reply.
+	context: z.number().nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
+
+// One of the account's plan windows: how much of it is used, in percent, and when it starts afresh, in milliseconds since the epoch.
+const PlanWindow = z.object({ usedPercent: z.number(), resetsAt: z.number() });
 
 export const HubStatus = z.object({
 	memory: z.object({ availableBytes: z.number(), totalBytes: z.number() }),
 	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number(), problem: z.string().nullable().default(null) }),
+	// The account's plan usage as the latest status line of any session reported it, and null until one has.
+	plan: z.object({ fiveHour: PlanWindow.nullable(), sevenDay: PlanWindow.nullable() }).nullable().default(null),
 });
 export type HubStatus = z.infer<typeof HubStatus>;
 

@@ -33,6 +33,7 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 		taskList: null,
 		activity: null,
 		permissionMode: null,
+		context: null,
 		...changes,
 	};
 }

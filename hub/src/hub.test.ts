@@ -309,7 +309,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan' },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1032,13 +1032,13 @@ describe('memory', () => {
 	test('hubStatus reports the VPS memory and whether summaries are on with what they cost today', async () => {
 		writeMeminfo(3 * GB, 12 * GB);
 		const client = await startHub();
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0, problem: 'no key in tests' } });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0, problem: 'no key in tests' }, plan: null });
 		apiKey = { key: 'sk-test' };
 		const { id, claude } = await ready(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
 		await untilRealTime(() => client.session(id)?.summary !== null);
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null } });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null }, plan: null });
 	});
 
 	test('startSession warns when less than 1.5 GB of memory is available', async () => {
@@ -1087,6 +1087,40 @@ describe('model and effort', () => {
 		const before = client.messages.length;
 		hub.status(id, statusLine());
 		hub.status(id, statusLine({ cost: { total_cost_usd: 0.42 }, exceeds_200k_tokens: true }));
+		expect(client.messages.length).toBe(before);
+	});
+
+	test('every client sees how full the context window of a session is, and each change of it', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id } = await ready(client);
+		hub.status(id, statusLine());
+		expect(other.session(id)).toMatchObject({ context: null });
+		hub.status(id, statusLine({ context_window: { used_percentage: 42 } }));
+		expect(other.session(id)).toMatchObject({ context: 42 });
+		hub.status(id, statusLine({ context_window: { used_percentage: 87.5 } }));
+		expect(other.session(id)).toMatchObject({ context: 87.5 });
+	});
+
+	// The plan windows belong to the account, so they come with the hub status rather than with a session.
+	test('the hub status carries the plan usage the latest status line reported, with when each window starts afresh', async () => {
+		const client = await startHub();
+		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: null });
+		const { id } = await ready(client);
+		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 89, resets_at: 1793124600 }, seven_day: { used_percentage: 47, resets_at: 1793271600 } } }));
+		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 89, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 47, resetsAt: 1793271600_000 } } });
+		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 91, resets_at: 1793124600 } } }));
+		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 91 }, sevenDay: null } });
+		hub.status(id, statusLine({ rate_limits: undefined }));
+		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 91 } } });
+	});
+
+	test('the plan usage changes no session, so a status line that only moves it tells no client', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		hub.status(id, statusLine());
+		const before = client.messages.length;
+		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 95, resets_at: 1793124600 } } }));
 		expect(client.messages.length).toBe(before);
 	});
 
@@ -1558,7 +1592,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto' },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
@@ -1761,8 +1795,8 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null },
 		]);
 	});
 
