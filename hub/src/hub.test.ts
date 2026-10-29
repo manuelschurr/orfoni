@@ -2010,9 +2010,10 @@ describe('listCommands', () => {
 		const [first, second] = [trustedFolder('first'), trustedFolder('second')];
 		const answers = [first, second].map((projectDir) => client.ok('listCommands', { projectDir }));
 		await untilRealTime(() => listings.length === 2);
-		expect(listings.map(({ projectDir }) => projectDir)).toEqual([first, second]);
-		listings[0]!.answer(listed);
-		listings[1]!.answer([]);
+		// The folders' trust checks take their own time, so either listing can start first.
+		expect(listings.map(({ projectDir }) => projectDir).sort()).toEqual([first, second].sort());
+		listings.find(({ projectDir }) => projectDir === first)!.answer(listed);
+		listings.find(({ projectDir }) => projectDir === second)!.answer([]);
 		expect(await Promise.all(answers)).toEqual([{ commands }, { commands: [] }]);
 	});
 
