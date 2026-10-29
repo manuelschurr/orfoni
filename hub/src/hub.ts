@@ -38,7 +38,7 @@ import { parseStatusLine, StatusLineParseError, type StatusLine } from './status
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { readTaskFiles } from './task-files.js';
-import { sessionTarget, type Tmux } from './tmux.js';
+import { AttachError, sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
@@ -742,7 +742,9 @@ export class Hub {
 		this.assertTakesInput(session);
 		const typing = this.options.tmux.submit(tmuxName(session.id), text, paths);
 		const delivered = delivery(DELIVERY_TIMEOUT_MS, typing);
-		await typing;
+		await typing.catch((error: unknown) => {
+			throw error instanceof AttachError ? new HubError('not_delivered', error.message) : error;
+		});
 		if (!(await delivered)) throw new HubError('not_delivered', `Claude Code did not confirm the message within ${DELIVERY_TIMEOUT_MS / 1000} s`);
 	}
 

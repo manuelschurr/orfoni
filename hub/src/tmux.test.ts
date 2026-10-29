@@ -1,18 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTmux, runTmux } from './tmux.js';
+import { AttachError, createTmux, runTmux } from './tmux.js';
 
-function recorder(output = '') {
+function recorder(output: string | ((args: string[]) => string) = '') {
 	const calls: { args: string[]; stdin?: string }[] = [];
 	const run = async (args: string[], stdin?: string) => {
 		calls.push(stdin === undefined ? { args } : { args, stdin });
-		return output;
+		return typeof output === 'string' ? output : output(args);
 	};
 	return { calls, tmux: createTmux(run) };
+}
+
+// Claude Code's screen with the input box holding `input`, under a message that showed images of its own.
+const screen = (input: string) => ['❯ [Image #1] [Image #2] What is this?', '  ⎿  [Image #1]', '● A chart.', '─'.repeat(40), `❯ ${input}`, '─'.repeat(40), '  Haiku 5.5 | effort: medium'].join('\n');
+
+// Each capture of the pane shows the next screen, and the last one from then on.
+function screens(...shown: string[]): (args: string[]) => string {
+	let index = 0;
+	return (args) => (args[0] === 'capture-pane' ? shown[Math.min(index++, shown.length - 1)]! : '');
 }
 
 function inputBox(calls: { args: string[]; stdin?: string }[], pane: string) {
@@ -27,7 +36,8 @@ function inputBox(calls: { args: string[]; stdin?: string }[], pane: string) {
 			pastes.push(buffers.get(args[4]!)!);
 			text += buffers.get(args[4]!)!;
 			buffers.delete(args[4]!);
-		} else if (args[0] === 'send-keys' && args[3] === 'C-j') text += '\n';
+		} else if (args[0] === 'capture-pane') continue;
+		else if (args[0] === 'send-keys' && args[3] === 'C-j') text += '\n';
 		else if (args[0] === 'send-keys' && args[3] === 'Enter') submits++;
 		else throw new Error(`unexpected tmux call ${args.join(' ')}`);
 		if (args[0] === 'send-keys') expect(args.slice(0, 3)).toEqual(['send-keys', '-t', pane]);
@@ -68,19 +78,41 @@ describe('createTmux', () => {
 		for (const paste of box.pastes) expect(Buffer.from(paste, 'utf8').toString('utf8')).toBe(paste);
 	});
 
-	// Claude Code attaches an image whose path arrives as a paste of its own, and shows it as [Image #N] followed by a space only when more follows.
-	it('pastes each image path on its own before the text, and the text after a space', async () => {
-		const { calls, tmux } = recorder();
+	// Claude Code attaches an image whose path arrives as a paste of its own, which takes it from milliseconds to seconds, and shows it as [Image #N] followed by a space only when more follows.
+	it('pastes each image path on its own, waits until the input box shows them attached, then pastes the text after a space', async () => {
+		const { calls, tmux } = recorder(screens(screen(''), screen(''), screen('[Image #3]'), screen('[Image #3] [Image #4]')));
 		await tmux.submit('orfoni-x', 'What changed?\nLook closely.', ['/state/uploads/a.png', '/state/uploads/b.jpg']);
 		const box = inputBox(calls, '=orfoni-x:');
 		expect(box.pastes).toEqual(['/state/uploads/a.png', '/state/uploads/b.jpg', ' What changed?', 'Look closely.']);
 		expect(box.submits).toBe(1);
+		const captures = calls.flatMap((call, index) => (call.args[0] === 'capture-pane' ? [index] : []));
+		expect(captures).toHaveLength(4);
+		expect(captures.at(-1)).toBeLessThan(calls.findIndex((call) => call.stdin === ' What changed?'));
 	});
 
-	it('sends images without text as their pastes alone', async () => {
-		const { calls, tmux } = recorder();
+	it('counts only the images that arrive after the paste, not one left in the box before', async () => {
+		const { calls, tmux } = recorder(screens(screen('[Image #3]'), screen('[Image #3]'), screen('[Image #3] [Image #4]')));
 		await tmux.submit('orfoni-x', '', ['/state/uploads/a.png']);
 		expect(inputBox(calls, '=orfoni-x:').pastes).toEqual(['/state/uploads/a.png']);
+		expect(calls.filter((call) => call.args[0] === 'capture-pane')).toHaveLength(3);
+	});
+
+	it('gives up after 30 s without typing the text or pressing Enter when Claude Code never shows the image attached', async () => {
+		vi.useFakeTimers();
+		try {
+			const { calls, tmux } = recorder(screens(screen('')));
+			const outcome = tmux.submit('orfoni-x', 'hi', ['/state/uploads/a.png']).then(
+				() => null,
+				(error: unknown) => error,
+			);
+			await vi.advanceTimersByTimeAsync(30_000);
+			const error = await outcome;
+			expect(error).toBeInstanceOf(AttachError);
+			expect((error as Error).message).toBe('Claude Code did not attach the images within 30 s');
+			expect(inputBox(calls, '=orfoni-x:')).toMatchObject({ pastes: ['/state/uploads/a.png'], submits: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('types a space after a final backslash, because Enter after a backslash makes a newline instead of submitting', async () => {

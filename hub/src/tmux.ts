@@ -29,6 +29,25 @@ function paneTarget(name: string): string {
 
 const PASTE_LIMIT = 400;
 
+export class AttachError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'AttachError';
+	}
+}
+
+const ATTACH_TIMEOUT_MS = 30_000;
+const ATTACH_POLL_MS = 50;
+
+// The input box is the last line that starts with Claude Code's prompt, with the lines that continue it down to the rule under the box.
+function attachedImages(screen: string): number {
+	const lines = screen.split('\n');
+	const start = lines.findLastIndex((line) => line.startsWith('❯'));
+	if (start === -1) return 0;
+	const end = lines.findIndex((line, index) => index > start && line.startsWith('─'));
+	return lines.slice(start, end === -1 ? undefined : end).join('\n').match(/\[Image #\d+\]/g)?.length ?? 0;
+}
+
 function pieces(line: string): string[] {
 	const points = [...line];
 	const result: string[] = [];
@@ -74,14 +93,23 @@ export function createTmux(run: Run): Tmux {
 				});
 		},
 		// Claude Code collapses a paste of more than 3 lines or 800 characters into [Pasted text #N] and tells Claude its content may not come from the user, so each line goes in as small newline-free pastes, with Ctrl+J between lines. Enter right after a backslash inserts a newline instead of submitting, and Claude Code trims the space added after one.
-		// An image path pasted on its own becomes an attached [Image #N], which leaves no space before the text that follows.
+		// An image path pasted on its own becomes an attached [Image #N], which leaves no space before the text that follows. Claude Code reads and shrinks the image first, from milliseconds to seconds, and an Enter pressed before that sends the message without it.
 		async submit(session, text, images = []) {
 			const paste = async (piece: string) => {
 				const buffer = `orfoni-${randomUUID()}`;
 				await run(['load-buffer', '-b', buffer, '-'], piece);
 				await run(['paste-buffer', '-p', '-d', '-b', buffer, '-t', paneTarget(session)]);
 			};
-			for (const image of images) await paste(image);
+			if (images.length > 0) {
+				const attached = async () => attachedImages(await run(['capture-pane', '-p', '-t', paneTarget(session)]));
+				const expected = (await attached()) + images.length;
+				for (const image of images) await paste(image);
+				const deadline = Date.now() + ATTACH_TIMEOUT_MS;
+				while ((await attached()) < expected) {
+					if (Date.now() >= deadline) throw new AttachError(`Claude Code did not attach the images within ${ATTACH_TIMEOUT_MS / 1000} s`);
+					await new Promise((resolve) => setTimeout(resolve, ATTACH_POLL_MS));
+				}
+			}
 			const typed = images.length > 0 && text !== '' ? ` ${text}` : text;
 			const lines = (typed.endsWith('\\') ? `${typed} ` : typed).split('\n');
 			for (const [index, line] of lines.entries()) {

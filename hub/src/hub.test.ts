@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
 import type { ApiKey, SummaryClient } from './summaries.js';
-import type { Tmux } from './tmux.js';
+import { AttachError, type Tmux } from './tmux.js';
 
 const SOCKET = '/run/user/0/orfoni/hooks.sock';
 const PROJECT = '/work/proj';
@@ -16,6 +16,7 @@ const T0 = Date.parse('2026-10-26T11:00:00.000Z');
 
 function fakeTmux(running: string[] = [], typingMs = 0) {
 	const calls: { method: keyof Tmux; args: unknown[] }[] = [];
+	const typing: { error?: Error } = {};
 	const live = new Set(running);
 	const screens = new Map<string, string | (() => Promise<string>)>();
 	const tmux: Tmux = {
@@ -33,6 +34,7 @@ function fakeTmux(running: string[] = [], typingMs = 0) {
 		async submit(target, text, images = []) {
 			calls.push({ method: 'submit', args: images.length > 0 ? [target, text, images] : [target, text] });
 			if (typingMs > 0) await new Promise((resolve) => setTimeout(resolve, typingMs));
+			if (typing.error) throw typing.error;
 		},
 		async sendKeys(target, ...keys) {
 			calls.push({ method: 'sendKeys', args: [target, ...keys] });
@@ -43,7 +45,7 @@ function fakeTmux(running: string[] = [], typingMs = 0) {
 			return typeof screen === 'string' ? screen : screen();
 		},
 	};
-	return { tmux, live, screens, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
+	return { tmux, live, screens, typing, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
 }
 
 type Method = ClientRequest['method'];
@@ -509,6 +511,14 @@ describe('send', () => {
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'and this?' }));
 		await vi.advanceTimersByTimeAsync(5000);
 		expect(await lost).toMatchObject({ ok: false, error: { code: 'not_delivered' } });
+	});
+
+	test('a message whose images Claude Code did not attach is not delivered, with the reason', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		fake.typing.error = new AttachError('Claude Code did not attach the images within 30 s');
+		const sent = await client.request('send', { sessionId: id, text: 'hi', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }] });
+		expect(sent).toMatchObject({ ok: false, error: { code: 'not_delivered', message: 'Claude Code did not attach the images within 30 s' } });
 	});
 
 	test('uploads older than a day are removed when the next images arrive', async () => {
