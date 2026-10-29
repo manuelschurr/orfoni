@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, Effort, OtherSession, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
+import type { ChatItem, Effort, HubStatus, OtherSession, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -32,6 +33,28 @@ const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.sta
 const TRUSTED_DIR = offRemoteControl('/var/tmp/claude-0/orfoni-spike-tui');
 
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
+
+// A square of one colour, as a base64 PNG, which Claude can name.
+function square([red, green, blue]: [number, number, number]): string {
+	const chunk = (type: string, data: Buffer) => {
+		const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+		const length = Buffer.alloc(4);
+		length.writeUInt32BE(data.length);
+		const check = Buffer.alloc(4);
+		check.writeUInt32BE(crc32(body));
+		return Buffer.concat([length, body, check]);
+	};
+	const header = Buffer.alloc(13);
+	header.writeUInt32BE(64, 0);
+	header.writeUInt32BE(64, 4);
+	header.set([8, 2, 0, 0, 0], 8);
+	const rows = Buffer.concat(Array.from({ length: 64 }, () => Buffer.from([0, ...Array.from({ length: 64 }, () => [red, green, blue]).flat()])));
+	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
+}
+
+function transcriptOf(dir: string, claudeSessionId: string | null): string {
+	return readFileSync(join(homedir(), '.claude/projects', dir.replace(/[^a-zA-Z0-9]/g, '-'), `${claudeSessionId}.jsonl`), 'utf8');
+}
 
 function defaults(): Record<string, unknown> {
 	const { model, effortLevel, modelSettings, fastMode } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
@@ -315,6 +338,51 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 			return undefined;
 		};
 		await until(() => registered() === 'rename check', 15_000);
+	});
+
+	test('a session reports the permission mode it runs in, and switching it restarts that session in the new mode with the user settings unchanged', async () => {
+		const before = defaults();
+		const { id, dir } = await start({ prompt: 'Reply with exactly: ok', dir: TRUSTED_DIR });
+		const reported = await client.waitForSession(id, (s) => s.state === 'answered' && s.permissionMode === 'default', undefined, 60_000);
+		const since = client.mark();
+		await client.request('relaunchSession', { sessionId: id, permissionMode: 'plan' });
+		const relaunched = await client.waitForSession(id, (s) => s.permissionMode === 'plan' && s.state === 'idle', since, 60_000);
+		expect(relaunched.claudeSessionId).toBe(reported.claudeSessionId);
+		await client.request('send', { sessionId: id, text: 'Reply with exactly: planned' });
+		await client.waitForChat(id, replied('planned'), since);
+		const prompts = transcriptOf(dir, reported.claudeSessionId)
+			.split('\n')
+			.filter((line) => line.includes('"promptId"') && line.includes('"type":"user"'));
+		expect(prompts.at(-1)).toContain('"permissionMode":"plan"');
+		expect(defaults()).toEqual(before);
+	});
+
+	test('a session reports how full its context is once Claude has answered, and the hub the plan windows Claude Code shows', async () => {
+		const { id } = await start({ prompt: 'Reply with exactly: ok', dir: TRUSTED_DIR });
+		const reported = await client.waitForSession(id, (s) => s.state === 'answered' && s.context !== null, undefined, 60_000);
+		expect(reported.context).toBeGreaterThan(0);
+		expect(reported.context).toBeLessThan(100);
+		const status = await eventually(
+			async () => (await client.request('hubStatus', {})) as HubStatus,
+			(current) => current.plan?.fiveHour != null,
+		);
+		expect(status.plan?.fiveHour?.usedPercent).toBeGreaterThanOrEqual(0);
+		expect(status.plan?.fiveHour?.resetsAt).toBeGreaterThan(Date.now());
+	});
+
+	test('images sent with a message reach Claude as images, in a running session and in one that starts again for them', async () => {
+		const { id } = await start({ prompt: 'Reply with exactly: ok', dir: TRUSTED_DIR });
+		await client.waitForSession(id, (s) => s.state === 'answered');
+		const since = client.mark();
+		await client.request('send', { sessionId: id, text: 'What colour is this image? Reply with one word.', images: [{ type: 'image/png', data: square([0, 200, 0]) }] });
+		await client.waitForChat(id, (item) => item.kind === 'user' && /^\[Image #\d+\] What colour is this image\? Reply with one word\.$/.test(item.text), since);
+		await client.waitForChat(id, (item) => item.kind === 'assistant' && /green/i.test(item.text), since);
+
+		await client.request('stopSession', { sessionId: id });
+		await client.waitForSession(id, (s) => s.state === 'offline');
+		const resumed = client.mark();
+		await client.request('send', { sessionId: id, text: 'And this one? Reply with one word.', images: [{ type: 'image/png', data: square([20, 60, 230]) }] });
+		await client.waitForChat(id, (item) => item.kind === 'assistant' && /blue/i.test(item.text), resumed);
 	});
 
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {

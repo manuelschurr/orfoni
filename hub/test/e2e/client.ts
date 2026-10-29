@@ -1,10 +1,12 @@
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { parseHubMessage, type ChatItem, type ClientRequest, type HubMessage, type SessionId, type SessionSummary } from '@orfoni/protocol';
+import { ClientRequest, parseHubMessage, type ChatItem, type HubMessage, type SessionId, type SessionSummary } from '@orfoni/protocol';
+import type { z } from 'zod';
 
 type Method = ClientRequest['method'];
-type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }>, 'id' | 'method'>;
+// The hub fills in the defaults when it parses a request, so the check sends what a client may leave out.
+type Params<M extends Method> = Omit<Extract<z.input<typeof ClientRequest>, { method: M }>, 'id' | 'method'>;
 
 interface Waiter {
 	predicate: (message: HubMessage) => boolean;

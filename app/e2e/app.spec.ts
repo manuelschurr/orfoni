@@ -449,3 +449,54 @@ test('typing /cl suggests /clear from the commands of the folder, and Tab comple
 	await box.fill('');
 	expect(userDefaults()).toEqual(before);
 });
+
+test('switch the permission mode from the header and see the session restart in it, with the user settings unchanged', async ({ page }) => {
+	const before = userDefaults();
+	const session = await startReady({ title: 'mode check', prompt: 'Reply with exactly: ok' });
+	await openSession(page, session);
+	const main = page.getByRole('main');
+	await expect(claude(page).last()).toContainText(/ok/i, { timeout: REPLY_MS });
+	const mode = main.getByRole('combobox', { name: 'Permissions' });
+	await expect(mode).toHaveValue('default', { timeout: 60_000 });
+	await mode.selectOption('plan');
+	await expect(mode).toHaveValue('plan', { timeout: 60_000 });
+	await expect(mode.locator('option:checked')).toHaveText('Plan');
+	await expect(main.getByRole('alert')).toHaveCount(0);
+	await hub.waitForSession(session.id, (s) => s.permissionMode === 'plan' && s.state === 'idle', undefined, 60_000);
+	expect(userDefaults()).toEqual(before);
+});
+
+test('the header shows how full the context is once Claude has answered, and the status bar shows the plan windows', async ({ page }) => {
+	const session = await startReady({ title: 'context check', prompt: 'Reply with exactly: ok' });
+	await openSession(page, session);
+	await expect(claude(page).last()).toContainText(/ok/i, { timeout: REPLY_MS });
+	await expect(page.getByRole('main').getByRole('meter', { name: 'Context' })).toHaveAttribute('aria-valuetext', /^\d+% of the context window used$/, { timeout: 60_000 });
+	// The status bar asks the hub every 30 s, and at once when the page loads.
+	await page.reload();
+	await expect(page.getByText(/^5-hour limit \d+% used, resets /)).toBeVisible({ timeout: 60_000 });
+});
+
+test('an image pasted into the message box goes to Claude with the message', async ({ page }) => {
+	const session = await startReady({ title: 'image check' });
+	await openSession(page, session);
+	const box = page.getByRole('textbox', { name: 'Message' });
+	// A screenshot reaches the page as a PNG file on the clipboard.
+	await box.evaluate(async (element) => {
+		const canvas = document.createElement('canvas');
+		canvas.width = 64;
+		canvas.height = 64;
+		const context = canvas.getContext('2d')!;
+		context.fillStyle = 'rgb(0, 200, 0)';
+		context.fillRect(0, 0, 64, 64);
+		const blob = await new Promise<Blob>((resolve) => canvas.toBlob((made) => resolve(made!), 'image/png'));
+		const clipboard = new DataTransfer();
+		clipboard.items.add(new File([blob], 'screenshot.png', { type: 'image/png' }));
+		element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }));
+	});
+	await expect(page.getByRole('img', { name: 'screenshot.png' })).toBeVisible();
+	await box.fill('What colour is this image? Reply with one word.');
+	await box.press('Enter');
+	await expect(you(page).last()).toContainText(/\[Image #\d+\] What colour is this image\?/, { timeout: 60_000 });
+	await expect(claude(page).last()).toContainText(/green/i, { timeout: REPLY_MS });
+	await expect(page.getByRole('img', { name: 'screenshot.png' })).toHaveCount(0);
+});
