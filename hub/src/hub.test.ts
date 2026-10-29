@@ -324,6 +324,15 @@ describe('startSession', () => {
 		expect(readFileSync(join(dir, 'claude.json'), 'utf8')).toBe(config);
 	});
 
+	// Claude Code records a folder below a trusted one with hasTrustDialogAccepted false once a session ran there, and shows no dialog.
+	test('needsTrust is false in a folder below one Claude Code trusts, whatever Claude Code recorded for the folder itself', async () => {
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: true }, '/work/proj/sub': { hasTrustDialogAccepted: false } } }));
+		const client = await startHub();
+		expect((await start(client, { projectDir: '/work/proj/sub' })).started.needsTrust).toBe(false);
+		expect((await start(client, { projectDir: '/work/proj/' })).started.needsTrust).toBe(false);
+		expect((await start(client, { projectDir: '/workshop' })).started.needsTrust).toBe(true);
+	});
+
 	test('every connected client learns about the new session', async () => {
 		const client = await startHub();
 		const other = new TestClient(hub);

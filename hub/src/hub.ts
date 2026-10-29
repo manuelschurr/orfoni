@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
@@ -110,6 +110,14 @@ type PermissionRequest = Extract<HookEvent, { type: 'permission_request' }>;
 const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
 });
+
+// Claude Code trusts a folder when the folder or one above it accepted the trust dialog.
+function trusts({ projects }: z.infer<typeof ClaudeConfig>, projectDir: string): boolean {
+	for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
+		if (projects?.[dir]?.hasTrustDialogAccepted === true) return true;
+		if (dirname(dir) === dir) return false;
+	}
+}
 
 function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
@@ -472,7 +480,7 @@ export class Hub {
 	private async needsTrust(projectDir: string): Promise<boolean> {
 		try {
 			const config = ClaudeConfig.safeParse(JSON.parse(await readFile(this.options.claudeConfigPath, 'utf8')));
-			return !(config.success && config.data.projects?.[projectDir]?.hasTrustDialogAccepted === true);
+			return !(config.success && trusts(config.data, projectDir));
 		} catch {
 			return true;
 		}
