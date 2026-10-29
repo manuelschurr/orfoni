@@ -216,7 +216,7 @@
 				{/each}
 			</ul>
 		{/if}
-		<label class="attach" title="Attach images">
+		<label class="attach" title="Attach images, or paste or drop them into the message">
 			<input type="file" accept={ImageType.options.join(',')} multiple aria-label="Attach images" onchange={picked} />
 			<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5l-5.3 5.3a3.2 3.2 0 01-4.5-4.5l6-6a2.1 2.1 0 013 3l-6 6a1 1 0 01-1.5-1.5l5.3-5.3" /></svg>
 		</label>
@@ -238,7 +238,7 @@
 		<button class="send btn btn-primary" type="submit" disabled={sending || (text.trim() === '' && images.length === 0)}>{sending ? 'Sending' : 'Send'}</button>
 	</div>
 	{#if error}<p class="error" id="composer-error" role="alert">{error}</p>{/if}
-	<p class="hint">Enter sends, Shift+Enter adds a line, pasted or dropped images go along, and a message that starts with ! runs in the shell.</p>
+	<p class="hint">Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.</p>
 </form>
 
 <style>
