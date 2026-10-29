@@ -103,6 +103,8 @@ interface Session {
 	claude: ClaudeProcess;
 	// The mode Claude Code last reported in a hook, so a relaunch keeps it.
 	permissionMode?: PermissionMode;
+	// A fork's conversation as it was forked, which Claude Code copies into the fork's own transcript only with the fork's first message.
+	inherited?: { from: ClaudeSessionId; messages: SessionMessage[] };
 }
 
 type ClaudeProcess = { kind: 'exited' } | { kind: 'launching'; createdAt: number | null } | { kind: 'running'; inputReadyAt: number };
@@ -421,7 +423,7 @@ export class Hub {
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
 			case 'forkSession':
-				return this.fork(this.session(request.sessionId), request.title);
+				return this.fork(this.session(request.sessionId), request);
 			case 'listCommands':
 				return { commands: await this.commands(resolve(request.projectDir)) };
 			case 'listOtherSessions':
@@ -453,7 +455,7 @@ export class Hub {
 	}
 
 	// Claude Code copies the conversation into the fork's own transcript under the ID --session-id names, so the two sessions go on from the same point.
-	private async fork(original: Session, title: string | undefined): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
+	private async fork(original: Session, { prompt, title }: Extract<ClientRequest, { method: 'forkSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		if (!RELAUNCHABLE.has(original.model.state)) throw new HubError('not_ready', `session ${original.id} is ${original.model.state}, and forks once Claude has finished`);
 		const from = original.model.claudeSessionId;
 		const messages = await this.options.readHistory(from, original.projectDir);
@@ -461,7 +463,8 @@ export class Hub {
 		const name = title ?? (original.title ? `${original.title} ⑂` : null);
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const identity = [`--resume=${from}`, '--fork-session', `--session-id=${claudeSessionId}`];
-		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, [...reportedOptions(original), ...(name ? ['--name', name] : [])]));
+		const options = [...reportedOptions(original), ...(name ? ['--name', name] : []), '--', prompt];
+		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, options, { inherited: { from, messages } }));
 	}
 
 	private async withMemoryWarning<T extends object>(started: T): Promise<T & { memoryWarning?: HubStatus['memory'] }> {
@@ -496,7 +499,7 @@ export class Hub {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// A resumed conversation keeps its Claude Code name, so the registry name becomes the orfoni title without a --name flag.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), 'keep');
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), { onFailure: 'keep' });
 			await this.refreshOthers();
 			return ported;
 		} finally {
@@ -534,10 +537,10 @@ export class Hub {
 		claudeSessionId: ClaudeSessionId,
 		identity: string[],
 		options: string[],
-		onFailure: 'drop' | 'keep' = 'drop',
+		{ onFailure = 'drop', inherited }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited'] } = {},
 	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const now = Date.now();
-		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' } };
+		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' }, inherited };
 		const needsTrust = await this.needsTrust(projectDir);
 		this.sessions.set(session.id, session);
 		try {
@@ -593,7 +596,8 @@ export class Hub {
 		const messages = await this.options.readHistory(claudeSessionId, session.projectDir);
 		if (messages.some((message) => message.type !== 'system')) return [`--resume=${claudeSessionId}`];
 		// claude --resume finds no conversation here, and --session-id refuses the old ID once its empty transcript exists.
-		return [`--session-id=${ClaudeSessionId.parse(randomUUID())}`];
+		const fresh = `--session-id=${ClaudeSessionId.parse(randomUUID())}`;
+		return session.inherited ? [`--resume=${session.inherited.from}`, '--fork-session', fresh] : [fresh];
 	}
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
@@ -603,7 +607,9 @@ export class Hub {
 
 	private async conversation(session: Session): Promise<ChatItem[]> {
 		const { chat, chatStartedAt, claudeSessionId } = session.model;
-		const history = normalizeHistory(await this.options.readHistory(claudeSessionId, session.projectDir), chatStartedAt ?? Infinity);
+		const own = await this.options.readHistory(claudeSessionId, session.projectDir);
+		if (own.some((message) => message.type !== 'system')) session.inherited = undefined;
+		const history = normalizeHistory(session.inherited?.messages ?? own, chatStartedAt ?? Infinity);
 		return joinHistory(history, chat);
 	}
 

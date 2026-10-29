@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
 	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
-	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, type Choices } from './format';
+	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
 	import TaskList from './TaskList.svelte';
 
 	let {
@@ -14,6 +14,10 @@
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let confirm: HTMLDialogElement | undefined = $state();
+	let forkDialog: HTMLDialogElement | undefined = $state();
+	let forkPrompt = $state('');
+	let forking = $state(false);
+	let forkError = $state<string | null>(null);
 	let tasksOpen = $state(false);
 	const id = $props.id();
 	const title = $derived(sessionTitle(session, client.chats.get(session.id)));
@@ -69,15 +73,22 @@
 		await act(() => client.remove(session.id));
 	}
 
-	async function fork(): Promise<void> {
-		busy = true;
-		error = null;
+	// Claude Code writes a fork's transcript only with its first message, so the fork starts on one and has its own conversation from then on.
+	async function fork(event?: SubmitEvent): Promise<void> {
+		event?.preventDefault();
+		const prompt = forkPrompt.trim();
+		if (prompt === '' || forking) return;
+		forking = true;
+		forkError = null;
 		try {
-			onforked(await client.fork(session.id, `${title} ⑂`));
+			const forked = await client.fork(session.id, prompt, `${titleFrom(prompt)} ⑂`);
+			forkPrompt = '';
+			forkDialog?.close();
+			onforked(forked);
 		} catch (e) {
-			error = `Forking failed: ${(e as Error).message}`;
+			forkError = `Forking failed: ${(e as Error).message}`;
 		} finally {
-			busy = false;
+			forking = false;
 		}
 	}
 </script>
@@ -103,9 +114,9 @@
 		>
 		<button
 			class="btn"
-			title={takesChanges ? 'Starts a second session that goes on from this point, so the conversation can take two directions at once.' : 'A session forks once Claude has finished the turn.'}
+			title={takesChanges ? 'Starts a second session that goes on from this point with a message of its own, so the conversation can take two directions at once.' : 'A session forks once Claude has finished the turn.'}
 			disabled={busy || !takesChanges}
-			onclick={fork}>Fork</button
+			onclick={() => forkDialog?.showModal()}>Fork</button
 		>
 		{#if session.state === 'working'}
 			<button class="btn" disabled={busy} onclick={() => act(() => client.interrupt(session.id))}>Interrupt</button>
@@ -194,6 +205,32 @@
 		</span>
 	</label>
 {/snippet}
+
+<dialog bind:this={forkDialog} class="confirm" aria-labelledby="{id}-fork-title" onclose={() => (forkError = null)}>
+	<form onsubmit={fork}>
+		<h2 id="{id}-fork-title">Fork "{title}"</h2>
+		<p>The fork goes on from this point of the conversation with the message below, as a session of its own next to this one, which stays as it is.</p>
+		<label class="message">
+			<span>First message of the fork</span>
+			<textarea
+				class="field"
+				rows="3"
+				bind:value={forkPrompt}
+				required
+				onkeydown={(event) => {
+					if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+					event.preventDefault();
+					void fork();
+				}}
+			></textarea>
+		</label>
+		{#if forkError}<p class="fork-error" role="alert">{forkError}</p>{/if}
+		<div class="buttons">
+			<button class="btn" type="button" onclick={() => forkDialog?.close()}>Cancel</button>
+			<button class="btn btn-primary" type="submit" disabled={forking || forkPrompt.trim() === ''}>{forking ? 'Forking' : 'Fork'}</button>
+		</div>
+	</form>
+</dialog>
 
 <dialog bind:this={confirm} class="confirm" aria-labelledby="remove-title">
 	<h2 id="remove-title">Remove "{title}"?</h2>
@@ -505,5 +542,22 @@
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.5rem;
+	}
+
+	.message {
+		display: grid;
+		gap: 0.35rem;
+		margin-bottom: 1.2rem;
+		font-size: 0.875rem;
+	}
+
+	.message textarea {
+		width: 100%;
+		resize: vertical;
+	}
+
+	.confirm .fork-error {
+		margin: -0.6rem 0 1rem;
+		color: var(--danger);
 	}
 </style>

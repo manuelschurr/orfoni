@@ -1,8 +1,10 @@
 import type { SessionSummary, TaskItem } from '@orfoni/protocol';
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { expect, test, vi } from 'vitest';
-import { connectedClient, spoken, summary } from '../testing';
+import { connectedClient, spoken, stubDialogs, summary } from '../testing';
 import SessionHeader from './SessionHeader.svelte';
+
+stubDialogs();
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -257,29 +259,50 @@ test('Stop says that it ends Claude in this session, on claude.ai too, and how t
 	expect(screen.getByRole('button', { name: 'Stop' }).title).toBe('Ends Claude in this session, which also ends it on claude.ai. Send a message to start it again.');
 });
 
-test('Fork starts a second session that goes on from this point of the conversation, named after this one with the fork mark, and hands it on to be opened', async () => {
-	const { transport, session, forked } = await header({ state: 'answered' });
+async function forkWith(text: string) {
 	await fireEvent.click(screen.getByRole('button', { name: 'Fork' }));
-	expect(transport.requests('forkSession')).toMatchObject([{ sessionId: session.id, title: 'Fix the login page ⑂' }]);
-	const started = { session: summary('s2', 'idle', { title: 'Fix the login page ⑂' }), needsTrust: false };
+	const dialog = screen.getByRole('dialog', { name: 'Fork "Fix the login page"' });
+	await fireEvent.input(within(dialog).getByRole('textbox', { name: 'First message of the fork' }), { target: { value: text } });
+	return dialog;
+}
+
+test('Fork asks for the first message of the fork, starts the fork on it, titled after it with the fork mark, and hands it on to be opened', async () => {
+	const { transport, session, forked } = await header({ state: 'answered' });
+	const dialog = await forkWith('Try a passkey login instead');
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Fork' }));
+	expect(transport.requests('forkSession')).toMatchObject([{ sessionId: session.id, prompt: 'Try a passkey login instead', title: 'Try a passkey login instead ⑂' }]);
+	const started = { session: summary('s2', 'working', { title: 'Try a passkey login instead ⑂' }), needsTrust: false };
 	transport.respond('forkSession', started);
 	await vi.waitFor(() => expect(forked).toHaveBeenCalledWith(started));
+	expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('Enter in the message forks, as it sends in the message box, and Cancel forks nothing', async () => {
+	const { transport } = await header({ state: 'idle' });
+	const dialog = await forkWith('Try a passkey login instead');
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+	expect(screen.queryByRole('dialog')).toBeNull();
+	expect(transport.requests('forkSession')).toEqual([]);
+	await fireEvent.keyDown(within(await forkWith('Try a passkey login instead')).getByRole('textbox'), { key: 'Enter' });
+	expect(transport.requests('forkSession')).toMatchObject([{ prompt: 'Try a passkey login instead' }]);
 });
 
 test('Fork says what it does, and a session that is working or waits on you forks once Claude has finished', async () => {
 	const { report } = await header({ state: 'idle' });
 	const fork = () => screen.getByRole('button', { name: 'Fork' }) as HTMLButtonElement;
-	expect([fork().disabled, fork().title]).toEqual([false, 'Starts a second session that goes on from this point, so the conversation can take two directions at once.']);
+	expect([fork().disabled, fork().title]).toEqual([false, 'Starts a second session that goes on from this point with a message of its own, so the conversation can take two directions at once.']);
 	report({ state: 'working' });
 	expect([fork().disabled, fork().title]).toEqual([true, 'A session forks once Claude has finished the turn.']);
 	report({ state: 'needs_approval' });
 	expect(fork().disabled).toBe(true);
 });
 
-test('a fork the hub refuses says why', async () => {
+test('a fork the hub refuses says why in the dialog and keeps the message', async () => {
 	const { transport, forked } = await header({ state: 'idle' });
-	await fireEvent.click(screen.getByRole('button', { name: 'Fork' }));
+	const dialog = await forkWith('Try a passkey login instead');
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Fork' }));
 	transport.fail('forkSession', 'not_ready', 'session s1 has nothing to fork yet');
-	expect((await screen.findByRole('alert')).textContent).toBe('Forking failed: session s1 has nothing to fork yet');
+	expect((await within(dialog).findByRole('alert')).textContent).toBe('Forking failed: session s1 has nothing to fork yet');
+	expect((within(dialog).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Try a passkey login instead');
 	expect(forked).not.toHaveBeenCalled();
 });

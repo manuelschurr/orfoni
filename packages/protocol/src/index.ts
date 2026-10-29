@@ -146,7 +146,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('hubStatus') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional() }),
-	z.object({ id, method: z.literal('forkSession'), sessionId: SessionId, title: z.string().min(1).optional() }),
+	z.object({ id, method: z.literal('forkSession'), sessionId: SessionId, prompt: z.string().min(1), title: z.string().min(1).optional() }),
 	z.object({ id, method: z.literal('listCommands'), projectDir: z.string().min(1) }),
 	z.object({ id, method: z.literal('listOtherSessions') }),
 	z.object({ id, method: z.literal('openOtherSession'), pid: z.number().int() }),

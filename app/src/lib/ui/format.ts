@@ -60,6 +60,13 @@ function firstLine(text: string): string {
 	return text.trim().split('\n', 1)[0] ?? '';
 }
 
+// The first line of a message, cut at a word near 60 characters, which titles the session it starts.
+export function titleFrom(text: string): string | undefined {
+	const line = text.trim().split('\n', 1)[0] ?? '';
+	if (line === '') return undefined;
+	return line.length <= 60 ? line : `${line.slice(0, 60).replace(/\s+\S*$/, '')}…`;
+}
+
 export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string {
 	if (session.title) return session.title;
 	const prompt = chat?.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));

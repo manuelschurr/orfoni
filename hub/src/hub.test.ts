@@ -1300,48 +1300,101 @@ describe('relaunchSession', () => {
 
 describe('forkSession', () => {
 	const statusLine = JSON.stringify({ model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' }, effort: { level: 'xhigh' } });
+	const SOFTWARE = 'Take the software another way';
+	// The transcript stamps every entry, and the chat shows only stamped ones.
+	const said = (type: 'user' | 'assistant', text: string) => ({ ...entry(type, type === 'user' ? text : [{ type: 'text', text }], type === 'user' ? undefined : 'end_turn'), timestamp: new Date(T0).toISOString() });
+	const before = () => [said('user', 'Which radio fits?'), said('assistant', 'The h771.')];
 
 	async function answered(client: TestClient, params: Partial<Params<'startSession'>> = {}) {
 		const session = await start(client, params);
 		await hub.hook(session.id, body('SessionStart', session.claude));
-		transcripts.set(session.claude, [entry('user', 'Which radio fits?'), entry('assistant', [{ type: 'text', text: 'The h771.' }], 'end_turn')]);
+		transcripts.set(session.claude, before());
 		await hub.hook(session.id, body('UserPromptSubmit', session.claude, { prompt: 'Which radio fits?', permission_mode: 'auto' }));
 		await hub.hook(session.id, body('Stop', session.claude, { permission_mode: 'auto' }));
 		hub.status(session.id, statusLine);
 		return session;
 	}
 
+	async function fork(client: TestClient, sessionId: SessionId, params: Partial<Params<'forkSession'>> = {}) {
+		return (await client.ok('forkSession', { sessionId, prompt: SOFTWARE, ...params })) as Started;
+	}
+
+	async function shown(client: TestClient, sessionId: SessionId): Promise<string[]> {
+		const { chat } = (await client.ok('openSession', { sessionId })) as { chat: ChatItem[] };
+		return chat.flatMap((item) => (item.kind === 'user' || item.kind === 'assistant' ? [item.text] : []));
+	}
+
 	// Claude Code 2.1.312 copies the whole conversation into the fork's own transcript under the ID --session-id names, and leaves the original's transcript alone.
-	test('starts a second session in the same folder that continues the conversation under its own Claude session ID, on the model, effort and mode the original runs on, and leaves the original as it was', async () => {
+	test('starts a second session in the same folder that continues the conversation on its first message, under its own Claude session ID, on the model, effort and mode the original runs on, and leaves the original as it was', async () => {
 		const client = await startHub();
 		const original = await answered(client);
-		const { session: fork } = (await client.ok('forkSession', { sessionId: original.id, title: 'Which radio fits? ⑂' })) as Started;
-		expect(fork).toMatchObject({ projectDir: PROJECT, title: 'Which radio fits? ⑂' });
-		expect(fork.id).not.toBe(original.id);
-		expect(fork.claudeSessionId).not.toBe(original.claude);
+		const { session: forked } = await fork(client, original.id, { title: 'Take the software another way ⑂' });
+		expect(forked).toMatchObject({ projectDir: PROJECT, title: 'Take the software another way ⑂' });
+		expect(forked.id).not.toBe(original.id);
+		expect(forked.claudeSessionId).not.toBe(original.claude);
 		expect(fake.of('newSession').at(-1)).toEqual([
-			`orfoni-${fork.id}`,
+			`orfoni-${forked.id}`,
 			PROJECT,
 			expect.anything(),
-			['claude', `--resume=${original.claude}`, '--fork-session', `--session-id=${fork.claudeSessionId}`, '--settings', join(dir, 'settings', `${fork.id}.json`), '--model', 'claude-opus-5-5', '--effort', 'xhigh', '--permission-mode', 'auto', '--name', 'Which radio fits? ⑂'],
+			[
+				'claude',
+				`--resume=${original.claude}`,
+				'--fork-session',
+				`--session-id=${forked.claudeSessionId}`,
+				'--settings',
+				join(dir, 'settings', `${forked.id}.json`),
+				'--model',
+				'claude-opus-5-5',
+				'--effort',
+				'xhigh',
+				'--permission-mode',
+				'auto',
+				'--name',
+				'Take the software another way ⑂',
+				'--',
+				SOFTWARE,
+			],
 		]);
 		expect(fake.of('killSession')).toEqual([]);
 		expect(client.session(original.id)).toMatchObject({ state: 'answered', claudeSessionId: original.claude });
-		expect(((await client.ok('listSessions', {})) as SessionSummary[]).map((session) => session.id).sort()).toEqual([original.id, fork.id].sort());
+		expect(((await client.ok('listSessions', {})) as SessionSummary[]).map((session) => session.id).sort()).toEqual([original.id, forked.id].sort());
 	});
 
 	test('the fork reports its start with source fork under its own ID, and stays that session', async () => {
 		const client = await startHub();
 		const original = await answered(client);
-		const { session: fork } = (await client.ok('forkSession', { sessionId: original.id })) as Started;
-		await hub.hook(fork.id, body('SessionStart', fork.claudeSessionId, { source: 'fork' }));
-		expect(client.session(fork.id)).toMatchObject({ state: 'idle', claudeSessionId: fork.claudeSessionId });
+		const { session: forked } = await fork(client, original.id);
+		await hub.hook(forked.id, body('SessionStart', forked.claudeSessionId, { source: 'fork' }));
+		expect(client.session(forked.id)).toMatchObject({ state: 'idle', claudeSessionId: forked.claudeSessionId });
+	});
+
+	// Claude Code writes a fork's transcript only with the fork's first message.
+	test('until Claude Code writes the fork its own transcript, the fork shows the conversation as it was when forked, however the original goes on', async () => {
+		const client = await startHub();
+		const original = await answered(client);
+		const { session: forked } = await fork(client, original.id);
+		transcripts.set(original.claude, [...before(), said('user', 'And the antenna?')]);
+		expect(await shown(client, forked.id)).toEqual(['Which radio fits?', 'The h771.']);
+		transcripts.set(forked.claudeSessionId, [...before(), said('user', SOFTWARE), said('assistant', 'Then the parser goes first.')]);
+		expect(await shown(client, forked.id)).toEqual(['Which radio fits?', 'The h771.', SOFTWARE, 'Then the parser goes first.']);
+	});
+
+	test('a fork whose Claude Code ended before it wrote a transcript forks again when it starts once more, rather than starting an empty conversation', async () => {
+		const client = await startHub();
+		const original = await answered(client);
+		const { session: forked } = await fork(client, original.id);
+		fake.live.delete(`orfoni-${forked.id}`);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(client.state(forked.id)).toBe('offline');
+		void client.request('send', { sessionId: forked.id, text: SOFTWARE });
+		await untilRealTime(() => fake.of('newSession').length === 3);
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(expect.arrayContaining([`--resume=${original.claude}`, '--fork-session']));
 	});
 
 	test('without a title from the client, the fork is named after the original with the mark Claude Code gives its forks', async () => {
 		const client = await startHub();
 		const original = await answered(client, { title: 'Radio choice' });
-		expect(await client.ok('forkSession', { sessionId: original.id })).toMatchObject({ session: { title: 'Radio choice ⑂' } });
+		expect(await fork(client, original.id)).toMatchObject({ session: { title: 'Radio choice ⑂' } });
 		expect(fake.of('newSession').at(-1)?.[3]).toEqual(expect.arrayContaining(['--name', 'Radio choice ⑂']));
 	});
 
@@ -1351,7 +1404,7 @@ describe('forkSession', () => {
 		fake.live.delete(`orfoni-${original.id}`);
 		await vi.advanceTimersByTimeAsync(5000);
 		expect(client.state(original.id)).toBe('offline');
-		expect(await client.ok('forkSession', { sessionId: original.id })).toMatchObject({ session: { projectDir: PROJECT } });
+		expect(await fork(client, original.id)).toMatchObject({ session: { projectDir: PROJECT } });
 		expect(fake.of('newSession').at(-1)?.[3]).toEqual(expect.arrayContaining([`--resume=${original.claude}`, '--fork-session']));
 	});
 
@@ -1359,21 +1412,21 @@ describe('forkSession', () => {
 		const client = await startHub();
 		const original = await answered(client);
 		writeMeminfo(GB);
-		expect(await client.ok('forkSession', { sessionId: original.id })).toMatchObject({ memoryWarning: { availableBytes: GB } });
+		expect(await fork(client, original.id)).toMatchObject({ memoryWarning: { availableBytes: GB } });
 	});
 
 	test('a session that is working or waits on you forks once Claude has finished, and nothing starts', async () => {
 		const client = await startHub();
 		const { id, claude } = await answered(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'And the antenna?' }));
-		expect(await client.request('forkSession', { sessionId: id })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('working') } });
+		expect(await client.request('forkSession', { sessionId: id, prompt: SOFTWARE })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('working') } });
 		expect(fake.of('newSession')).toHaveLength(1);
 	});
 
 	test('a session without a conversation yet has nothing to fork, and nothing starts', async () => {
 		const client = await startHub();
 		const { id } = await ready(client);
-		expect(await client.request('forkSession', { sessionId: id })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('nothing to fork') } });
+		expect(await client.request('forkSession', { sessionId: id, prompt: SOFTWARE })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('nothing to fork') } });
 		expect(fake.of('newSession')).toHaveLength(1);
 	});
 });

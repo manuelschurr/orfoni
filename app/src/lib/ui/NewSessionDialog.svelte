@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Effort, PermissionMode, ProjectDir } from '@orfoni/protocol';
 	import type { HubClient, Result } from '../hub-client.svelte';
-	import { folderName, type ModelAlias } from './format';
+	import { folderName, titleFrom, type ModelAlias } from './format';
 	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
 
@@ -32,12 +32,6 @@
 			);
 		} else if (!open && dialog.open) dialog.close();
 	});
-
-	function titleFrom(text: string): string | undefined {
-		const line = text.trim().split('\n', 1)[0] ?? '';
-		if (line === '') return undefined;
-		return line.length <= 60 ? line : `${line.slice(0, 60).replace(/\s+\S*$/, '')}…`;
-	}
 
 	async function start(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
