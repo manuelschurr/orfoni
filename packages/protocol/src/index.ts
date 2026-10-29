@@ -134,6 +134,19 @@ export type RequestOutcome = 'allowed' | 'denied' | 'answered' | 'approved' | 'r
 
 const id = z.number().int();
 
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGES = 5;
+// The kinds of image Claude Code attaches when their path is pasted into it.
+export const ImageType = z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+export type ImageType = z.infer<typeof ImageType>;
+
+export function base64Bytes(data: string): number {
+	return (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+}
+
+export const MessageImage = z.object({ type: ImageType, data: z.base64().refine((data) => base64Bytes(data) <= MAX_IMAGE_BYTES, { message: 'an image is at most 10 MB' }) });
+export type MessageImage = z.infer<typeof MessageImage>;
+
 export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('listSessions') }),
 	z.object({
@@ -147,7 +160,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		permissionMode: PermissionMode.optional(),
 	}),
 	z.object({ id, method: z.literal('openSession'), sessionId: SessionId }),
-	z.object({ id, method: z.literal('send'), sessionId: SessionId, text: z.string().min(1) }),
+	z.object({ id, method: z.literal('send'), sessionId: SessionId, text: z.string(), images: z.array(MessageImage).max(MAX_IMAGES).default([]) }).refine((request) => request.text !== '' || request.images.length > 0, { message: 'a message needs text or an image' }),
 	z.object({ id, method: z.literal('decide'), requestId: RequestId, decision: Decision }),
 	z.object({ id, method: z.literal('interrupt'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('stopSession'), sessionId: SessionId }),

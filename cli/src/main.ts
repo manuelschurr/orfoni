@@ -99,7 +99,7 @@ async function run(hub: Connection, command: Command): Promise<void> {
 			return;
 		}
 		case 'send':
-			await hub.request('send', { sessionId: await findSession(hub, command.session), text: command.text });
+			await hub.request('send', { sessionId: await findSession(hub, command.session), text: command.text, images: [] });
 			return;
 		case 'watch': {
 			const sessionId = await findSession(hub, command.session);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, HubStatus, parseClientRequest, parseHubMessage, ProtocolError, SessionSummary, type HubMessage } from './index.js';
+import { ClaudeSessionId, HubStatus, MAX_IMAGE_BYTES, parseClientRequest, parseHubMessage, ProtocolError, SessionSummary, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -15,7 +15,7 @@ function expectBadMessage(line: string) {
 describe('parseClientRequest', () => {
 	test('accepts a send request and returns it typed', () => {
 		const request = parseClientRequest('{"id":1,"method":"send","sessionId":"s","text":"hi"}');
-		expect(request).toEqual({ id: 1, method: 'send', sessionId: 's', text: 'hi' });
+		expect(request).toEqual({ id: 1, method: 'send', sessionId: 's', text: 'hi', images: [] });
 	});
 
 	test('accepts startSession with a model and a permission mode', () => {
@@ -43,6 +43,24 @@ describe('parseClientRequest', () => {
 		expectBadMessage('{"id":5,"method":"renameSession","sessionId":"s","title":"   "}');
 		expectBadMessage('{"id":5,"method":"renameSession","sessionId":"s","title":"two\\nlines"}');
 		expectBadMessage(`{"id":5,"method":"renameSession","sessionId":"s","title":"${'x'.repeat(201)}"}`);
+	});
+
+	test('a message carries up to 5 images of the kinds Claude Code reads, and needs text or an image', () => {
+		const png = { type: 'image/png', data: 'iVBORw0KGgo=' };
+		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png] }))).toEqual({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png] });
+		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: '', images: [png, { type: 'image/jpeg', data: '/9j/4AAQ' }] }))).toMatchObject({ text: '' });
+		expect(parseClientRequest('{"id":6,"method":"send","sessionId":"s","text":"hi"}')).toMatchObject({ images: [] });
+		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: '' }));
+		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: Array(6).fill(png) }));
+		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/svg+xml', data: 'PHN2Zz4=' }] }));
+		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/png', data: 'not base64!' }] }));
+	});
+
+	test('an image is at most 10 MB', () => {
+		const data = (bytes: number) => Buffer.alloc(bytes).toString('base64');
+		expect(MAX_IMAGE_BYTES).toBe(10 * 1024 * 1024);
+		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/png', data: data(MAX_IMAGE_BYTES) }] }))).toMatchObject({ text: 'hi' });
+		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/png', data: data(MAX_IMAGE_BYTES + 1) }] }));
 	});
 
 	test('rejects text that is not JSON', () => {

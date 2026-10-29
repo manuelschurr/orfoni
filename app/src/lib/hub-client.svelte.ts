@@ -12,6 +12,7 @@ import {
 	type Decision,
 	type ErrorCode,
 	type HubMessage,
+	type MessageImage,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
@@ -212,10 +213,10 @@ export class HubClient {
 		return this.loadOther();
 	}
 
-	async send(sessionId: SessionId, text: string): Promise<void> {
+	async send(sessionId: SessionId, text: string, images: MessageImage[] = []): Promise<void> {
 		const state = this.sessions.get(sessionId)?.state;
 		if (state === 'needs_approval' || state === 'needs_answer') throw new HubRequestError('not_ready', 'The session waits for an answer to a request.');
-		await this.request('send', { sessionId, text });
+		await this.request('send', { sessionId, text, images });
 	}
 
 	// /model and /effort typed into Claude Code also become the defaults of every new session, so the hub restarts this one session on the flags instead.

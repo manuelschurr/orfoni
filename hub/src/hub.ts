@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { SlashCommand as ClaudeCommand, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -13,6 +13,8 @@ import {
 	type ErrorCode,
 	type HubMessage,
 	type HubStatus,
+	type ImageType,
+	type MessageImage,
 	type OtherSession,
 	type ProjectDir,
 	type RequestId,
@@ -23,7 +25,7 @@ import {
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { parseActivity, type Activity } from './activity.js';
-import { writePrivate } from './files.js';
+import { privateDir, writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
 import { paneMemory, systemMemory } from './memory.js';
@@ -41,6 +43,17 @@ import { sessionTarget, type Tmux } from './tmux.js';
 const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
+const UPLOAD_LIFETIME_MS = 24 * 3600_000;
+const IMAGE_EXTENSION: Record<ImageType, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+
+// Claude Code reports a message with its trailing whitespace trimmed and each pasted image ahead of it as [Image #N], numbered on from the images the session took before.
+function sentPrompt(text: string, images: number): (prompt: string) => boolean {
+	const placeholders = new RegExp(`^(?:\\[Image #\\d+\\] ?){${images}}`);
+	return (prompt) => {
+		const shown = placeholders.exec(prompt);
+		return shown !== null && prompt.slice(shown[0].length) === text.trimEnd();
+	};
+}
 const PANE_CHECK_INTERVAL_MS = 5_000;
 const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
@@ -404,7 +417,7 @@ export class Hub {
 			case 'openSession':
 				return this.openSession(client, this.session(request.sessionId));
 			case 'send':
-				await this.send(this.session(request.sessionId), request.text);
+				await this.send(this.session(request.sessionId), request.text, request.images);
 				return {};
 			case 'decide':
 				return { outcome: this.decide(request.requestId, request.decision) };
@@ -700,18 +713,24 @@ export class Hub {
 		}
 	}
 
-	private async send(session: Session, text: string): Promise<void> {
-		// Slash commands and bash mode do not always fire UserPromptSubmit, so only plain text waits for it.
-		const confirmable = !text.startsWith('/') && !text.startsWith('!');
-		const delivery = (timeoutMs: number, typing?: Promise<void>) =>
-			confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && event.text === text.trimEnd(), timeoutMs, typing) : Promise.resolve(true);
+	private async send(session: Session, text: string, images: MessageImage[] = []): Promise<void> {
+		// Slash commands and bash mode do not always fire UserPromptSubmit, so only plain text waits for it. Behind an image, a slash is plain text.
+		const confirmable = images.length > 0 || (!text.startsWith('/') && !text.startsWith('!'));
+		const sent = sentPrompt(text, images.length);
+		const delivery = (timeoutMs: number, typing?: Promise<void>) => (confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && sent(event.text), timeoutMs, typing) : Promise.resolve(true));
 		this.assertTakesInput(session);
-		if (session.claude.kind === 'exited') {
+		const paths = await this.saveImages(images);
+		if (session.claude.kind === 'exited' && paths.length === 0) {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
 			await this.launch(session, await this.resumeIdentity(session), reportedSettings(session), text);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
+		}
+		// Claude Code attaches an image only from a paste, which a prompt on its command line is not, so it starts first and takes the message like a running session.
+		if (session.claude.kind === 'exited') {
+			await this.killTmux((name) => name === tmuxName(session.id));
+			await this.launch(session, await this.resumeIdentity(session), reportedSettings(session));
 		}
 		if (session.claude.kind === 'launching' && !(await this.waitForHook(session, (event) => event.type === 'session_start', STARTUP_TIMEOUT_MS))) {
 			throw new HubError('not_ready', `Claude Code did not start within ${STARTUP_TIMEOUT_MS / 1000} s`);
@@ -721,10 +740,29 @@ export class Hub {
 		const untilInputReady = claude.inputReadyAt - Date.now();
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);
-		const typing = this.options.tmux.submit(tmuxName(session.id), text);
+		const typing = this.options.tmux.submit(tmuxName(session.id), text, paths);
 		const delivered = delivery(DELIVERY_TIMEOUT_MS, typing);
 		await typing;
 		if (!(await delivered)) throw new HubError('not_delivered', `Claude Code did not confirm the message within ${DELIVERY_TIMEOUT_MS / 1000} s`);
+	}
+
+	// Claude Code reads an image when its path is pasted and keeps it in the transcript, so a file needs to outlast only the paste, and a day is plenty.
+	private async saveImages(images: MessageImage[]): Promise<string[]> {
+		if (images.length === 0) return [];
+		const dir = join(this.options.stateDir, 'uploads');
+		await privateDir(dir);
+		for (const name of await readdir(dir)) {
+			const path = join(dir, name);
+			const { mtimeMs } = await stat(path).catch(() => ({ mtimeMs: Infinity }));
+			if (mtimeMs < Date.now() - UPLOAD_LIFETIME_MS) await rm(path, { force: true });
+		}
+		return Promise.all(
+			images.map(async (image) => {
+				const path = join(dir, `${randomUUID()}.${IMAGE_EXTENSION[image.type]}`);
+				await writeFile(path, Buffer.from(image.data, 'base64'), { mode: 0o600 });
+				return path;
+			}),
+		);
 	}
 
 	private assertTakesInput(session: Session): void {

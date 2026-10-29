@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -30,8 +30,8 @@ function fakeTmux(running: string[] = [], typingMs = 0) {
 		async listSessions() {
 			return [...live].map((name, index) => ({ name, panePid: 1000 + index, paneDead: false }));
 		},
-		async submit(target, text) {
-			calls.push({ method: 'submit', args: [target, text] });
+		async submit(target, text, images = []) {
+			calls.push({ method: 'submit', args: images.length > 0 ? [target, text, images] : [target, text] });
 			if (typingMs > 0) await new Promise((resolve) => setTimeout(resolve, typingMs));
 		},
 		async sendKeys(target, ...keys) {
@@ -476,6 +476,74 @@ describe('send', () => {
 		const { id } = await ready(client);
 		expect(await client.request('send', { sessionId: id, text })).toMatchObject({ ok: true });
 		expect(fake.of('submit')).toEqual([[`orfoni-${id}`, text]]);
+	});
+
+	test('saves the images of a message where only you can read them, pastes their paths, and resolves once the prompt hook shows them as images', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const png = Buffer.from('a screenshot');
+		const sent = client.request('send', { sessionId: id, text: 'What is wrong here?', images: [{ type: 'image/png', data: png.toString('base64') }, { type: 'image/jpeg', data: Buffer.from('a photo').toString('base64') }] });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		const [target, text, paths] = fake.of('submit')[0] as [string, string, string[]];
+		expect([target, text]).toEqual([`orfoni-${id}`, 'What is wrong here?']);
+		expect(paths).toEqual([expect.stringMatching(/^.*\/uploads\/[^/]+\.png$/), expect.stringMatching(/^.*\/uploads\/[^/]+\.jpg$/)]);
+		expect(paths[0]!.startsWith(join(dir, 'uploads'))).toBe(true);
+		expect(readFileSync(paths[0]!)).toEqual(png);
+		expect(statSync(paths[0]!).mode & 0o777).toBe(0o600);
+		expect(statSync(join(dir, 'uploads')).mode & 0o777).toBe(0o700);
+		// Claude Code numbers the images of a session on from the ones it took before.
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #3] [Image #4] What is wrong here?' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('a message of images alone resolves on the images, and one whose images did not arrive as images is not delivered', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const image = { type: 'image/png' as const, data: Buffer.from('x').toString('base64') };
+		const alone = client.request('send', { sessionId: id, text: '', images: [image] });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #1]' }));
+		expect(await alone).toMatchObject({ ok: true });
+		const lost = client.request('send', { sessionId: id, text: 'and this?', images: [image] });
+		await untilRealTime(() => fake.of('submit').length === 2);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'and this?' }));
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(await lost).toMatchObject({ ok: false, error: { code: 'not_delivered' } });
+	});
+
+	test('uploads older than a day are removed when the next images arrive', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		mkdirSync(join(dir, 'uploads'), { recursive: true });
+		writeFileSync(join(dir, 'uploads', 'old.png'), 'old');
+		utimesSync(join(dir, 'uploads', 'old.png'), new Date(T0 - 25 * 3600_000), new Date(T0 - 25 * 3600_000));
+		writeFileSync(join(dir, 'uploads', 'recent.png'), 'recent');
+		utimesSync(join(dir, 'uploads', 'recent.png'), new Date(T0 - 23 * 3600_000), new Date(T0 - 23 * 3600_000));
+		const sent = client.request('send', { sessionId: id, text: 'hi', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }] });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		expect(readdirSync(join(dir, 'uploads'))).not.toContain('old.png');
+		expect(readdirSync(join(dir, 'uploads'))).toContain('recent.png');
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #1] hi' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	// Claude Code attaches an image only from a paste, which a prompt given on its command line is not.
+	test('a message with images to an offline session resumes claude without a prompt and pastes the message once it has started', async () => {
+		transcript = recordedConversation();
+		const client = await startHub();
+		const { id, claude, settings } = await ready(client);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		fake.live.delete(`orfoni-${id}`);
+		const sent = client.request('send', { sessionId: id, text: 'continue with this', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }] });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect(fake.of('newSession')[1]![3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings]);
+		expect(fake.of('submit')).toEqual([]);
+		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
+		await vi.advanceTimersByTimeAsync(2000);
+		await untilRealTime(() => fake.of('submit').length === 1);
+		expect(fake.of('submit')[0]!.slice(0, 2)).toEqual([`orfoni-${id}`, 'continue with this']);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #1] continue with this' }));
+		expect(await sent).toMatchObject({ ok: true });
 	});
 
 	test('a message to an offline session resumes claude with the message as its prompt', async () => {

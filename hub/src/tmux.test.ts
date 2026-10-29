@@ -68,6 +68,21 @@ describe('createTmux', () => {
 		for (const paste of box.pastes) expect(Buffer.from(paste, 'utf8').toString('utf8')).toBe(paste);
 	});
 
+	// Claude Code attaches an image whose path arrives as a paste of its own, and shows it as [Image #N] followed by a space only when more follows.
+	it('pastes each image path on its own before the text, and the text after a space', async () => {
+		const { calls, tmux } = recorder();
+		await tmux.submit('orfoni-x', 'What changed?\nLook closely.', ['/state/uploads/a.png', '/state/uploads/b.jpg']);
+		const box = inputBox(calls, '=orfoni-x:');
+		expect(box.pastes).toEqual(['/state/uploads/a.png', '/state/uploads/b.jpg', ' What changed?', 'Look closely.']);
+		expect(box.submits).toBe(1);
+	});
+
+	it('sends images without text as their pastes alone', async () => {
+		const { calls, tmux } = recorder();
+		await tmux.submit('orfoni-x', '', ['/state/uploads/a.png']);
+		expect(inputBox(calls, '=orfoni-x:').pastes).toEqual(['/state/uploads/a.png']);
+	});
+
 	it('types a space after a final backslash, because Enter after a backslash makes a newline instead of submitting', async () => {
 		const { calls, tmux } = recorder();
 		await tmux.submit('orfoni-x', 'C:\\Users\\');
