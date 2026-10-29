@@ -14,6 +14,9 @@ export type SessionStateKind = z.infer<typeof SessionStateKind>;
 
 // The effort levels the claude CLI takes with --effort and /effort.
 export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+
+export const PermissionMode = z.enum(['auto', 'default', 'acceptEdits', 'plan']);
+export type PermissionMode = z.infer<typeof PermissionMode>;
 export type Effort = z.infer<typeof Effort>;
 
 export const TaskItem = z.object({ id: z.string(), subject: z.string(), status: z.enum(['pending', 'in_progress', 'completed']), activeForm: z.string().nullable() });
@@ -35,6 +38,8 @@ export const SessionSummary = z.object({
 	// Claude Code's tasks in creation order, and the line it shows while it works, such as "Running the two-pair test…" with details like "↓ 69.3k tokens".
 	taskList: z.array(TaskItem).nullable().default(null),
 	activity: z.object({ text: z.string(), details: z.array(z.string()) }).nullable().default(null),
+	// The mode Claude Code last reported in a hook, and null until it has.
+	permissionMode: PermissionMode.nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -119,8 +124,6 @@ export type Decision = z.infer<typeof Decision>;
 
 export type RequestOutcome = 'allowed' | 'denied' | 'answered' | 'approved' | 'rejected';
 
-export const PermissionMode = z.enum(['auto', 'default', 'acceptEdits', 'plan']);
-export type PermissionMode = z.infer<typeof PermissionMode>;
 
 const id = z.number().int();
 
@@ -145,7 +148,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('listProjectDirs') }),
 	z.object({ id, method: z.literal('hubStatus') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
-	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional() }),
+	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional(), permissionMode: PermissionMode.optional() }),
 	z.object({ id, method: z.literal('forkSession'), sessionId: SessionId, prompt: z.string().min(1), title: z.string().min(1).optional() }),
 	// Claude Code takes the name as typed text, where a line break would end it early.
 	z.object({ id, method: z.literal('renameSession'), sessionId: SessionId, title: z.string().trim().min(1).max(200).regex(/^[^\r\n]*$/) }),

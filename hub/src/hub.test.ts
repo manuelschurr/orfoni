@@ -309,7 +309,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1290,11 +1290,29 @@ describe('relaunchSession', () => {
 		expect(fake.of('killSession')).toEqual([]);
 	});
 
-	test('a relaunch that names neither a model nor an effort is refused', async () => {
+	test('a relaunch that names neither a model, an effort, nor a permission mode is refused', async () => {
 		const client = await startHub();
 		const { id } = await idle(client);
 		expect(await client.request('relaunchSession', { sessionId: id })).toMatchObject({ ok: false, error: { code: 'bad_message' } });
 		expect(fake.of('killSession')).toEqual([]);
+	});
+
+	test('every client sees the permission mode Claude Code reports in its hooks', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await ready(client);
+		expect(other.session(id)).toMatchObject({ permissionMode: null });
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi', permission_mode: 'plan' }));
+		expect(other.session(id)).toMatchObject({ permissionMode: 'plan' });
+		await hub.hook(id, body('Stop', claude, { permission_mode: 'auto' }));
+		expect(other.session(id)).toMatchObject({ permissionMode: 'auto' });
+	});
+
+	test('a relaunch switches the permission mode on its flag, and keeps the model and effort Claude Code reported', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await idle(client);
+		await client.ok('relaunchSession', { sessionId: id, permissionMode: 'auto' });
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--model', 'claude-haiku-5-5', '--effort', 'low', '--permission-mode', 'auto']);
 	});
 });
 
@@ -1517,7 +1535,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
@@ -1720,8 +1738,8 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
 		]);
 	});
 

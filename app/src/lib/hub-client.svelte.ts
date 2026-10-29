@@ -3,6 +3,7 @@ import {
 	HubStatus,
 	ChatItem,
 	OtherSession,
+	PermissionMode,
 	ProjectDir,
 	SlashCommand,
 	SessionSummary,
@@ -117,7 +118,7 @@ function upsert(chat: ChatItem[], item: ChatItem): ChatItem[] {
 }
 
 // The settings a session restarts on with the flag of the same name.
-export type Setting = 'model' | 'effort';
+export type Setting = 'model' | 'effort' | 'mode';
 
 // A change sent to a session. `from` is what Claude Code reported when it was sent, and a report of another value settles the change, so the app never shows a value before Claude Code reports it. The restart passes through offline, where Claude Code reports nothing, and that settles nothing.
 export interface Change {
@@ -132,7 +133,8 @@ export interface Change {
 const REPORT_WAIT_MS = 20_000;
 
 function reported(session: SessionSummary, setting: Setting): string | null {
-	return setting === 'model' ? (session.model?.id ?? null) : session.effort;
+	if (setting === 'model') return session.model?.id ?? null;
+	return setting === 'effort' ? session.effort : session.permissionMode;
 }
 
 // The session outside orfoni on screen. `session` follows the hub's list and keeps its last state once the session ends. `chat` belongs to the conversation in `session`, or is undefined while that loads.
@@ -222,7 +224,8 @@ export class HubClient {
 		const restarting: Change = { sessionId, setting, to, from: session ? reported(session, setting) : null, phase: 'restarting' };
 		this.changes = [...this.changes.filter((change) => change.sessionId !== sessionId || change.setting !== setting), restarting];
 		try {
-			await this.request('relaunchSession', setting === 'model' ? { sessionId, model: to } : { sessionId, effort: Effort.parse(to) });
+			const flag = setting === 'model' ? { model: to } : setting === 'effort' ? { effort: Effort.parse(to) } : { permissionMode: PermissionMode.parse(to) };
+			await this.request('relaunchSession', { sessionId, ...flag });
 		} catch (error) {
 			this.replaceChange(restarting, null);
 			throw error;

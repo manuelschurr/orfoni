@@ -1,10 +1,12 @@
-import { Effort, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { Effort, PermissionMode, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 
 // The aliases claude takes with --model and /model.
 export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
 export type ModelAlias = (typeof models)[number];
 export const modelLabel: Record<ModelAlias, string> = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 export const effortLabel: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+// The words the new session dialog uses for the modes.
+export const modeLabel: Record<PermissionMode, string> = { auto: 'Auto', default: 'Manual', acceptEdits: 'Accept edits', plan: 'Plan' };
 
 // What a select shows for a value Claude Code reports. A reported value that matches none of the options leads them.
 export interface Choices {
@@ -27,6 +29,11 @@ export function effortChoices(level: string | null): Choices {
 	const options = Effort.options.map((value) => ({ value, label: effortLabel[value] }));
 	if (level === null) return { value: '', options: [unknown, ...options] };
 	return { value: level, options: options.some((option) => option.value === level) ? options : [{ value: level, label: level }, ...options] };
+}
+
+export function modeChoices(mode: PermissionMode | null): Choices {
+	const options = PermissionMode.options.map((value) => ({ value, label: modeLabel[value] }));
+	return mode === null ? { value: '', options: [unknown, ...options] } : { value: mode, options };
 }
 
 export function elapsed(ms: number): string {

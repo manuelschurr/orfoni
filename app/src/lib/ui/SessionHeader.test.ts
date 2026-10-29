@@ -327,3 +327,25 @@ test('a rename the hub refuses says why', async () => {
 	transport.fail('renameSession', 'not_found', 'no session s1');
 	expect((await screen.findByRole('alert')).textContent).toBe('Renaming failed: no session s1');
 });
+
+test('the header shows the permission mode Claude Code reports, and a new one restarts the session in it, shown only once Claude Code reports it', async () => {
+	const { transport, report, session } = await header({ state: 'idle', model: opus, effort: 'xhigh', permissionMode: 'auto' });
+	expect(chosen('Permissions')).toBe('Auto');
+	expect(options('Permissions')).toEqual(['Auto', 'Manual', 'Accept edits', 'Plan']);
+	await pick('Permissions', 'plan');
+	expect(transport.requests('relaunchSession')).toMatchObject([{ sessionId: 's1', permissionMode: 'plan' }]);
+	expect(chosen('Permissions')).toBe('Auto');
+	expect(note()).toBe('Restarting on Plan');
+	transport.respond('relaunchSession', { session: { ...session, state: 'offline', permissionMode: null } });
+	report({ state: 'idle', permissionMode: 'plan' });
+	expect(chosen('Permissions')).toBe('Plan');
+	expect(note()).toBeNull();
+});
+
+test('a session that has not reported its permission mode shows it as unknown, and it waits while Claude works', async () => {
+	const { report } = await header({ state: 'idle', permissionMode: null });
+	expect(chosen('Permissions')).toBe('Unknown');
+	report({ state: 'working', permissionMode: 'default' });
+	expect(chosen('Permissions')).toBe('Manual');
+	expect(select('Permissions').disabled).toBe(true);
+});

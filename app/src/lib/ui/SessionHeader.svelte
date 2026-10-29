@@ -2,7 +2,7 @@
 	import type { SessionSummary } from '@orfoni/protocol';
 	import { tick } from 'svelte';
 	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
-	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
+	import { bytes, effortChoices, effortLabel, modeChoices, modeLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
 
 	let {
 		client,
@@ -37,7 +37,8 @@
 	};
 
 	function label({ setting, to }: Change): string {
-		return (setting === 'model' ? modelLabel[to as keyof typeof modelLabel] : effortLabel[to as keyof typeof effortLabel]) ?? to;
+		const labels: Record<Setting, Record<string, string>> = { model: modelLabel, effort: effortLabel, mode: modeLabel };
+		return labels[setting][to] ?? to;
 	}
 
 	async function change(setting: Setting, select: HTMLSelectElement, reported: string): Promise<void> {
@@ -175,7 +176,7 @@
 		>
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
-	{#if session.tasks || memory || session.model || takesChanges}
+	{#if session.tasks || memory || session.model || session.permissionMode || takesChanges}
 		<div class="gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
@@ -216,6 +217,9 @@
 			{#if session.model || takesChanges}
 				{@render setting('model', 'Model', modelChoices(session.model))}
 				{#if session.effort !== null || session.model === null}{@render setting('effort', 'Effort', effortChoices(session.effort))}{/if}
+			{/if}
+			{#if session.permissionMode || takesChanges}{@render setting('mode', 'Permissions', modeChoices(session.permissionMode))}{/if}
+			{#if session.model || takesChanges || session.permissionMode}
 				{#each changes as pending (pending.setting)}
 					<span class="change" data-phase={pending.phase}>
 						<span role="status">{notes[pending.phase](label(pending))}</span>
@@ -235,7 +239,7 @@
 			<select
 				value={choices.value}
 				disabled={!takesChanges || restarting}
-				title={takesChanges ? undefined : `You can change the ${name} while the session is idle.`}
+				title={takesChanges ? undefined : `You can change the ${name === 'mode' ? 'permission mode' : name} while the session is idle.`}
 				onchange={(event) => void change(name, event.currentTarget, choices.value)}
 			>
 				{#each choices.options as option (option.value)}<option value={option.value}>{option.label}</option>{/each}

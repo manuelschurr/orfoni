@@ -101,8 +101,6 @@ interface Session {
 	readonly createdAt: number;
 	model: SessionModel;
 	claude: ClaudeProcess;
-	// The mode Claude Code last reported in a hook, so a relaunch keeps it.
-	permissionMode?: PermissionMode;
 	// A fork's conversation as it was forked, which Claude Code copies into the fork's own transcript only with the fork's first message.
 	inherited?: { from: ClaudeSessionId; messages: SessionMessage[] };
 	// A rename Claude Code has not heard of yet, since it was asking you something or was starting.
@@ -175,18 +173,22 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 }
 
 // The model and effort Claude Code last reported and the permission mode its hooks last carried, so a restart or a fork goes on the way the session ran.
-function reportedOptions(session: Session, { model, effort }: { model?: string; effort?: Effort } = {}): string[] {
+function reportedOptions(session: Session, { model, effort, permissionMode }: { model?: string; effort?: Effort; permissionMode?: PermissionMode } = {}): string[] {
 	const reported = session.model.statusLine;
 	const reportedEffort = Effort.safeParse(reported?.effort);
-	return claudeOptions({ model: model ?? reported?.model.id, effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined), permissionMode: session.permissionMode });
+	return claudeOptions({
+		model: model ?? reported?.model.id,
+		effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined),
+		permissionMode: permissionMode ?? session.model.permissionMode ?? undefined,
+	});
 }
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
@@ -330,8 +332,6 @@ export class Hub {
 			this.options.log(`orfoni-hub: dropped a hook for unknown session ${sessionHeader ?? '(no X-Orfoni-Session header)'}`);
 			return {};
 		}
-		const mode = HookPermissionMode.safeParse(body);
-		if (mode.success) session.permissionMode = mode.data.permission_mode;
 		let event: HookEvent;
 		try {
 			event = parseHookEvent(hookName(body), body);
@@ -340,6 +340,9 @@ export class Hub {
 			this.options.log(`orfoni-hub: dropped a hook for session ${session.id}: ${error.message}`);
 			return {};
 		}
+		// Every hook Claude Code sends carries the mode, and one the hub drops changes nothing.
+		const mode = HookPermissionMode.safeParse(body);
+		if (mode.success) this.apply(session, { kind: 'permission_mode', mode: mode.data.permission_mode, at: Date.now() });
 		if (event.type === 'permission_request') return this.openRequest(session, event, closed);
 		this.receive(session, event);
 		return {};
@@ -529,10 +532,10 @@ export class Hub {
 	}
 
 	// /model and /effort typed into Claude Code also become the defaults of every new session and can stop at a dialog orfoni cannot see, so a session changes model or effort by resuming its conversation on the flags.
-	private async relaunch(session: Session, { model, effort }: Extract<ClientRequest, { method: 'relaunchSession' }>): Promise<{ session: SessionSummary }> {
-		if (model === undefined && effort === undefined) throw new HubError('bad_message', 'relaunchSession needs a model or an effort');
+	private async relaunch(session: Session, { model, effort, permissionMode }: Extract<ClientRequest, { method: 'relaunchSession' }>): Promise<{ session: SessionSummary }> {
+		if (model === undefined && effort === undefined && permissionMode === undefined) throw new HubError('bad_message', 'relaunchSession needs a model, an effort, or a permission mode');
 		if (!RELAUNCHABLE.has(session.model.state)) throw new HubError('not_ready', `session ${session.id} is ${session.model.state}`);
-		const options = reportedOptions(session, { model, effort });
+		const options = reportedOptions(session, { model, effort, permissionMode });
 		const pane = (await this.options.tmux.listSessions()).find((candidate) => candidate.name === tmuxName(session.id) && !candidate.paneDead);
 		await this.killTmux((name) => name === tmuxName(session.id));
 		if (pane && !(await this.ended(pane.panePid))) {

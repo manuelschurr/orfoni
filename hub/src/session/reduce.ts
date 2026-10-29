@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
+import type { ChatItem, ClaudeSessionId, PermissionMode, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
 import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
@@ -21,6 +21,8 @@ export interface SessionModel {
 	memory: PaneMemory | null;
 	statusLine: StatusLine | null;
 	activity: Activity | null;
+	// The mode Claude Code last reported in a hook, so a relaunch or a fork keeps it.
+	permissionMode: PermissionMode | null;
 	lastTurnEndedAt: number | null;
 	lastViewedAt: number | null;
 }
@@ -37,7 +39,8 @@ export type SessionInput =
 	| { kind: 'memory_read'; memory: PaneMemory | null; at: number }
 	| { kind: 'status_line'; statusLine: StatusLine; at: number }
 	| { kind: 'activity'; activity: Activity | null; at: number }
-	| { kind: 'task_files'; claudeSessionId: ClaudeSessionId; taskList: TaskItem[]; at: number };
+	| { kind: 'task_files'; claudeSessionId: ClaudeSessionId; taskList: TaskItem[]; at: number }
+	| { kind: 'permission_mode'; mode: PermissionMode; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -47,7 +50,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, activity: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, activity: null, permissionMode: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -246,5 +249,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 		// A read that started before /clear names the conversation that ended.
 		case 'task_files':
 			return input.claudeSessionId !== model.claudeSessionId || sameTaskList(input.taskList, model.taskList) ? model : { ...model, taskList: input.taskList };
+		case 'permission_mode':
+			return input.mode === model.permissionMode ? model : { ...model, permissionMode: input.mode };
 	}
 }
