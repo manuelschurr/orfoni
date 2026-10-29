@@ -357,6 +357,11 @@ export class Hub {
 			this.options.log(`orfoni-hub: dropped a hook for session ${session.id}: ${error.message}`);
 			return {};
 		}
+		// A Claude Code reports its start before its end, so a SessionEnd while the session's next Claude Code starts comes from the one before, on its way out.
+		if (event.type === 'session_end' && session.claude.kind === 'launching') {
+			this.options.log(`orfoni-hub: dropped the SessionEnd of the Claude Code session ${session.id} ran before the one starting now`);
+			return {};
+		}
 		// Every hook Claude Code sends carries the mode, and one the hub drops changes nothing.
 		const mode = HookPermissionMode.safeParse(body);
 		if (mode.success) this.apply(session, { kind: 'permission_mode', mode: mode.data.permission_mode, at: Date.now() });

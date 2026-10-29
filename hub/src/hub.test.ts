@@ -556,6 +556,24 @@ describe('send', () => {
 		expect(await sent).toMatchObject({ ok: true });
 	});
 
+	// Claude Code runs its SessionEnd hook while it exits, which can take until after the next Claude Code of the session has started.
+	test('a SessionEnd that arrives while the next Claude Code starts comes from the one before, and the new one takes the message', async () => {
+		transcript = recordedConversation();
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await client.ok('stopSession', { sessionId: id });
+		const sent = client.request('send', { sessionId: id, text: 'and now?', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }] });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'other' }));
+		expect(client.state(id)).toBe('offline');
+		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
+		expect(client.state(id)).toBe('idle');
+		await vi.advanceTimersByTimeAsync(2000);
+		await untilRealTime(() => fake.of('submit').length === 1);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #1] and now?' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
 	test('a message to an offline session resumes claude with the message as its prompt', async () => {
 		transcript = recordedConversation();
 		const client = await startHub();
