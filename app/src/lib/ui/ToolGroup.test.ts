@@ -16,6 +16,7 @@ test('a group of tool calls reads like the terminal, in the order the kinds firs
 	expect(describeTools([tool('WebSearch'), tool('WebFetch'), tool('Agent')])).toBe('Searched the web, fetched a page and ran an agent');
 	expect(describeTools([tool('mcp__claude_ai_Google_Drive__search_files'), tool('mcp__claude_ai_Google_Drive__search_files')])).toBe('Used search_files from claude_ai_Google_Drive 2 times');
 	expect(describeTools([tool('LSP')])).toBe('Used LSP');
+	expect(describeTools([tool('ToolSearch'), tool('TaskCreate')])).toBe('Loaded tools and updated the task list');
 });
 
 async function chat(items: ChatItem[]) {

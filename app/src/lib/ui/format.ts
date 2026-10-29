@@ -137,6 +137,7 @@ const toolPhrases: Record<string, (count: number) => string> = {
 	agent: (n) => (n === 1 ? 'ran an agent' : `ran ${n} agents`),
 	tasks: () => 'updated the task list',
 	skill: (n) => (n === 1 ? 'used a skill' : `used ${n} skills`),
+	toolsearch: () => 'loaded tools',
 };
 const toolKinds: Record<string, string> = {
 	Bash: 'command',
@@ -157,6 +158,7 @@ const toolKinds: Record<string, string> = {
 	TaskGet: 'tasks',
 	TodoWrite: 'tasks',
 	Skill: 'skill',
+	ToolSearch: 'toolsearch',
 };
 
 function otherTool(name: string, count: number): string {
