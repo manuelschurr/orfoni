@@ -3,9 +3,10 @@
 	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { createTransports } from './lib/connect';
 	import { HubClient, type Result } from './lib/hub-client.svelte';
+	import { notices, onNoticeClick, showNotice } from './lib/notices';
 	import { Setup } from './lib/setup.svelte';
 	import { loadSettings, saveSettings } from './lib/tauri-transport';
 	import type { TerminalTransport } from './lib/transport';
@@ -46,6 +47,8 @@
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
 
 	let version = $state<string | null>(null);
+	// The sessions as the last look saw them, so a change of state can be told apart from a session that was already in it.
+	let seen = new Map<SessionId, SessionSummary>();
 
 	onMount(() => {
 		if (isTauri()) getVersion().then((installed) => (version = installed), () => {});
@@ -59,12 +62,31 @@
 		const hub = new HubClient(transports.hub);
 		terminalTransport = transports.terminal;
 		client = hub;
+		let stopListening: Promise<() => void> | undefined;
 		if (transports.kind === 'tauri') {
 			const link = transports.hub;
 			setup = new Setup({ loadSettings, saveSettings, connect: (passphrase) => link.connect(passphrase), trustHost: (fingerprint) => link.trustHost(fingerprint) });
 			void setup.start();
+			stopListening = onNoticeClick((id) => {
+				if (hub.sessions.has(id) && hub.selected !== id) void hub.select(id).catch(() => {});
+			});
+			stopListening.catch((error: unknown) => console.warn('notification clicks', error));
 		}
-		return () => hub.close();
+		return () => {
+			hub.close();
+			void stopListening?.then((stop) => stop(), () => {});
+		};
+	});
+
+	// While the window is in the background, Windows tells you about a session that waits on you or has answered.
+	$effect(() => {
+		if (!client) return;
+		const sessions = client.sessions;
+		const chats = untrack(() => client?.chats);
+		const news = notices(seen, sessions, chats);
+		seen = sessions;
+		if (news.length === 0 || !isTauri() || document.hasFocus()) return;
+		for (const notice of news) showNotice(notice).catch((error: unknown) => console.warn('notification', error));
 	});
 
 	$effect(() => {

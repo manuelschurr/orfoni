@@ -22,6 +22,7 @@ log = "0.4"
 tauri = { version = "2.12.5" }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2.8.3"
+tauri-plugin-notification = "2.7.0"
 tauri-plugin-opener = "2.7.2"
 russh = { version = "0.65.0", default-features = false, features = ["ring", "rsa", "flate2"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt", "sync", "time"] }

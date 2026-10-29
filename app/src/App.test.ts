@@ -1,6 +1,6 @@
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { afterEach, beforeAll, expect, test } from 'vitest';
+import { afterEach, beforeAll, expect, test, vi } from 'vitest';
 import App from './App.svelte';
 import type { Settings } from './lib/tauri-transport';
 import { otherSession, spoken, stubDialogs, summary } from './lib/testing';
@@ -39,6 +39,8 @@ afterEach(() => {
 	cleanup();
 	clearMocks();
 	delete globals.isTauri;
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
 });
 
 test('shows the app name', () => {
@@ -133,6 +135,86 @@ test('the window title counts the sessions that need you or have an unread answe
 	hubLine({ type: 'sessionUpdated', session: summary('a5', 'working', { stateSince: 2000 }) });
 	await waitFor(() => expect(document.title).toBe('orfoni'));
 	await waitFor(() => expect(titles.at(-1)).toBe('main: orfoni'));
+});
+
+// Inside Tauri the notification plugin puts its own Notification in place of the browser's, which sends what the app shows to Windows.
+function notifications(): { title: string; body?: string; extra?: Record<string, unknown> }[] {
+	const shown: { title: string; body?: string; extra?: Record<string, unknown> }[] = [];
+	vi.stubGlobal(
+		'Notification',
+		Object.assign(
+			function (title: string, options: { body?: string; extra?: Record<string, unknown> }) {
+				shown.push({ title, body: options.body, extra: options.extra });
+			},
+			{ permission: 'granted' },
+		),
+	);
+	return shown;
+}
+
+function withSessions(sessions: ReturnType<typeof summary>[]) {
+	const hub = { line: (_message: unknown) => {}, click: (_message: unknown) => {} };
+	const commands = inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				hub.line = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string };
+				if (request.method === 'listSessions') hub.line({ type: 'response', id: request.id, ok: true, result: sessions });
+				const opened = sessions.find((session) => session.id === request.sessionId);
+				if (request.method === 'openSession' && opened) hub.line({ type: 'response', id: request.id, ok: true, result: { session: opened, chat: [] } });
+				return null;
+			}
+			case 'plugin:notification|register_listener': {
+				const channel = args.handler as { id: number };
+				let index = 0;
+				hub.click = (message) => globals.__TAURI_INTERNALS__.runCallback(channel.id, { index: index++, message });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	return { hub, commands };
+}
+
+test('in Tauri, while the window is in the background, a session that needs you or has answered shows a notification, and clicking it opens that session', async () => {
+	const shown = notifications();
+	vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+	const { hub, commands } = withSessions([summary('a1', 'working', { title: 'Fix the login page' }), summary('a2', 'working', { title: 'Upgrade vite' })]);
+	render(App);
+	expect(await screen.findByText('Upgrade vite')).toBeTruthy();
+
+	hub.line({ type: 'sessionUpdated', session: summary('a1', 'needs_approval', { title: 'Fix the login page', stateSince: 2000 }) });
+	hub.line({ type: 'sessionUpdated', session: summary('a2', 'answered', { title: 'Upgrade vite', stateSince: 2000 }) });
+	await waitFor(() =>
+		expect(shown).toEqual([
+			{ title: 'Fix the login page', body: 'Claude needs your approval in alpha', extra: { sessionId: 'a1' } },
+			{ title: 'Upgrade vite', body: 'Claude has answered in alpha', extra: { sessionId: 'a2' } },
+		]),
+	);
+	// The taskbar button flashes for a session that cannot go on without you.
+	await waitFor(() => expect(commands.filter((cmd) => cmd === 'plugin:window|request_user_attention')).toHaveLength(1));
+
+	hub.click({ actionId: 'tap', inputValue: null, notification: { id: 7, title: 'Upgrade vite', extra: { sessionId: 'a2' } } });
+	expect(await screen.findByRole('heading', { level: 1, name: 'Upgrade vite' })).toBeTruthy();
+	await waitFor(() => expect(commands).toEqual(expect.arrayContaining(['plugin:window|unminimize', 'plugin:window|set_focus'])));
+});
+
+test('in Tauri, while the window has focus, a session that needs you shows no notification', async () => {
+	const shown = notifications();
+	vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+	const { hub } = withSessions([summary('a1', 'working', { title: 'Fix the login page' })]);
+	render(App);
+	expect(await screen.findByText('Fix the login page')).toBeTruthy();
+
+	hub.line({ type: 'sessionUpdated', session: summary('a1', 'needs_approval', { title: 'Fix the login page', stateSince: 2000 }) });
+	await waitFor(() => expect(document.title).toBe('orfoni (1)'));
+	expect(shown).toEqual([]);
 });
 
 test('a session started while the VPS is low on memory says so until dismissed', async () => {
