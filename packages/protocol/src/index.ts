@@ -16,6 +16,9 @@ export type SessionStateKind = z.infer<typeof SessionStateKind>;
 export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 export type Effort = z.infer<typeof Effort>;
 
+export const TaskItem = z.object({ id: z.string(), subject: z.string(), status: z.enum(['pending', 'in_progress', 'completed']), activeForm: z.string().nullable() });
+export type TaskItem = z.infer<typeof TaskItem>;
+
 export const SessionSummary = z.object({
 	id: SessionId,
 	projectDir: z.string(),
@@ -29,6 +32,9 @@ export const SessionSummary = z.object({
 	// What Claude Code reports for the session, which follows /model and /effort. Effort is a string so a level the CLI adds later still shows.
 	model: z.object({ id: z.string(), name: z.string() }).nullable().default(null),
 	effort: z.string().nullable().default(null),
+	// Claude Code's tasks in creation order, and the line it shows while it works, such as "Running the two-pair test…" with details like "↓ 69.3k tokens".
+	taskList: z.array(TaskItem).nullable().default(null),
+	activity: z.object({ text: z.string(), details: z.array(z.string()) }).nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -51,6 +57,9 @@ export const OtherSession = z.object({
 	background: z.boolean(),
 });
 export type OtherSession = z.infer<typeof OtherSession>;
+
+export const SlashCommand = z.object({ name: z.string(), description: z.string(), argumentHint: z.string(), aliases: z.array(z.string()) });
+export type SlashCommand = z.infer<typeof SlashCommand>;
 
 export const ProjectDir = z.object({ path: z.string(), lastActive: z.number().nullable() });
 export type ProjectDir = z.infer<typeof ProjectDir>;
@@ -137,6 +146,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('hubStatus') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional() }),
+	z.object({ id, method: z.literal('listCommands'), projectDir: z.string().min(1) }),
 	z.object({ id, method: z.literal('listOtherSessions') }),
 	z.object({ id, method: z.literal('openOtherSession'), pid: z.number().int() }),
 	z.object({

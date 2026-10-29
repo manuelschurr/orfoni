@@ -122,7 +122,7 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: null, activity: null };
 }
 
 const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];

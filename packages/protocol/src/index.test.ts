@@ -75,7 +75,7 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null, model: null, effort: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
@@ -86,6 +86,8 @@ describe('milestone 3 fields', () => {
 			memory: { currentBytes: 1_200_000_000, maxBytes: 8_589_934_592, oomKills: 1 },
 			model: null,
 			effort: null,
+			taskList: null,
+			activity: null,
 		};
 		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
 	});
@@ -156,5 +158,22 @@ describe('model and effort', () => {
 	test('a running session changes its model or effort by relaunching', () => {
 		expect(parseClientRequest('{"id":10,"method":"relaunchSession","sessionId":"s1","model":"sonnet"}')).toEqual({ id: 10, method: 'relaunchSession', sessionId: 's1', model: 'sonnet' });
 		expect(parseClientRequest('{"id":11,"method":"relaunchSession","sessionId":"s1","effort":"high"}')).toMatchObject({ effort: 'high' });
+	});
+});
+
+describe('task list, activity, and commands', () => {
+	test('a session carries its task list and what Claude Code says it is doing, both null until there is one', () => {
+		const session = { id: 's1', projectDir: '/p', title: null, claudeSessionId: null, state: 'working', stateSince: 1 };
+		expect(SessionSummary.parse(session)).toMatchObject({ taskList: null, activity: null });
+		const full = {
+			...session,
+			taskList: [{ id: '1', subject: 'Get the laptop tunnel up', status: 'completed', activeForm: null }, { id: '2', subject: 'Test 1: two pairs ranging at once', status: 'in_progress', activeForm: 'Running the two-pair test' }],
+			activity: { text: 'Running the two-pair test…', details: ['↓ 69.3k tokens', 'thinking with high effort'] },
+		};
+		expect(SessionSummary.parse(full)).toMatchObject({ taskList: full.taskList, activity: full.activity });
+	});
+
+	test('the slash commands of a folder are a request', () => {
+		expect(parseClientRequest('{"id":12,"method":"listCommands","projectDir":"/root/projects/swarm"}')).toEqual({ id: 12, method: 'listCommands', projectDir: '/root/projects/swarm' });
 	});
 });

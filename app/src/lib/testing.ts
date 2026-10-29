@@ -30,6 +30,8 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 		memory: null,
 		model: null,
 		effort: null,
+		taskList: null,
+		activity: null,
 		...changes,
 	};
 }
