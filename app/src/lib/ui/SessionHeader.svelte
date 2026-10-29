@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
-	import type { Change, HubClient, Setting } from '../hub-client.svelte';
+	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
 	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, type Choices } from './format';
 	import TaskList from './TaskList.svelte';
 
@@ -9,7 +9,8 @@
 		session,
 		onterminal,
 		onshell,
-	}: { client: HubClient; session: SessionSummary; onterminal: () => void; onshell: (target: string) => void } = $props();
+		onforked,
+	}: { client: HubClient; session: SessionSummary; onterminal: () => void; onshell: (target: string) => void; onforked: (forked: Result<'forkSession'>) => void } = $props();
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let confirm: HTMLDialogElement | undefined = $state();
@@ -67,6 +68,18 @@
 		confirm?.close();
 		await act(() => client.remove(session.id));
 	}
+
+	async function fork(): Promise<void> {
+		busy = true;
+		error = null;
+		try {
+			onforked(await client.fork(session.id, `${title} ⑂`));
+		} catch (e) {
+			error = `Forking failed: ${(e as Error).message}`;
+		} finally {
+			busy = false;
+		}
+	}
 </script>
 
 <header class="header">
@@ -87,6 +100,12 @@
 				act(async () => {
 					onshell(await client.openShell(session.id));
 				})}>New shell</button
+		>
+		<button
+			class="btn"
+			title={takesChanges ? 'Starts a second session that goes on from this point, so the conversation can take two directions at once.' : 'A session forks once Claude has finished the turn.'}
+			disabled={busy || !takesChanges}
+			onclick={fork}>Fork</button
 		>
 		{#if session.state === 'working'}
 			<button class="btn" disabled={busy} onclick={() => act(() => client.interrupt(session.id))}>Interrupt</button>

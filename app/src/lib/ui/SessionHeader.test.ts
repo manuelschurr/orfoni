@@ -16,14 +16,15 @@ const taskList: TaskItem[] = [
 async function header(changes: Parameters<typeof summary>[2]) {
 	const session = summary('s1', 'working', { title: 'Fix the login page', ...changes });
 	const { client, transport } = await connectedClient([session]);
-	const rendered = render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {} });
+	const forked = vi.fn();
+	const rendered = render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {}, onforked: forked });
 	// What the hub broadcasts when Claude Code reports, and the header the app then shows.
 	const report = (reported: Partial<SessionSummary>) => {
 		const next = { ...session, ...reported };
 		transport.push({ type: 'sessionUpdated', session: next });
 		rendered.rerender({ session: next });
 	};
-	return { ...rendered, client, transport, session, report };
+	return { ...rendered, client, transport, session, report, forked };
 }
 
 function select(name: string): HTMLSelectElement {
@@ -254,4 +255,31 @@ test('memory with no limit shows the amount without a meter, and an out-of-memor
 test('Stop says that it ends Claude in this session, on claude.ai too, and how to start it again', async () => {
 	await header({});
 	expect(screen.getByRole('button', { name: 'Stop' }).title).toBe('Ends Claude in this session, which also ends it on claude.ai. Send a message to start it again.');
+});
+
+test('Fork starts a second session that goes on from this point of the conversation, named after this one with the fork mark, and hands it on to be opened', async () => {
+	const { transport, session, forked } = await header({ state: 'answered' });
+	await fireEvent.click(screen.getByRole('button', { name: 'Fork' }));
+	expect(transport.requests('forkSession')).toMatchObject([{ sessionId: session.id, title: 'Fix the login page ⑂' }]);
+	const started = { session: summary('s2', 'idle', { title: 'Fix the login page ⑂' }), needsTrust: false };
+	transport.respond('forkSession', started);
+	await vi.waitFor(() => expect(forked).toHaveBeenCalledWith(started));
+});
+
+test('Fork says what it does, and a session that is working or waits on you forks once Claude has finished', async () => {
+	const { report } = await header({ state: 'idle' });
+	const fork = () => screen.getByRole('button', { name: 'Fork' }) as HTMLButtonElement;
+	expect([fork().disabled, fork().title]).toEqual([false, 'Starts a second session that goes on from this point, so the conversation can take two directions at once.']);
+	report({ state: 'working' });
+	expect([fork().disabled, fork().title]).toEqual([true, 'A session forks once Claude has finished the turn.']);
+	report({ state: 'needs_approval' });
+	expect(fork().disabled).toBe(true);
+});
+
+test('a fork the hub refuses says why', async () => {
+	const { transport, forked } = await header({ state: 'idle' });
+	await fireEvent.click(screen.getByRole('button', { name: 'Fork' }));
+	transport.fail('forkSession', 'not_ready', 'session s1 has nothing to fork yet');
+	expect((await screen.findByRole('alert')).textContent).toBe('Forking failed: session s1 has nothing to fork yet');
+	expect(forked).not.toHaveBeenCalled();
 });

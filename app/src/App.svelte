@@ -3,7 +3,7 @@
 	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { createTransports } from './lib/connect';
 	import { HubClient, type Result } from './lib/hub-client.svelte';
 	import { Setup } from './lib/setup.svelte';
@@ -77,6 +77,12 @@
 		void client?.select(created.id).catch(() => {});
 	}
 
+	// A fork is there to take the conversation in a new direction, so its message box is ready for that.
+	function forked(fork: Result<'forkSession'>): void {
+		started(fork);
+		void tick().then(() => composer?.focus());
+	}
+
 	function openTerminal(target: string, label: string): void {
 		if (!terminals.some((t) => t.target === target)) terminals = [...terminals, { target, label }];
 		shownTerminal = target;
@@ -111,7 +117,7 @@
 		<main>
 			{#if session}
 				{#key session.id}
-					<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} />
+					<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={forked} />
 					<ChatView
 						{client}
 						chat={client.chats.get(session.id)}

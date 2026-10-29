@@ -254,6 +254,10 @@ export class HubClient {
 		return this.request('startSession', params);
 	}
 
+	fork(sessionId: SessionId, title: string): Promise<Result<'forkSession'>> {
+		return this.request('forkSession', { sessionId, title });
+	}
+
 	port(other: OtherSession, settings: Omit<Params<'portSession'>, 'pid' | 'claudeSessionId'>): Promise<Result<'portSession'>> {
 		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, ...settings });
 	}
