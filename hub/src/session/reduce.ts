@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind } from '@orfoni/protocol';
+import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
 import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
+import { trackTasks, type TaskCall } from './tasks.js';
 
 export interface SessionModel {
 	state: SessionStateKind;
@@ -14,7 +15,8 @@ export interface SessionModel {
 	viewing: boolean;
 	chatStartedAt: number | null;
 	summary: Summary | null;
-	tasks: Record<string, boolean>;
+	taskList: TaskItem[];
+	taskCalls: TaskCall[];
 	memory: PaneMemory | null;
 	statusLine: StatusLine | null;
 	lastTurnEndedAt: number | null;
@@ -41,7 +43,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, tasks: {}, memory: null, statusLine: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], taskCalls: [], memory: null, statusLine: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -79,17 +81,6 @@ function readStatusLine(model: SessionModel, statusLine: StatusLine): SessionMod
 	return same ? model : { ...model, statusLine };
 }
 
-export function taskProgress({ tasks }: SessionModel): { done: number; total: number } | null {
-	const done = Object.values(tasks);
-	return done.length === 0 ? null : { done: done.filter(Boolean).length, total: done.length };
-}
-
-function track(model: SessionModel, taskId: string, done: boolean): SessionModel {
-	const known = Object.hasOwn(model.tasks, taskId);
-	if (known && (model.tasks[taskId] || !done)) return model;
-	return { ...model, tasks: { ...model.tasks, [taskId]: done } };
-}
-
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
 	return model.state === state ? model : { ...model, state, stateSince: at };
 }
@@ -118,8 +109,14 @@ function closeRequest(model: SessionModel, requestId: RequestId, outcome: Reques
 	return waiting && openRequests.length === 0 ? enter(next, after, at) : next;
 }
 
+function withTasks(model: SessionModel, event: HookEvent): SessionModel {
+	const { taskList, taskCalls } = trackTasks(model, event);
+	return taskList === model.taskList && taskCalls === model.taskCalls ? model : { ...model, taskList, taskCalls };
+}
+
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
-	const next = step(model, input);
+	const stepped = step(model, input);
+	const next = input.kind === 'hook' ? withTasks(stepped, input.event) : stepped;
 	if (next.chat === model.chat) return next;
 	const chatStartedAt = next.chat.length === 0 ? null : model.chat.length === 0 ? input.at : model.chatStartedAt;
 	return { ...next, chatStartedAt };
@@ -133,7 +130,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			switch (event.type) {
 				case 'session_start': {
 					const fresh = event.source === 'clear' || event.claudeSessionId !== model.claudeSessionId;
-					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, tasks: {} } : model;
+					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, taskList: [], taskCalls: [] } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt':
@@ -206,9 +203,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				case 'notification':
 					return event.kind === 'idle_prompt' && model.state === 'working' ? endTurn(model, at) : model;
 				case 'task_created':
-					return track(model, event.taskId, false);
 				case 'task_completed':
-					return track(model, event.taskId, true);
 				case 'permission_request':
 					return model;
 			}

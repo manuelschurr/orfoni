@@ -27,7 +27,8 @@ import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history
 import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
+import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
 import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
@@ -122,11 +123,11 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: null, activity: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: null };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'tasks', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -213,9 +214,9 @@ export class Hub {
 			state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline' as const, lastTurnEndedAt: stored.lastTurnEndedAt })),
 		);
 		const now = Date.now();
-		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, tasks, lastViewedAt }, index) => {
+		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
 			const { state: kind, lastTurnEndedAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, tasks, lastTurnEndedAt, lastViewedAt, state: kind };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList, lastTurnEndedAt, lastViewedAt, state: kind };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -754,7 +755,7 @@ export class Hub {
 		this.saving = this.saving
 			.then(() =>
 				saveState(path, {
-					version: 2,
+					version: 3,
 					sessions: [...this.sessions.values()].map(({ id, projectDir, title, model, createdAt }) => ({
 						id,
 						projectDir,
@@ -762,7 +763,7 @@ export class Hub {
 						claudeSessionId: model.claudeSessionId,
 						createdAt,
 						summary: model.summary,
-						tasks: model.tasks,
+						taskList: model.taskList,
 						lastTurnEndedAt: model.lastTurnEndedAt,
 						lastViewedAt: model.lastViewedAt,
 					})),

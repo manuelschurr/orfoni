@@ -689,27 +689,66 @@ describe('summaries', () => {
 	});
 });
 
-describe('task progress', () => {
-	test('a session that never creates a task shows no task progress', async () => {
+// The hooks Claude Code 2.1.312 sends for one TaskCreate call and one TaskUpdate call.
+async function createTask(id: SessionId, claude: ClaudeSessionId, taskId: string, subject: string, activeForm: string): Promise<void> {
+	const tool_use_id = `toolu_create_${taskId}`;
+	await hub.hook(id, body('PreToolUse', claude, { tool_use_id, tool_name: 'TaskCreate', tool_input: { subject, description: subject, activeForm } }));
+	await hub.hook(id, body('TaskCreated', claude, { task_id: taskId, task_subject: subject, task_description: subject }));
+	await hub.hook(id, body('PostToolUse', claude, { tool_use_id, tool_name: 'TaskCreate', tool_response: { task: { id: taskId, subject } } }));
+}
+
+async function updateTask(id: SessionId, claude: ClaudeSessionId, input: { taskId: string; status: string }): Promise<void> {
+	const tool_use_id = `toolu_update_${randomUUID()}`;
+	await hub.hook(id, body('PreToolUse', claude, { tool_use_id, tool_name: 'TaskUpdate', tool_input: input }));
+	await hub.hook(id, body('PostToolUse', claude, { tool_use_id, tool_name: 'TaskUpdate', tool_response: { success: true, taskId: input.taskId, updatedFields: ['status'] } }));
+}
+
+describe('task list', () => {
+	test('a session that never creates a task shows no task list and no task progress', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
-		expect(client.session(id)).toMatchObject({ state: 'answered', tasks: null });
+		expect(client.session(id)).toMatchObject({ state: 'answered', taskList: null, tasks: null });
 	});
 
-	test('every client sees the task hooks as done out of total, and /clear takes the progress away', async () => {
+	test('every client sees the task list from the task hooks and the TaskCreate and TaskUpdate calls, with its progress, and /clear takes both away', async () => {
 		const client = await startHub();
 		const other = new TestClient(hub);
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
-		expect(other.session(id)?.tasks).toEqual({ done: 0, total: 2 });
-		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1' }));
-		expect(other.session(id)?.tasks).toEqual({ done: 1, total: 2 });
-		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, tasks: { done: 1, total: 2 } })]);
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await createTask(id, claude, '2', 'Write the summary', 'Writing the summary');
+		await updateTask(id, claude, { taskId: '1', status: 'in_progress' });
+		expect(other.session(id)).toMatchObject({
+			taskList: [
+				{ id: '1', subject: 'Read the notes', status: 'in_progress', activeForm: 'Reading the notes' },
+				{ id: '2', subject: 'Write the summary', status: 'pending', activeForm: 'Writing the summary' },
+			],
+			tasks: { done: 0, total: 2 },
+		});
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		const taskList = [
+			{ id: '1', subject: 'Read the notes', status: 'completed', activeForm: 'Reading the notes' },
+			{ id: '2', subject: 'Write the summary', status: 'pending', activeForm: 'Writing the summary' },
+		];
+		expect(other.session(id)).toMatchObject({ taskList, tasks: { done: 1, total: 2 } });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, taskList, tasks: { done: 1, total: 2 } })]);
 		await hub.hook(id, body('SessionStart', '9b0c5d0e-0000-4000-8000-000000000001', { source: 'clear' }));
-		expect(other.session(id)?.tasks).toBeNull();
+		expect(other.session(id)).toMatchObject({ taskList: null, tasks: null });
+	});
+
+	test('a task hook or update that repeats what the list says tells no client', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		const updates = () => client.messages.filter((message) => message.type === 'sessionUpdated').length;
+		const before = updates();
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		expect(updates()).toBe(before);
 	});
 });
 
@@ -1396,19 +1435,54 @@ describe('read state and the state file', () => {
 		expect(await again.ok('listSessions', {})).toEqual([expect.objectContaining({ id, state: 'idle' })]);
 	});
 
-	test('summaries and task progress survive a restart', async () => {
+	test('summaries and the task list survive a restart', async () => {
 		apiKey = { key: 'sk-test' };
 		const client = await startHub();
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
-		await hub.hook(id, body('TaskCompleted', claude, { task_id: '2' }));
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await createTask(id, claude, '2', 'Write the summary', 'Writing the summary');
+		await updateTask(id, claude, { taskId: '1', status: 'in_progress' });
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '2', task_subject: 'Write the summary' }));
 		await hub.hook(id, body('Stop', claude));
 		await untilRealTime(() => client.session(id)?.summary !== null);
 		const { summary } = client.session(id)!;
 		await saved((state) => state.sessions[0]?.summary !== null);
 		const after = await restart([`orfoni-${id}`]);
-		expect(await after.ok('listSessions', {})).toEqual([expect.objectContaining({ id, summary, tasks: { done: 1, total: 2 } })]);
+		expect(await after.ok('listSessions', {})).toEqual([
+			expect.objectContaining({
+				id,
+				summary,
+				taskList: [
+					{ id: '1', subject: 'Read the notes', status: 'in_progress', activeForm: 'Reading the notes' },
+					{ id: '2', subject: 'Write the summary', status: 'completed', activeForm: 'Writing the summary' },
+				],
+				tasks: { done: 1, total: 2 },
+			}),
+		]);
+	});
+
+	test('a version 2 state file from before task lists brings back each session with its task progress', async () => {
+		writeFileSync(
+			join(dir, 'state.json'),
+			JSON.stringify({
+				version: 2,
+				sessions: [{ id: 'v2', projectDir: PROJECT, title: null, claudeSessionId: '9a6c5b1e-0000-4000-8000-00000000000c', createdAt: T0 - 3_600_000, summary: null, tasks: { '1': true, '2': false }, lastTurnEndedAt: null, lastViewedAt: null }],
+				summaries: { day: '2026-10-26', requests: 3, spentUsd: 0.001 },
+			}),
+		);
+		const client = await startHub();
+		expect(await client.ok('listSessions', {})).toEqual([
+			expect.objectContaining({
+				id: 'v2',
+				state: 'offline',
+				taskList: [
+					{ id: '1', subject: 'Task #1', status: 'completed', activeForm: null },
+					{ id: '2', subject: 'Task #2', status: 'pending', activeForm: null },
+				],
+				tasks: { done: 1, total: 2 },
+			}),
+		]);
+		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
 	});
 
 	test("the day's summary spend survives a restart", async () => {
@@ -1446,7 +1520,7 @@ describe('read state and the state file', () => {
 		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
 		await hub.hook('m1-running', body('UserPromptSubmit', running, { prompt: 'hi' }));
 		await hub.hook('m1-running', body('Stop', running));
-		await saved((state) => state.version === 2 && state.sessions.length === 2);
+		await saved((state) => state.version === 3 && state.sessions.length === 2);
 	});
 });
 
