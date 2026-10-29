@@ -20,6 +20,8 @@ export interface SessionModel {
 	pendingTaskCalls: PendingTaskCall[];
 	memory: PaneMemory | null;
 	statusLine: StatusLine | null;
+	// The status line Claude Code last reported, kept after it has exited, so the session starts again on the model and effort it ran on.
+	ranOn: StatusLine | null;
 	activity: Activity | null;
 	// The mode Claude Code last reported in a hook, so a relaunch or a fork keeps it.
 	permissionMode: PermissionMode | null;
@@ -50,7 +52,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, activity: null, permissionMode: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -85,7 +87,7 @@ function readMemory(model: SessionModel, memory: PaneMemory | null, at: number):
 function readStatusLine(model: SessionModel, statusLine: StatusLine): SessionModel {
 	const kept = model.statusLine;
 	const same = kept !== null && kept.model.id === statusLine.model.id && kept.model.name === statusLine.model.name && kept.effort === statusLine.effort;
-	return same ? model : { ...model, statusLine };
+	return same ? model : { ...model, statusLine, ranOn: statusLine };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {

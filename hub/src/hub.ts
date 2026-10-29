@@ -164,7 +164,10 @@ function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
 }
 
-function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientRequest, { method: 'startSession' | 'portSession' }>, 'model' | 'effort' | 'permissionMode'>): string[] {
+// What a start of Claude Code runs on, each through the flag of the same name.
+type ClaudeSettings = Pick<Extract<ClientRequest, { method: 'startSession' }>, 'model' | 'effort' | 'permissionMode'>;
+
+function claudeOptions({ model, effort, permissionMode }: ClaudeSettings): string[] {
 	return [
 		...(model ? ['--model', model] : []),
 		...(effort ? ['--effort', effort] : []),
@@ -173,14 +176,14 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 }
 
 // The model and effort Claude Code last reported and the permission mode its hooks last carried, so a restart or a fork goes on the way the session ran.
-function reportedOptions(session: Session, { model, effort, permissionMode }: { model?: string; effort?: Effort; permissionMode?: PermissionMode } = {}): string[] {
-	const reported = session.model.statusLine;
+function reportedSettings(session: Session, { model, effort, permissionMode }: ClaudeSettings = {}): ClaudeSettings {
+	const reported = session.model.statusLine ?? session.model.ranOn;
 	const reportedEffort = Effort.safeParse(reported?.effort);
-	return claudeOptions({
+	return {
 		model: model ?? reported?.model.id,
 		effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined),
 		permissionMode: permissionMode ?? session.model.permissionMode ?? undefined,
-	});
+	};
 }
 
 function summary(session: Session): SessionSummary {
@@ -453,7 +456,7 @@ export class Hub {
 		request: Extract<ClientRequest, { method: 'startSession' }>,
 	): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
-		return this.withMemoryWarning(await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], claudeOptions(request), { prompt: request.prompt }));
+		return this.withMemoryWarning(await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], request, { prompt: request.prompt }));
 	}
 
 	// Claude Code copies the conversation into the fork's own transcript under the ID --session-id names, so the two sessions go on from the same point.
@@ -465,7 +468,7 @@ export class Hub {
 		const name = title ?? (original.title ? `${original.title} ⑂` : null);
 		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
 		const identity = [`--resume=${from}`, '--fork-session', `--session-id=${claudeSessionId}`];
-		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, reportedOptions(original), { inherited: { from, messages }, prompt }));
+		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, reportedSettings(original), { inherited: { from, messages }, prompt }));
 	}
 
 	private async rename(session: Session, title: string): Promise<{ session: SessionSummary }> {
@@ -523,7 +526,7 @@ export class Hub {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// The registry name becomes the orfoni title, which the start of Claude Code carries as its name.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], claudeOptions(request), { onFailure: 'keep' });
+			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], request, { onFailure: 'keep' });
 			await this.refreshOthers();
 			return ported;
 		} finally {
@@ -535,14 +538,14 @@ export class Hub {
 	private async relaunch(session: Session, { model, effort, permissionMode }: Extract<ClientRequest, { method: 'relaunchSession' }>): Promise<{ session: SessionSummary }> {
 		if (model === undefined && effort === undefined && permissionMode === undefined) throw new HubError('bad_message', 'relaunchSession needs a model, an effort, or a permission mode');
 		if (!RELAUNCHABLE.has(session.model.state)) throw new HubError('not_ready', `session ${session.id} is ${session.model.state}`);
-		const options = reportedOptions(session, { model, effort, permissionMode });
+		const settings = reportedSettings(session, { model, effort, permissionMode });
 		const pane = (await this.options.tmux.listSessions()).find((candidate) => candidate.name === tmuxName(session.id) && !candidate.paneDead);
 		await this.killTmux((name) => name === tmuxName(session.id));
 		if (pane && !(await this.ended(pane.panePid))) {
 			throw new HubError('internal', `Claude Code (process ${pane.panePid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after its tmux session ended, so orfoni started nothing`);
 		}
 		this.paneExited(session);
-		await this.launch(session, await this.resumeIdentity(session), options);
+		await this.launch(session, await this.resumeIdentity(session), settings);
 		return { session: summary(session) };
 	}
 
@@ -560,7 +563,7 @@ export class Hub {
 		title: string | null,
 		claudeSessionId: ClaudeSessionId,
 		identity: string[],
-		options: string[],
+		settings: ClaudeSettings,
 		{ onFailure = 'drop', inherited, prompt }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited']; prompt?: string } = {},
 	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const now = Date.now();
@@ -568,7 +571,7 @@ export class Hub {
 		const needsTrust = await this.needsTrust(projectDir);
 		this.sessions.set(session.id, session);
 		try {
-			await this.launch(session, identity, options, prompt);
+			await this.launch(session, identity, settings, prompt);
 		} catch (error) {
 			if (onFailure === 'drop') {
 				this.sessions.delete(session.id);
@@ -597,21 +600,23 @@ export class Hub {
 		return join(this.options.stateDir, 'settings', `${id}.json`);
 	}
 
-	private async launch(session: Session, identity: string[], options: string[], prompt?: string): Promise<void> {
-		const settings = this.settingsPath(session.id);
+	private async launch(session: Session, identity: string[], settings: ClaudeSettings, prompt?: string): Promise<void> {
+		const file = this.settingsPath(session.id);
 		const statusLine = await originalStatusLine(session.projectDir, this.options.home);
-		await writePrivate(settings, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
+		await writePrivate(file, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		// Every start of Claude Code carries the title as its name, so a rename also reaches a Claude Code that was not running.
 		const name = session.title ? ['--name', session.title] : [];
 		session.namePending = false;
 		try {
-			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', settings, ...options, ...name, ...(prompt ? ['--', prompt] : [])]);
+			await this.options.tmux.newSession(tmuxName(session.id), session.projectDir, this.sessionEnv(session.id), ['claude', ...identity, '--settings', file, ...claudeOptions(settings), ...name, ...(prompt ? ['--', prompt] : [])]);
 		} catch (error) {
 			session.claude = { kind: 'exited' };
 			throw error;
 		}
 		if (session.claude.kind === 'launching') session.claude = { kind: 'launching', createdAt: Date.now() };
+		// Claude Code reports its mode only with its next hook, which may come with the next prompt, so the mode this start names stands until then.
+		if (settings.permissionMode) this.apply(session, { kind: 'permission_mode', mode: settings.permissionMode, at: Date.now() });
 	}
 
 	private sessionEnv(id: SessionId): Record<string, string> {
@@ -702,7 +707,7 @@ export class Hub {
 		if (session.claude.kind === 'exited') {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
-			await this.launch(session, await this.resumeIdentity(session), [], text);
+			await this.launch(session, await this.resumeIdentity(session), reportedSettings(session), text);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
 		}

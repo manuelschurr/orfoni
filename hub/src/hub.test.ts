@@ -309,7 +309,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan' },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1314,6 +1314,29 @@ describe('relaunchSession', () => {
 		await client.ok('relaunchSession', { sessionId: id, permissionMode: 'auto' });
 		expect(fake.of('newSession').at(-1)?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--model', 'claude-haiku-5-5', '--effort', 'low', '--permission-mode', 'auto']);
 	});
+
+	// Claude Code reports the mode with its hooks, the first of which comes with the next prompt, so the mode its start names stands until then.
+	test('the mode a start of Claude Code names shows at once, and a hook that reports another one replaces it', async () => {
+		const client = await startHub();
+		const { id, claude } = await idle(client);
+		await client.ok('relaunchSession', { sessionId: id, permissionMode: 'auto' });
+		expect(client.session(id)).toMatchObject({ permissionMode: 'auto' });
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi', permission_mode: 'default' }));
+		expect(client.session(id)).toMatchObject({ permissionMode: 'default' });
+		const { started } = await start(client, { permissionMode: 'plan' });
+		expect(started.session).toMatchObject({ permissionMode: 'plan' });
+	});
+
+	test('a message to a session whose Claude Code has ended starts it again on the model, effort and mode it ran on', async () => {
+		const client = await startHub();
+		const { id, claude, settings } = await idle(client);
+		fake.live.delete(`orfoni-${id}`);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(client.state(id)).toBe('offline');
+		void client.request('send', { sessionId: id, text: 'go on' });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect(fake.of('newSession').at(-1)?.[3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings, '--model', 'claude-haiku-5-5', '--effort', 'low', '--permission-mode', 'plan', '--', 'go on']);
+	});
 });
 
 describe('forkSession', () => {
@@ -1535,7 +1558,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto' },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
