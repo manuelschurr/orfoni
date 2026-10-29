@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { query, type SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
 const EXIT_GRACE_MS = 5_000;
+const KILL_WAIT_MS = 2_000;
+const EXIT_CHECK_INTERVAL_MS = 25;
 
 function rejectsOnAbort(signal: AbortSignal): Promise<never> {
 	return new Promise((_, reject) => {
@@ -39,23 +41,25 @@ export async function listCommands(projectDir: string, signal: AbortSignal): Pro
 	} finally {
 		done.abort();
 		session.close();
-		if (child) await ended(child, EXIT_GRACE_MS);
+		if (child?.pid !== undefined) await ended(child.pid, EXIT_GRACE_MS);
 	}
 }
 
-// A spike saw the SDK's Claude Code outlive abort(), so the listing waits for it to exit and kills its process group if it does not.
-export async function ended(child: ChildProcess, graceMs: number): Promise<void> {
-	const { pid } = child;
-	if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-	const exited = once(child, 'exit');
-	const timer = setTimeout(() => {
-		try {
-			process.kill(-pid, 'SIGKILL');
-		} catch (error) {
-			// The group can be gone by the time the timer fires.
-			if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-		}
-	}, graceMs);
-	await exited;
-	clearTimeout(timer);
+function signalGroup(group: number, signal: NodeJS.Signals | 0): boolean {
+	try {
+		process.kill(-group, signal);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+		throw error;
+	}
+}
+
+// A spike saw the SDK's Claude Code outlive abort(), so the listing waits until Claude Code and every process it started in its group have ended, and kills what is left after the grace period.
+export async function ended(group: number, graceMs: number): Promise<void> {
+	const killAt = Date.now() + graceMs;
+	while (signalGroup(group, 0) && Date.now() < killAt + KILL_WAIT_MS) {
+		if (Date.now() >= killAt) signalGroup(group, 'SIGKILL');
+		await delay(EXIT_CHECK_INTERVAL_MS);
+	}
 }

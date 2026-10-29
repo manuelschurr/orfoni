@@ -12,37 +12,38 @@ function alive(pid: number): boolean {
 	}
 }
 
-async function until(check: () => boolean): Promise<void> {
-	for (let tries = 0; tries < 100 && !check(); tries++) await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(check()).toBe(true);
+async function started(command: string): Promise<{ leader: number; child: number }> {
+	const shell = spawn('sh', ['-c', command], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+	const [line] = (await once(shell.stdout!, 'data')) as [Buffer];
+	return { leader: shell.pid!, child: Number(line.toString().trim()) };
 }
 
 describe('ended', () => {
 	test('a process that ignores SIGTERM is killed after the grace period, together with the process it started', async () => {
-		const child = spawn('sh', ['-c', 'trap "" TERM; sleep 30 & echo $!; wait'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
-		const [line] = (await once(child.stdout!, 'data')) as [Buffer];
-		const started = Number(line.toString().trim());
-		child.kill('SIGTERM');
+		const { leader, child } = await started('trap "" TERM; sleep 30 & echo $!; wait');
+		process.kill(leader, 'SIGTERM');
 		const since = performance.now();
-		await ended(child, 300);
+		await ended(leader, 300);
 		expect(performance.now() - since).toBeGreaterThanOrEqual(290);
-		expect(child.signalCode).toBe('SIGKILL');
-		await until(() => !alive(started));
+		expect([alive(leader), alive(child)]).toEqual([false, false]);
 	});
 
-	test('a process that exits by itself within the grace period is not killed', async () => {
-		const child = spawn('sh', ['-c', 'sleep 0.1'], { detached: true, stdio: 'ignore' });
-		await ended(child, 5000);
-		expect([child.exitCode, child.signalCode]).toEqual([0, null]);
+	test('a process that exits while a process it started keeps running ends only once that one is killed', async () => {
+		const { leader, child } = await started('sleep 30 & echo $!');
+		const since = performance.now();
+		await ended(leader, 300);
+		expect(performance.now() - since).toBeGreaterThanOrEqual(290);
+		expect(alive(child)).toBe(false);
 	});
 
-	test('a process that never started, or that has exited already, has ended', async () => {
-		const missing = spawn('/nonexistent/claude', [], { detached: true, stdio: 'ignore' });
-		missing.on('error', () => {});
-		await ended(missing, 5000);
-		const exited = spawn('sh', ['-c', 'exit 3'], { detached: true, stdio: 'ignore' });
-		await once(exited, 'exit');
-		await ended(exited, 5000);
-		expect(exited.exitCode).toBe(3);
+	test('a process that exits with everything it started within the grace period is not waited for longer, and one that has ended is not waited for', async () => {
+		const { leader, child } = await started('sleep 0.2 & echo $!; wait');
+		const since = performance.now();
+		await ended(leader, 5000);
+		expect(performance.now() - since).toBeLessThan(2000);
+		expect([alive(leader), alive(child)]).toEqual([false, false]);
+		const again = performance.now();
+		await ended(leader, 5000);
+		expect(performance.now() - again).toBeLessThan(100);
 	});
 });
