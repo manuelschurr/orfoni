@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { SlashCommand as ClaudeCommand, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -118,11 +118,36 @@ const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
 });
 
-// Claude Code trusts a folder when the folder or one above it accepted the trust dialog, whatever it recorded for the folder itself.
-function trusts({ projects }: z.infer<typeof ClaudeConfig>, projectDir: string): boolean {
+// Claude Code 2.1.312 trusts a folder when the folder or one above it, up to the git root, accepted the trust dialog, whatever it recorded for the folder itself, and trusts a git worktree whose main checkout it trusts.
+async function trusts({ projects }: z.infer<typeof ClaudeConfig>, projectDir: string): Promise<boolean> {
+	const accepted = (dir: string) => projects?.[dir]?.hasTrustDialogAccepted === true;
+	const root = await gitRoot(resolve(projectDir));
+	if (root !== null && accepted(await mainCheckout(root))) return true;
 	for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
-		if (projects?.[dir]?.hasTrustDialogAccepted === true) return true;
-		if (dirname(dir) === dir) return false;
+		if (accepted(dir)) return true;
+		if (dir === root || dirname(dir) === dir) return false;
+	}
+}
+
+async function gitRoot(dir: string): Promise<string | null> {
+	for (; ; dir = dirname(dir)) {
+		if (await stat(join(dir, '.git')).then((git) => git.isDirectory() || git.isFile(), () => false)) return dir;
+		if (dirname(dir) === dir) return null;
+	}
+}
+
+// A worktree's .git file names its folder in the main checkout's .git/worktrees, whose commondir leads to that .git and whose gitdir names the worktree's .git back, so a .git file a clone carries cannot borrow a checkout's trust.
+async function mainCheckout(root: string): Promise<string> {
+	try {
+		const gitdir = /^gitdir:\s*(.+)$/m.exec(await readFile(join(root, '.git'), 'utf8'))?.[1];
+		if (gitdir === undefined) return root;
+		const worktree = resolve(root, gitdir.trim());
+		const common = resolve(worktree, (await readFile(join(worktree, 'commondir'), 'utf8')).trim());
+		const back = resolve(worktree, (await readFile(join(worktree, 'gitdir'), 'utf8')).trim());
+		if (dirname(worktree) !== join(common, 'worktrees') || (await realpath(back)) !== (await realpath(join(root, '.git')))) return root;
+		return basename(common) === '.git' ? dirname(common) : common;
+	} catch {
+		return root;
 	}
 }
 
@@ -509,7 +534,7 @@ export class Hub {
 	private async needsTrust(projectDir: string): Promise<boolean> {
 		try {
 			const config = ClaudeConfig.safeParse(JSON.parse(await readFile(this.options.claudeConfigPath, 'utf8')));
-			return !(config.success && trusts(config.data, projectDir));
+			return !(config.success && (await trusts(config.data, projectDir)));
 		} catch {
 			return true;
 		}

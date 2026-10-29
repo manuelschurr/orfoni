@@ -344,6 +344,40 @@ describe('startSession', () => {
 		expect((await start(client, { projectDir: '/workshop' })).started.needsTrust).toBe(true);
 	});
 
+	// Claude Code 2.1.312 looks for a trusted folder up to the git root and no further, so a clone in a trusted folder asks again.
+	test('a git repository in a folder Claude Code trusts needs trust, below its root too, until the repository is trusted', async () => {
+		const repo = join(dir, 'code', 'repo');
+		mkdirSync(join(repo, '.git'), { recursive: true });
+		mkdirSync(join(repo, 'src'));
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [join(dir, 'code')]: { hasTrustDialogAccepted: true } } }));
+		const client = await startHub();
+		expect((await start(client, { projectDir: repo })).started.needsTrust).toBe(true);
+		expect((await start(client, { projectDir: join(repo, 'src') })).started.needsTrust).toBe(true);
+		expect((await start(client, { projectDir: join(dir, 'code') })).started.needsTrust).toBe(false);
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [repo]: { hasTrustDialogAccepted: true } } }));
+		expect((await start(client, { projectDir: join(repo, 'src') })).started.needsTrust).toBe(false);
+	});
+
+	test('a git worktree is trusted when its main checkout is, wherever the worktree lives', async () => {
+		const main = join(dir, 'main');
+		const worktree = join(dir, 'elsewhere', 'feature');
+		const gitdir = join(main, '.git', 'worktrees', 'feature');
+		mkdirSync(gitdir, { recursive: true });
+		mkdirSync(worktree, { recursive: true });
+		writeFileSync(join(gitdir, 'commondir'), '../..\n');
+		writeFileSync(join(gitdir, 'gitdir'), `${join(worktree, '.git')}\n`);
+		writeFileSync(join(worktree, '.git'), `gitdir: ${gitdir}\n`);
+		const client = await startHub();
+		expect((await start(client, { projectDir: worktree })).started.needsTrust).toBe(true);
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [main]: { hasTrustDialogAccepted: true } } }));
+		expect((await start(client, { projectDir: worktree })).started.needsTrust).toBe(false);
+		// A cloned repository can carry a .git file that names that worktree's folder, but the folder names the real worktree back.
+		const clone = join(dir, 'clone');
+		mkdirSync(clone);
+		writeFileSync(join(clone, '.git'), `gitdir: ${gitdir}\n`);
+		expect((await start(client, { projectDir: clone })).started.needsTrust).toBe(true);
+	});
+
 	test('every connected client learns about the new session', async () => {
 		const client = await startHub();
 		const other = new TestClient(hub);
@@ -1800,6 +1834,14 @@ describe('listCommands', () => {
 		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [untrusted]: { hasTrustDialogAccepted: true } } }));
 		void client.request('listCommands', { projectDir: untrusted });
 		await untilRealTime(() => listings.length === 1);
+	});
+
+	test('a git repository in a folder Claude Code trusts is refused without starting Claude Code, since Claude Code asks for trust again there', async () => {
+		const client = await startHub();
+		const repo = trustedFolder('repo');
+		mkdirSync(join(repo, '.git'));
+		expect(await client.request('listCommands', { projectDir: repo })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining(`does not trust ${repo}`) } });
+		expect(listings).toEqual([]);
 	});
 });
 
