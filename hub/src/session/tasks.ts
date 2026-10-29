@@ -46,6 +46,10 @@ function same(a: TaskItem, b: TaskItem): boolean {
 	return a.id === b.id && a.subject === b.subject && a.status === b.status && a.activeForm === b.activeForm;
 }
 
+export function sameTaskList(a: TaskItem[], b: TaskItem[]): boolean {
+	return a.length === b.length && a.every((task, index) => same(task, b[index]!));
+}
+
 function upsert(list: TaskItem[], id: string, change: (task: TaskItem | undefined) => TaskItem): TaskItem[] {
 	const index = list.findIndex((task) => task.id === id);
 	if (index === -1) return [...list, change(undefined)];

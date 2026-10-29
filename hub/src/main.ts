@@ -31,6 +31,7 @@ async function daemon(): Promise<void> {
 		},
 		systemRoot: '/',
 		claudeSessionsDir: join(homedir(), '.claude/sessions'),
+		claudeTasksDir: join(homedir(), '.claude/tasks'),
 		kill: (pid, signal) => process.kill(pid, signal),
 		listCommands,
 		taskTools: process.env.ORFONI_TASK_TOOLS !== '0',

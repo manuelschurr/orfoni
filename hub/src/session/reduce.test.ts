@@ -447,6 +447,15 @@ describe('reduce', () => {
 		expect(taskProgress(cleared)).toBeNull();
 	});
 
+	test("Claude Code's task files replace the task list, names and all, but a read of the files of a conversation /clear ended changes nothing", () => {
+		const read = (claudeSessionId: ClaudeSessionId, at: number): SessionInput => ({ kind: 'task_files', claudeSessionId, taskList: [{ id: '3', subject: 'Ship it', status: 'in_progress', activeForm: 'Shipping' }], at });
+		const model = run(started, prompted, ...updateTask({ taskId: '3', status: 'in_progress' }), read(first, 4));
+		expect(model.taskList).toEqual([{ id: '3', subject: 'Ship it', status: 'in_progress', activeForm: 'Shipping' }]);
+		expect(reduce(model, read(first, 5))).toBe(model);
+		const cleared = run(started, prompted, ...updateTask({ taskId: '3', status: 'in_progress' }), hook('session_start', { source: 'clear' }, 4, second));
+		expect(reduce(cleared, read(first, 5))).toBe(cleared);
+	});
+
 	const MB = 1024 * 1024;
 	const reading = (megabytes: number, oomKills = 0) => ({ currentBytes: megabytes * MB, maxBytes: 8192 * MB, oomKills });
 	const memoryRead = (megabytes: number | null, oomKills = 0, at = 10): SessionInput => ({ kind: 'memory_read', memory: megabytes === null ? null : reading(megabytes, oomKills), at });

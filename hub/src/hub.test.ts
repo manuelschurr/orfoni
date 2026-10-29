@@ -238,6 +238,7 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 		summaries: { model: 'claude-haiku-5-5', apiKey: async () => apiKey, client: () => summaryClient },
 		systemRoot: join(dir, 'root'),
 		claudeSessionsDir: join(dir, 'home/.claude/sessions'),
+		claudeTasksDir: join(dir, 'home/.claude/tasks'),
 		kill: (pid, signal) => {
 			kills.push([pid, signal]);
 			endOther(pid);
@@ -763,6 +764,15 @@ async function updateTask(id: SessionId, claude: ClaudeSessionId, input: { taskI
 	await hub.hook(id, body('PostToolUse', claude, { tool_use_id, tool_name: 'TaskUpdate', tool_response: { success: true, taskId: input.taskId, updatedFields: ['status'] } }));
 }
 
+// Claude Code 2.1.312 keeps a session's task list as one file per task, and clears a finished list by deleting the files.
+function writeTasks(claude: string, tasks: { id: string; subject: string; activeForm: string; status: string }[]): void {
+	const folder = join(dir, 'home/.claude/tasks', claude);
+	mkdirSync(folder, { recursive: true });
+	writeFileSync(join(folder, '.lock'), '');
+	for (const name of readdirSync(folder)) if (name.endsWith('.json')) rmSync(join(folder, name));
+	for (const task of tasks) writeFileSync(join(folder, `${task.id}.json`), JSON.stringify({ ...task, description: task.subject, blocks: [], blockedBy: [] }, null, 2));
+}
+
 describe('task list', () => {
 	test('a session that never creates a task shows no task list and no task progress', async () => {
 		const client = await startHub();
@@ -809,6 +819,47 @@ describe('task list', () => {
 		await updateTask(id, claude, { taskId: '1', status: 'completed' });
 		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Read the notes' }));
 		expect(updates()).toBe(before);
+	});
+
+	test("once a task call ends the list is what Claude Code's task files say, so a task the hub never saw created has its name", async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		writeTasks(claude, [
+			{ id: '1', subject: 'Read the notes', activeForm: 'Reading the notes', status: 'completed' },
+			{ id: '2', subject: 'Write the summary', activeForm: 'Writing the summary', status: 'in_progress' },
+		]);
+		await updateTask(id, claude, { taskId: '2', status: 'in_progress' });
+		await untilRealTime(() => client.session(id)?.taskList?.length === 2);
+		expect(client.session(id)).toMatchObject({
+			taskList: [
+				{ id: '1', subject: 'Read the notes', status: 'completed', activeForm: 'Reading the notes' },
+				{ id: '2', subject: 'Write the summary', status: 'in_progress', activeForm: 'Writing the summary' },
+			],
+			tasks: { done: 1, total: 2 },
+		});
+	});
+
+	test('a finished list that Claude Code clears five seconds later, without a hook, leaves orfoni at the next pane check', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		writeTasks(claude, [{ id: '1', subject: 'Read the notes', activeForm: 'Reading the notes', status: 'completed' }]);
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		await hub.hook(id, body('Stop', claude));
+		await untilRealTime(() => client.session(id)?.tasks?.done === 1);
+		writeTasks(claude, []);
+		await vi.advanceTimersByTimeAsync(5000);
+		await untilRealTime(() => client.session(id)?.taskList === null);
+		expect(client.session(id)).toMatchObject({ taskList: null, tasks: null });
+	});
+
+	test('a session that starts on a conversation with a task list, such as one orfoni takes over, shows that list', async () => {
+		const client = await startHub();
+		const { id, claude } = await start(client);
+		writeTasks(claude, [{ id: '4', subject: 'Port the parser', activeForm: 'Porting the parser', status: 'in_progress' }]);
+		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
+		await untilRealTime(() => client.session(id)?.taskList != null);
+		expect(client.session(id)).toMatchObject({ taskList: [{ id: '4', subject: 'Port the parser', status: 'in_progress', activeForm: 'Porting the parser' }], tasks: { done: 0, total: 1 } });
 	});
 });
 
@@ -1651,6 +1702,33 @@ describe('read state and the state file', () => {
 			}),
 		]);
 		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
+	});
+
+	test("at start each session's task list comes from Claude Code's task files, which name the tasks a version 2 state file only counted", async () => {
+		const claudeSessionId = '9a6c5b1e-0000-4000-8000-00000000000c';
+		writeFileSync(
+			join(dir, 'state.json'),
+			JSON.stringify({
+				version: 2,
+				sessions: [{ id: 'v2', projectDir: PROJECT, title: null, claudeSessionId, createdAt: T0 - 3_600_000, summary: null, tasks: { '1': true, '2': false }, lastTurnEndedAt: null, lastViewedAt: null }],
+				summaries: { day: '2026-10-26', requests: 3, spentUsd: 0.001 },
+			}),
+		);
+		writeTasks(claudeSessionId, [
+			{ id: '1', subject: 'Read the notes', activeForm: 'Reading the notes', status: 'completed' },
+			{ id: '2', subject: 'Write the summary', activeForm: 'Writing the summary', status: 'pending' },
+		]);
+		const client = await startHub();
+		expect(await client.ok('listSessions', {})).toEqual([
+			expect.objectContaining({
+				id: 'v2',
+				taskList: [
+					{ id: '1', subject: 'Read the notes', status: 'completed', activeForm: 'Reading the notes' },
+					{ id: '2', subject: 'Write the summary', status: 'pending', activeForm: 'Writing the summary' },
+				],
+				tasks: { done: 1, total: 2 },
+			}),
+		]);
 	});
 
 	test("the day's summary spend survives a restart", async () => {

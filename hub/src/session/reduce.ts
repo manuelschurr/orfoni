@@ -5,7 +5,7 @@ import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
-import { trackTasks, type PendingTaskCall } from './tasks.js';
+import { sameTaskList, trackTasks, type PendingTaskCall } from './tasks.js';
 
 export interface SessionModel {
 	state: SessionStateKind;
@@ -36,7 +36,8 @@ export type SessionInput =
 	| { kind: 'summarized'; summary: Summary; at: number }
 	| { kind: 'memory_read'; memory: PaneMemory | null; at: number }
 	| { kind: 'status_line'; statusLine: StatusLine; at: number }
-	| { kind: 'activity'; activity: Activity | null; at: number };
+	| { kind: 'activity'; activity: Activity | null; at: number }
+	| { kind: 'task_files'; claudeSessionId: ClaudeSessionId; taskList: TaskItem[]; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -242,5 +243,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return readStatusLine(model, input.statusLine);
 		case 'activity':
 			return JSON.stringify(input.activity) === JSON.stringify(model.activity) ? model : { ...model, activity: input.activity };
+		// A read that started before /clear names the conversation that ended.
+		case 'task_files':
+			return input.claudeSessionId !== model.claudeSessionId || sameTaskList(input.taskList, model.taskList) ? model : { ...model, taskList: input.taskList };
 	}
 }

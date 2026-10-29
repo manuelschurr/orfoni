@@ -35,6 +35,7 @@ import { hookSettings, originalStatusLine } from './settings.js';
 import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
+import { readTaskFiles } from './task-files.js';
 import { sessionTarget, type Tmux } from './tmux.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -69,6 +70,7 @@ export interface HubOptions {
 	summaries: { model: string; apiKey(): Promise<ApiKey>; client(apiKey: string): SummaryClient };
 	systemRoot: string;
 	claudeSessionsDir: string;
+	claudeTasksDir: string;
 	kill(pid: number, signal: NodeJS.Signals): void;
 	// Settles only once every process it started has ended.
 	listCommands(projectDir: string, signal: AbortSignal): Promise<ClaudeCommand[]>;
@@ -149,6 +151,11 @@ async function mainCheckout(root: string): Promise<string> {
 	} catch {
 		return root;
 	}
+}
+
+// The hooks name a task without the rest of the list, and Claude Code writes a task's file before the PostToolUse of the call that changed it.
+function readsTasks(event: HookEvent): boolean {
+	return event.type === 'session_start' || event.type === 'stop' || (event.type === 'tool_end' && (event.name === 'TaskCreate' || event.name === 'TaskUpdate'));
 }
 
 function tmuxName(id: SessionId): string {
@@ -277,10 +284,11 @@ export class Hub {
 		const restored = await Promise.all(
 			state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline' as const, lastTurnEndedAt: stored.lastTurnEndedAt })),
 		);
+		const taskFiles = await Promise.all(state.sessions.map((stored) => readTaskFiles(options.claudeTasksDir, stored.claudeSessionId)));
 		const now = Date.now();
 		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
 			const { state: kind, lastTurnEndedAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList, lastTurnEndedAt, lastViewedAt, state: kind };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, state: kind };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -772,7 +780,15 @@ export class Hub {
 			this.options.log(`orfoni-hub: listing tmux panes failed: ${(error as Error).message}`);
 			return;
 		}
-		await Promise.all([...this.sessions.values()].map((session) => this.checkMemory(session, running.get(tmuxName(session.id)))));
+		// Claude Code's terminal deletes a list's task files five seconds after its last task is done, and sends no hook for it.
+		const finished = [...this.sessions.values()].filter(({ id, model }) => running.has(tmuxName(id)) && model.taskList.length > 0 && model.taskList.every((task) => task.status === 'completed'));
+		await Promise.all([...[...this.sessions.values()].map((session) => this.checkMemory(session, running.get(tmuxName(session.id)))), ...finished.map((session) => this.readTasks(session))]);
+	}
+
+	private async readTasks(session: Session): Promise<void> {
+		const { claudeSessionId } = session.model;
+		const taskList = await readTaskFiles(this.options.claudeTasksDir, claudeSessionId);
+		if (taskList !== null && this.sessions.get(session.id) === session) this.apply(session, { kind: 'task_files', claudeSessionId, taskList, at: Date.now() });
 	}
 
 	private async checkMemory(session: Session, panePid: number | undefined): Promise<void> {
@@ -840,6 +856,7 @@ export class Hub {
 		const at = Date.now();
 		for (const requestId of this.requests.observe(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 		this.apply(session, { kind: 'hook', event, at });
+		if (readsTasks(event)) void this.readTasks(session);
 		if (event.type === 'session_start' && session.claude.kind === 'launching') session.claude = { kind: 'running', inputReadyAt: at + INPUT_READY_DELAY_MS };
 		if (endsSession(event)) session.claude = { kind: 'exited' };
 		for (const waiter of this.waiters) {
