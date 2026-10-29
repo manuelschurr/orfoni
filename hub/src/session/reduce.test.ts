@@ -1,5 +1,6 @@
 import { ClaudeSessionId, RequestId, type ChatItem } from '@orfoni/protocol';
 import { describe, expect, test } from 'vitest';
+import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
 import type { StatusLine } from '../status-line.js';
 import { emptySession, reduce, type SessionInput, type SessionModel } from './reduce.js';
@@ -28,9 +29,9 @@ function approval(requestId: RequestId): ChatItem {
 }
 
 describe('reduce', () => {
-	test('emptySession starts idle with no conversation, no summary, no tasks, and no reported model', () => {
+	test('emptySession starts idle with no conversation, no summary, no tasks, no reported model, and no activity', () => {
 		const model = emptySession(7, first);
-		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], statusLine: null });
+		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], statusLine: null, activity: null });
 		expect(taskProgress(model)).toBeNull();
 	});
 
@@ -498,6 +499,34 @@ describe('reduce', () => {
 		expect(run(started, report(haikuLow), { kind: 'pane_exited', at: 11 }).statusLine).toBeNull();
 		expect(run(started, report(haikuLow), hook('session_end', { reason: 'prompt_input_exit' }, 11)).statusLine).toBeNull();
 		expect(run(started, report(haikuLow), hook('session_end', { reason: 'clear' }, 11), hook('session_start', { source: 'clear' }, 12, second)).statusLine).toEqual(haikuLow);
+	});
+
+	const brewing: Activity = { text: 'Brewing…', details: ['thinking with high effort'] };
+	const shown = (activity: Activity | null, at = 10): SessionInput => ({ kind: 'activity', activity, at });
+	const viewed: SessionInput = { kind: 'view_changed', viewing: true, at: 1 };
+
+	test('what Claude Code says it is doing shows while the session works with a client viewing it, and a reading that repeats it leaves the model as it was', () => {
+		const model = run(started, viewed, prompted, shown(brewing));
+		expect(model.activity).toEqual(brewing);
+		expect(reduce(model, shown({ text: 'Brewing…', details: ['thinking with high effort'] }, 11))).toBe(model);
+		expect(reduce(model, shown({ text: 'Brewing…', details: ['↓ 965 tokens', 'thinking with high effort'] })).activity).toEqual({ text: 'Brewing…', details: ['↓ 965 tokens', 'thinking with high effort'] });
+		expect(reduce(model, shown(null)).activity).toBeNull();
+	});
+
+	test.each<[string, SessionInput]>([
+		['the turn ends', hook('stop', { lastAssistantMessage: 'done' }, 11)],
+		['the turn fails', hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 11)],
+		['the session waits for an approval', { kind: 'request_opened', requestId: req1, item: approval(req1), at: 11 }],
+		['the turn is interrupted', { kind: 'interrupted', at: 11 }],
+		['the pane exits', { kind: 'pane_exited', at: 11 }],
+		['the last client stops viewing the session', { kind: 'view_changed', viewing: false, at: 11 }],
+	])('the activity goes away when %s', (_, input) => {
+		expect(reduce(run(started, viewed, prompted, shown(brewing)), input).activity).toBeNull();
+	});
+
+	test('a reading for a session that is not working, or that no client views, shows nothing', () => {
+		expect(run(started, viewed, shown(brewing)).activity).toBeNull();
+		expect(run(started, prompted, shown(brewing)).activity).toBeNull();
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {

@@ -17,6 +17,7 @@ const T0 = Date.parse('2026-10-26T11:00:00.000Z');
 function fakeTmux(running: string[] = [], typingMs = 0) {
 	const calls: { method: keyof Tmux; args: unknown[] }[] = [];
 	const live = new Set(running);
+	const screens = new Map<string, string | (() => Promise<string>)>();
 	const tmux: Tmux = {
 		async newSession(name, cwd, env, command) {
 			calls.push({ method: 'newSession', args: [name, cwd, env, command] });
@@ -36,8 +37,13 @@ function fakeTmux(running: string[] = [], typingMs = 0) {
 		async sendKeys(target, ...keys) {
 			calls.push({ method: 'sendKeys', args: [target, ...keys] });
 		},
+		async capturePane(target) {
+			calls.push({ method: 'capturePane', args: [target] });
+			const screen = screens.get(target) ?? '';
+			return typeof screen === 'string' ? screen : screen();
+		},
 	};
-	return { tmux, live, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
+	return { tmux, live, screens, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
 }
 
 type Method = ClientRequest['method'];
@@ -749,6 +755,114 @@ describe('task list', () => {
 		await updateTask(id, claude, { taskId: '1', status: 'completed' });
 		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Read the notes' }));
 		expect(updates()).toBe(before);
+	});
+});
+
+describe('activity', () => {
+	const brewing = '✽ Brewing… (2s · thinking with high effort)';
+	const screen = (line: string) => `❯ write a story\n${line}\n❯\n  Haiku 5.5 | effort: high | ctx: 5%\n`;
+
+	async function working(client: TestClient) {
+		const session = await ready(client);
+		await client.ok('openSession', { sessionId: session.id });
+		await hub.hook(session.id, body('UserPromptSubmit', session.claude, { prompt: 'write a story' }));
+		return session;
+	}
+
+	async function shows(client: TestClient, id: SessionId, line: string): Promise<void> {
+		fake.screens.set(`orfoni-${id}`, screen(line));
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => client.session(id)?.activity?.text === line.slice(2, line.indexOf(' (')));
+	}
+
+	test('every client sees what Claude Code says it is doing, read once a second from the screen of a working session a client views, and nothing once the turn ends', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await working(client);
+		await shows(other, id, brewing);
+		expect(other.session(id)?.activity).toEqual({ text: 'Brewing…', details: ['thinking with high effort'] });
+		await shows(other, id, '✻ Writing the story… (14s · ↓ 965 tokens · thinking with high effort)');
+		const writing = { text: 'Writing the story…', details: ['↓ 965 tokens', 'thinking with high effort'] };
+		expect(other.session(id)?.activity).toEqual(writing);
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, activity: writing })]);
+		expect(fake.of('capturePane')).toEqual([[`orfoni-${id}`], [`orfoni-${id}`]]);
+		await hub.hook(id, body('Stop', claude));
+		expect(other.session(id)).toMatchObject({ state: 'idle', activity: null });
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(fake.of('capturePane')).toHaveLength(2);
+	});
+
+	test('a screen that shows the same activity with another glyph and time tells no client', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		await shows(client, id, brewing);
+		const before = client.messages.length;
+		fake.screens.set(`orfoni-${id}`, screen('✶ Brewing… (3s · thinking with high effort)'));
+		await vi.advanceTimersByTimeAsync(2000);
+		await shows(client, id, '✻ Writing the story… (14s · thinking with high effort)');
+		expect(client.messages.slice(before).map((message) => message.type === 'sessionUpdated' && message.session.activity?.text)).toEqual(['Writing the story…']);
+	});
+
+	test('the screen of a session that no client views, or of one that is not working, is never read', async () => {
+		const client = await startHub();
+		const unviewed = await ready(client);
+		await hub.hook(unviewed.id, body('UserPromptSubmit', unviewed.claude, { prompt: 'work' }));
+		const idle = await ready(client);
+		await client.ok('openSession', { sessionId: idle.id });
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(fake.of('capturePane')).toEqual([]);
+	});
+
+	test('the activity goes away for every client when the last client viewing the session moves on', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id } = await working(client);
+		await shows(other, id, brewing);
+		client.close();
+		expect(other.session(id)).toMatchObject({ state: 'working', activity: null });
+	});
+
+	test('a screen without the line, or with it in a format orfoni does not know, shows no activity and leaves the session working', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		await shows(client, id, brewing);
+		fake.screens.set(`orfoni-${id}`, screen('⏺ Brewing in a new format'));
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => client.session(id)?.activity === null);
+		expect(client.session(id)?.state).toBe('working');
+	});
+
+	test('a screen read that has not answered yet is not started again', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		let answer: (text: string) => void = () => {};
+		const slow = new Promise<string>((resolve) => (answer = resolve));
+		fake.screens.set(`orfoni-${id}`, () => slow);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(fake.of('capturePane')).toHaveLength(1);
+		answer(screen(brewing));
+		await untilRealTime(() => client.session(id)?.activity !== null);
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => fake.of('capturePane').length === 2);
+	});
+
+	test('a screen read that fails shows no activity and is logged once', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		fake.screens.set(`orfoni-${id}`, () => Promise.reject(new Error(`can't find pane: =orfoni-${id}:`)));
+		await vi.advanceTimersByTimeAsync(3000);
+		await untilRealTime(() => fake.of('capturePane').length === 3);
+		expect(logs).toEqual([expect.stringContaining("can't find pane")]);
+		expect(client.session(id)?.activity).toBeNull();
+	});
+
+	test('the activity is shown, never stored', async () => {
+		const client = await startHub();
+		const { id, claude } = await working(client);
+		await shows(client, id, brewing);
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Write the story' }));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes('Write the story'));
+		expect(readFileSync(join(dir, 'state.json'), 'utf8')).not.toContain('Brewing');
 	});
 });
 

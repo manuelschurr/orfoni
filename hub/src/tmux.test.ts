@@ -95,6 +95,30 @@ describe('createTmux', () => {
 		]);
 	});
 
+	it('reads the screen of a session as text', async () => {
+		const { calls, tmux } = recorder('✽ Brewing… (2s · thinking with high effort)\n');
+		expect(await tmux.capturePane('orfoni-x')).toBe('✽ Brewing… (2s · thinking with high effort)\n');
+		expect(calls).toEqual([{ args: ['capture-pane', '-p', '-t', '=orfoni-x:'] }]);
+	});
+
+	it('reads what a real pane shows', async () => {
+		const socket = `orfoni-test-${randomUUID()}`;
+		const run = runTmux(socket);
+		await run(['new-session', '-d', '-s', 'orfoni-abc', '-x', '80', '-y', '10', '--', 'sh', '-c', "printf 'Brewing (2s, thinking)\\n'; sleep 30"]);
+		try {
+			const tmux = createTmux(run);
+			let text = '';
+			for (let tries = 0; tries < 50 && !text.includes('Brewing'); tries++) {
+				text = await tmux.capturePane('orfoni-abc');
+				if (!text.includes('Brewing')) await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			expect(text.split('\n')[0]).toBe('Brewing (2s, thinking)');
+		} finally {
+			await run(['kill-server']);
+			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
+		}
+	});
+
 	it('kills a session by name', async () => {
 		const { calls, tmux } = recorder();
 		await tmux.killSession('orfoni-x');
@@ -156,6 +180,7 @@ describe('createTmux', () => {
 			await expect(tmux.sendKeys('orfoni-abc', 'Escape')).rejects.toThrow(/can't find/);
 			await expect(tmux.submit('orfoni-abc', 'echo typed')).rejects.toThrow(/can't find/);
 			await expect(tmux.killSession('orfoni-abc')).rejects.toThrow(/can't find/);
+			await expect(tmux.capturePane('orfoni-abc')).rejects.toThrow(/can't find/);
 			expect((await tmux.listSessions()).map((pane) => pane.name)).toEqual(['orfoni-abc-sh1']);
 			expect(readFileSync(typed, 'utf8')).toBe('');
 		} finally {

@@ -15,6 +15,7 @@ export interface Tmux {
 	listSessions(): Promise<Pane[]>;
 	submit(session: string, text: string): Promise<void>;
 	sendKeys(session: string, ...keys: string[]): Promise<void>;
+	capturePane(session: string): Promise<string>;
 }
 
 // A bare -t name also matches a session whose name merely starts with it, such as that session's shell orfoni-<id>-sh1.
@@ -87,6 +88,9 @@ export function createTmux(run: Run): Tmux {
 		},
 		async sendKeys(session, ...keys) {
 			await run(['send-keys', '-t', paneTarget(session), ...keys]);
+		},
+		capturePane(session) {
+			return run(['capture-pane', '-p', '-t', paneTarget(session)]);
 		},
 	};
 }

@@ -21,6 +21,7 @@ import {
 	type SessionSummary,
 } from '@orfoni/protocol';
 import { z } from 'zod';
+import { parseActivity, type Activity } from './activity.js';
 import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
@@ -39,6 +40,7 @@ const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const PANE_CHECK_INTERVAL_MS = 5_000;
+const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
@@ -123,10 +125,10 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
@@ -181,6 +183,8 @@ export class Hub {
 	private readonly waiters = new Set<Waiter>();
 	private saving = Promise.resolve();
 	private readonly paneCheck = setInterval(() => void this.checkPanes(), PANE_CHECK_INTERVAL_MS);
+	private readonly activityCheck = setInterval(() => void this.checkActivity(), ACTIVITY_CHECK_INTERVAL_MS);
+	private checkingActivity = false;
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
@@ -225,6 +229,7 @@ export class Hub {
 
 	close(): void {
 		clearInterval(this.paneCheck);
+		clearInterval(this.activityCheck);
 		clearInterval(this.registryCheck);
 		this.summarizer.close();
 	}
@@ -690,6 +695,27 @@ export class Hub {
 						return null;
 					});
 		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'memory_read', memory, at: Date.now() });
+	}
+
+	// Claude Code shows what it is doing only on its screen, so the hub reads the screen of each working session a client views, one read at a time.
+	private async checkActivity(): Promise<void> {
+		if (this.checkingActivity) return;
+		this.checkingActivity = true;
+		try {
+			await Promise.all([...this.sessions.values()].filter(({ model }) => model.state === 'working' && model.viewing).map((session) => this.readActivity(session)));
+		} finally {
+			this.checkingActivity = false;
+		}
+	}
+
+	private async readActivity(session: Session): Promise<void> {
+		let activity: Activity | null = null;
+		try {
+			activity = parseActivity(await this.options.tmux.capturePane(tmuxName(session.id)));
+		} catch (error) {
+			this.report(`orfoni-hub: reading the screen of session ${session.id} failed: ${(error as Error).message}`);
+		}
+		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'activity', activity, at: Date.now() });
 	}
 
 	private paneExited(session: Session): void {

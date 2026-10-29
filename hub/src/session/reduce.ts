@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
+import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
@@ -19,6 +20,7 @@ export interface SessionModel {
 	taskCalls: TaskCall[];
 	memory: PaneMemory | null;
 	statusLine: StatusLine | null;
+	activity: Activity | null;
 	lastTurnEndedAt: number | null;
 	lastViewedAt: number | null;
 }
@@ -33,7 +35,8 @@ export type SessionInput =
 	| { kind: 'pane_exited'; at: number }
 	| { kind: 'summarized'; summary: Summary; at: number }
 	| { kind: 'memory_read'; memory: PaneMemory | null; at: number }
-	| { kind: 'status_line'; statusLine: StatusLine; at: number };
+	| { kind: 'status_line'; statusLine: StatusLine; at: number }
+	| { kind: 'activity'; activity: Activity | null; at: number };
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 type AssistantItem = Extract<ChatItem, { kind: 'assistant' }>;
@@ -43,7 +46,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], taskCalls: [], memory: null, statusLine: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], taskCalls: [], memory: null, statusLine: null, activity: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -114,9 +117,14 @@ function withTasks(model: SessionModel, event: HookEvent): SessionModel {
 	return taskList === model.taskList && taskCalls === model.taskCalls ? model : { ...model, taskList, taskCalls };
 }
 
+// Claude Code shows the line only while it works, and the hub reads it only while a client views the session.
+function liveActivity(model: SessionModel): SessionModel {
+	return model.activity !== null && !(model.state === 'working' && model.viewing) ? { ...model, activity: null } : model;
+}
+
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 	const stepped = step(model, input);
-	const next = input.kind === 'hook' ? withTasks(stepped, input.event) : stepped;
+	const next = liveActivity(input.kind === 'hook' ? withTasks(stepped, input.event) : stepped);
 	if (next.chat === model.chat) return next;
 	const chatStartedAt = next.chat.length === 0 ? null : model.chat.length === 0 ? input.at : model.chatStartedAt;
 	return { ...next, chatStartedAt };
@@ -232,5 +240,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return readMemory(model, input.memory, at);
 		case 'status_line':
 			return readStatusLine(model, input.statusLine);
+		case 'activity':
+			return JSON.stringify(input.activity) === JSON.stringify(model.activity) ? model : { ...model, activity: input.activity };
 	}
 }
