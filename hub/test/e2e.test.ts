@@ -275,6 +275,28 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(defaults()).toEqual(before);
 	});
 
+	test('forkSession continues the conversation on its first message in a second session under its own Claude session ID, on the model the original runs on, while the original keeps its own conversation', async () => {
+		const before = defaults();
+		const { id } = await start({ prompt: 'Remember the code word papaya. Reply with exactly: ok', dir: TRUSTED_DIR });
+		const original = await client.waitForSession(id, (s) => s.model !== null && s.state === 'answered', undefined, 60_000);
+		const forked = (await client.request('forkSession', { sessionId: id, prompt: 'What is the code word? Reply with just the word.', title: 'fork check ⑂' })) as Started;
+		started.push(forked.session.id);
+		await acceptTrustPrompt(forked);
+		expect(forked.session).toMatchObject({ projectDir: TRUSTED_DIR, title: 'fork check ⑂' });
+		expect(forked.session.claudeSessionId).not.toBe(original.claudeSessionId);
+		// Until Claude Code writes the fork's transcript with its first message, the fork shows the conversation it was forked from.
+		const shownAtOnce = ((await client.request('openSession', { sessionId: forked.session.id })) as { chat: ChatItem[] }).chat;
+		expect(shownAtOnce.find((item) => item.kind === 'user')).toMatchObject({ text: 'Remember the code word papaya. Reply with exactly: ok' });
+		await client.waitForChat(forked.session.id, replied('papaya'));
+		const fork = await client.waitForSession(forked.session.id, (s) => s.model !== null, undefined, 60_000);
+		expect(fork.model?.name).toContain('Haiku');
+		expect(fork.claudeSessionId).toBe(forked.session.claudeSessionId);
+		const prompts = async (sessionId: SessionId) => ((await client.request('openSession', { sessionId })) as { chat: ChatItem[] }).chat.flatMap((item) => (item.kind === 'user' ? [item.text] : []));
+		expect(await prompts(forked.session.id)).toEqual(['Remember the code word papaya. Reply with exactly: ok', 'What is the code word? Reply with just the word.']);
+		expect(await prompts(id)).toEqual(['Remember the code word papaya. Reply with exactly: ok']);
+		expect(defaults()).toEqual(before);
+	});
+
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
 		const before = defaults();
 		const { id } = await start({

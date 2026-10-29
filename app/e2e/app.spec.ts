@@ -230,6 +230,27 @@ test('change the effort from the header and see the level Claude Code reports th
 	expect(userDefaults()).toEqual(before);
 });
 
+test('Fork starts a second session on its own first message from the conversation so far, next to the first, and each goes its own way', async ({ page }) => {
+	const before = userDefaults();
+	const session = await startReady({ title: 'fork check', prompt: 'Remember the code word papaya. Reply with exactly: ok' });
+	// A fork goes on the model the original reports, so the check waits for it rather than start the fork on the default.
+	await hub.waitForSession(session.id, (s) => s.state === 'answered' && s.model !== null, undefined, REPLY_MS);
+	await openSession(page, session);
+	const main = page.getByRole('main');
+	await main.getByRole('button', { name: 'Fork' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Fork "fork check"' });
+	await dialog.getByRole('textbox', { name: 'First message of the fork' }).fill('What is the code word? Reply with just the word.');
+	await dialog.getByRole('button', { name: 'Fork' }).click();
+	await expect(main.getByRole('heading', { level: 1 })).toHaveText('What is the code word? Reply with just the word. ⑂');
+	await expect(you(page).first()).toContainText('Remember the code word papaya');
+	await expect(claude(page).last()).toContainText('papaya', { timeout: REPLY_MS });
+	await expect(page.getByRole('navigation', { name: 'Sessions' }).getByText('What is the code word? Reply with just the word. ⑂')).toBeVisible();
+	await page.locator(`[data-session="${session.id}"]`).click();
+	await expect(main.getByRole('heading', { level: 1 })).toHaveText('fork check');
+	await expect(you(page)).toHaveCount(1);
+	expect(userDefaults()).toEqual(before);
+});
+
 test('remove a session', async ({ page }) => {
 	const { session } = await hub.start({ projectDir: newProjectDir(), title: 'remove me' });
 	await openSession(page, session);
