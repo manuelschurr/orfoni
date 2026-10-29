@@ -6,6 +6,19 @@
 	let { client, onsettings }: { client: HubClient; onsettings?: () => void } = $props();
 	let hub = $state<HubStatus | null>(null);
 	const usd = new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' });
+	const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+	const dayAndClock = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+	// A window whose reset time has passed has started afresh, and its share is stale until the next status line, so it shows nothing.
+	const windows = $derived.by(() => {
+		const plan = hub?.plan;
+		if (!plan) return [];
+		const now = Date.now();
+		const named = [
+			{ name: '5-hour limit', window: plan.fiveHour },
+			{ name: 'Weekly limit', window: plan.sevenDay },
+		];
+		return named.flatMap(({ name, window }) => (window && window.resetsAt > now ? [{ name, ...window, soon: window.resetsAt - now < 24 * 3_600_000 }] : []));
+	});
 
 	$effect(() => {
 		if (client.status.kind !== 'connected') {
@@ -57,6 +70,9 @@
 		<p class="stats">
 			<span>{bytes(hub.memory.availableBytes)} of {bytes(hub.memory.totalBytes)} free on the VPS</span>
 			<span>{hub.summaries.enabled ? `Summaries on, ${usd.format(hub.summaries.spentTodayUsd)} today` : 'Summaries off'}</span>
+			{#each windows as { name, usedPercent, resetsAt, soon } (name)}
+				<span class:warning={usedPercent >= 80}>{name} {Math.round(usedPercent)}% used, resets {soon ? `at ${clock.format(resetsAt)}` : dayAndClock.format(resetsAt)}</span>
+			{/each}
 		</p>
 		{#if hub.summaries.problem}<p class="summary-problem" class:failing={hub.summaries.enabled}>{hub.summaries.problem}</p>{/if}
 	{/if}
@@ -142,6 +158,12 @@
 		color: var(--faint);
 		font-size: 0.75rem;
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* The colour and weight the header gives memory near its limit. */
+	.stats .warning {
+		color: color-mix(in srgb, var(--state-needs) 70%, var(--text));
+		font-weight: 600;
 	}
 
 	.summary-problem {

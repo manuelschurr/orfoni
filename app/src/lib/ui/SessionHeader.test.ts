@@ -349,3 +349,24 @@ test('a session that has not reported its permission mode shows it as unknown, a
 	expect(chosen('Permissions')).toBe('Manual');
 	expect(select('Permissions').disabled).toBe(true);
 });
+
+test('the header shows how full the context window is, and near the end a Compact button that compacts the conversation', async () => {
+	const { transport, report } = await header({ state: 'idle', context: 42 });
+	expect(screen.getByRole('meter', { name: 'Context' }).getAttribute('aria-valuetext')).toBe('42% of the context window used');
+	expect(screen.getByText('42%')).toBeTruthy();
+	expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull();
+	report({ context: 86.4 });
+	expect(screen.getByRole('meter', { name: 'Context' }).getAttribute('aria-valuetext')).toBe('86% of the context window used, near where Claude Code compacts it');
+	await fireEvent.click(screen.getByRole('button', { name: 'Compact' }));
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 's1', text: '/compact' }]);
+});
+
+test('a session that has not reported its context shows none, and one that works or is offline offers no Compact', async () => {
+	const { report } = await header({ state: 'idle', context: null });
+	expect(screen.queryByRole('meter', { name: 'Context' })).toBeNull();
+	report({ state: 'working', context: 90 });
+	expect(screen.getByRole('meter', { name: 'Context' })).toBeTruthy();
+	expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull();
+	report({ state: 'offline', context: 90 });
+	expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull();
+});

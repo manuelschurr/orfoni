@@ -28,6 +28,10 @@
 	const used = $derived(memory && limit ? `${bytes(memory.currentBytes)} of ${bytes(limit.max)}` : '');
 	// A change restarts the session, which a failed turn leaves at its prompt and an offline one does not need.
 	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed' || session.state === 'offline');
+	// Claude Code runs and takes a message, which /compact needs.
+	const takesInput = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed');
+	// Claude Code compacts a conversation on its own once the context window is nearly full.
+	const contextHigh = $derived(session.context !== null && session.context >= 80);
 	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
 	const restarting = $derived(changes.some((change) => change.phase !== 'unreported'));
 	const notes: Record<Change['phase'], (to: string) => string> = {
@@ -176,7 +180,7 @@
 		>
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
-	{#if session.tasks || memory || session.model || session.permissionMode || takesChanges}
+	{#if session.tasks || memory || session.context !== null || session.model || session.permissionMode || takesChanges}
 		<div class="gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
@@ -210,6 +214,28 @@
 						<span class="value">{bytes(memory.currentBytes)}</span>
 					{/if}
 					{#if memory.oomKills > 0}<span class="note oom">{oomKills(memory.oomKills)}</span>{/if}
+				</div>
+			{/if}
+			{#if session.context !== null}
+				{@const context = session.context}
+				<div class="gauge" class:warning={contextHigh}>
+					<span class="label" aria-hidden="true">Context</span>
+					<div
+						class="bar"
+						role="meter"
+						aria-label="Context"
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={context}
+						aria-valuetext={`${Math.round(context)}% of the context window used${contextHigh ? ', near where Claude Code compacts it' : ''}`}
+					>
+						<span class="fill" style:width={percent(context, 100)}></span>
+					</div>
+					<span class="value" aria-hidden="true">{Math.round(context)}%</span>
+					{#if contextHigh}
+						<span class="note" aria-hidden="true">compacts soon</span>
+						{#if takesInput}<button class="btn btn-quiet compact" disabled={busy} onclick={() => act(() => client.send(session.id, '/compact'))}>Compact</button>{/if}
+					{/if}
 				</div>
 			{/if}
 			<!-- Last in the row, so a note that comes and goes moves nothing else. -->
@@ -348,6 +374,11 @@
 		stroke: currentColor;
 		stroke-width: 1.5;
 		stroke-linejoin: round;
+	}
+
+	.compact {
+		padding: 0.1rem 0.55rem;
+		font-size: 0.8rem;
 	}
 
 	.name {

@@ -74,3 +74,26 @@ test('a hub that cannot answer hubStatus leaves the status bar as it was, with n
 	await settle();
 	expect(container.textContent?.replace(/\s+/g, ' ').trim()).toBe('Connected');
 });
+
+test('the status bar shows how much of each plan window is used and when it starts afresh, and leaves out one that has already done so', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date(2026, 9, 29, 13, 0));
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	const fiveHour = { usedPercent: 89.4, resetsAt: new Date(2026, 9, 29, 15, 30).getTime() };
+	const sevenDay = { usedPercent: 47, resetsAt: new Date(2026, 10, 1, 9, 0).getTime() };
+	transport.respond('hubStatus', { ...hubStatus(4.2, false, 0), plan: { fiveHour, sevenDay } });
+	await settle();
+	expect(screen.getByText('5-hour limit 89% used, resets at 15:30')).toBeTruthy();
+	expect(screen.getByText(/^Weekly limit 47% used, resets \S+ 09:00$/)).toBeTruthy();
+});
+
+test('a hub that has not seen the plan windows, and a window that has started afresh, show nothing about them', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date(2026, 9, 29, 16, 0));
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', { ...hubStatus(4.2, false, 0), plan: { fiveHour: { usedPercent: 89, resetsAt: new Date(2026, 9, 29, 15, 30).getTime() }, sevenDay: null } });
+	await settle();
+	expect(screen.queryByText(/limit/)).toBeNull();
+});
