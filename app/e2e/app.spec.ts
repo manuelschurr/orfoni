@@ -377,8 +377,8 @@ test('while Claude works its task list shows under the conversation, and once th
 	await expect(claude(page).last()).toContainText('tasks done', { timeout: REPLY_MS });
 	await expect(conversation.getByRole('list', { name: 'Tasks' })).toHaveCount(0);
 	const main = page.getByRole('main');
-	await main.getByRole('button', { name: 'Task list' }).click();
-	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/^Done:\s.*alpha/i, /^Pending:\s.*beta/i, /^Pending:\s.*gamma/i]);
+	await main.getByRole('button', { name: 'Task list', exact: true }).click();
+	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/^\s*Done:\s.*alpha/i, /^\s*Pending:\s.*beta/i, /^\s*Pending:\s.*gamma/i]);
 });
 
 test('typing /cl suggests /clear from the commands of the folder, and Tab completes it, with the user settings unchanged', async ({ page }) => {

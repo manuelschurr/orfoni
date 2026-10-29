@@ -19,7 +19,17 @@ export class HubClient {
 	private failure: Error | null = null;
 
 	private constructor(private readonly child: ChildProcessWithoutNullStreams) {
-		createInterface({ input: child.stdout }).on('line', (line) => this.receive(parseHubMessage(line)));
+		createInterface({ input: child.stdout }).on('line', (line) => {
+			let message: HubMessage;
+			try {
+				message = parseHubMessage(line);
+			} catch (error) {
+				// A line the protocol rejects fails the waiting check with the line itself, so the cause shows.
+				this.fail(new Error(`the hub sent a line the protocol rejects: ${(error as Error).message}\n${line.slice(0, 2000)}`));
+				return;
+			}
+			this.receive(message);
+		});
 		child.on('exit', () => this.fail(new Error('hub connection closed')));
 		child.on('error', (error) => this.fail(error));
 	}
