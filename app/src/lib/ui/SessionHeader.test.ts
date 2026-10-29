@@ -281,3 +281,49 @@ test('a fork the hub refuses says why in the dialog and keeps the message', asyn
 	expect((within(dialog).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Try a passkey login instead');
 	expect(forked).not.toHaveBeenCalled();
 });
+
+function nameField(): HTMLInputElement {
+	return screen.getByRole('textbox', { name: 'Session name' }) as HTMLInputElement;
+}
+
+test('Rename turns the title into a field with the name, and Enter gives the session the new name, which the header shows once the hub tells', async () => {
+	const { transport, session, report } = await header({ state: 'idle' });
+	await fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+	expect(nameField().value).toBe('Fix the login page');
+	await fireEvent.input(nameField(), { target: { value: '  Login redesign  ' } });
+	await fireEvent.keyDown(nameField(), { key: 'Enter' });
+	expect(transport.requests('renameSession')).toMatchObject([{ sessionId: session.id, title: 'Login redesign' }]);
+	expect(screen.queryByRole('textbox', { name: 'Session name' })).toBeNull();
+	transport.respond('renameSession', { session: { ...session, title: 'Login redesign' } });
+	report({ title: 'Login redesign' });
+	expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Login redesign');
+});
+
+test('a double click on the title renames too, and leaving the field keeps the new name as Enter does', async () => {
+	const { transport } = await header({ state: 'working' });
+	await fireEvent.dblClick(screen.getByRole('heading', { level: 1 }));
+	await fireEvent.input(nameField(), { target: { value: 'Login redesign' } });
+	await fireEvent.blur(nameField());
+	expect(transport.requests('renameSession')).toMatchObject([{ title: 'Login redesign' }]);
+});
+
+test('Escape leaves the name as it was, and a name left empty or unchanged sends nothing', async () => {
+	const { transport } = await header({ state: 'idle' });
+	for (const [value, key] of [['Login redesign', 'Escape'], ['   ', 'Enter'], ['Fix the login page', 'Enter']] as const) {
+		await fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+		await fireEvent.input(nameField(), { target: { value } });
+		await fireEvent.keyDown(nameField(), { key });
+		expect(screen.queryByRole('textbox', { name: 'Session name' })).toBeNull();
+	}
+	expect(transport.requests('renameSession')).toEqual([]);
+	expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Fix the login page');
+});
+
+test('a rename the hub refuses says why', async () => {
+	const { transport } = await header({ state: 'idle' });
+	await fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+	await fireEvent.input(nameField(), { target: { value: 'Login redesign' } });
+	await fireEvent.keyDown(nameField(), { key: 'Enter' });
+	transport.fail('renameSession', 'not_found', 'no session s1');
+	expect((await screen.findByRole('alert')).textContent).toBe('Renaming failed: no session s1');
+});

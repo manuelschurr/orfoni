@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
+	import { tick } from 'svelte';
 	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
 	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
 
@@ -17,6 +18,9 @@
 	let forkPrompt = $state('');
 	let forking = $state(false);
 	let forkError = $state<string | null>(null);
+	// The name being typed while the title is a field, and null otherwise.
+	let renaming = $state<string | null>(null);
+	let nameField: HTMLInputElement | undefined = $state();
 	const id = $props.id();
 	const title = $derived(sessionTitle(session, client.chats.get(session.id)));
 	const memory = $derived(session.memory);
@@ -64,6 +68,25 @@
 		}
 	}
 
+	function startRename(): void {
+		renaming = title;
+		void tick().then(() => nameField?.select());
+	}
+
+	// Enter and leaving the field both end here, and a field Escape or Enter already closed ends nothing.
+	async function finishRename(): Promise<void> {
+		if (renaming === null) return;
+		const name = renaming.trim();
+		renaming = null;
+		if (name === '' || name === title) return;
+		error = null;
+		try {
+			await client.rename(session.id, name);
+		} catch (e) {
+			error = `Renaming failed: ${(e as Error).message}`;
+		}
+	}
+
 	async function remove(): Promise<void> {
 		confirm?.close();
 		await act(() => client.remove(session.id));
@@ -91,7 +114,34 @@
 
 <header class="header">
 	<div class="heading">
-		<h1>{title}</h1>
+		{#if renaming !== null}
+			<input
+				class="name field"
+				bind:this={nameField}
+				bind:value={renaming}
+				aria-label="Session name"
+				maxlength="200"
+				onkeydown={(event) => {
+					if (event.key === 'Enter') {
+						event.preventDefault();
+						void finishRename();
+					} else if (event.key === 'Escape') {
+						event.preventDefault();
+						renaming = null;
+					}
+				}}
+				onblur={() => void finishRename()}
+			/>
+		{:else}
+			<div class="title">
+				<!-- A double click on the title renames as a shortcut, and the Rename button next to it is the way for the keyboard. -->
+				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+				<h1 ondblclick={startRename}>{title}</h1>
+				<button class="rename" aria-label="Rename" title="Rename" onclick={startRename}>
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5l2 2L6 12l-2.6.6L4 10z" /></svg>
+				</button>
+			</div>
+		{/if}
 		<p class="meta">
 			<span class="state"><span class="dot" data-state={session.state} aria-hidden="true"></span>{stateLabel[session.state]}</span>
 			<span class="folder" title={session.projectDir}>{session.projectDir}</span>
@@ -259,6 +309,48 @@
 		font-weight: 600;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.title {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		min-width: 0;
+	}
+
+	.rename {
+		display: grid;
+		flex: none;
+		place-items: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		padding: 0;
+		border: 0;
+		border-radius: var(--radius-control);
+		background: none;
+		color: var(--faint);
+		cursor: pointer;
+	}
+
+	.rename:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.rename svg {
+		width: 0.9rem;
+		height: 0.9rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linejoin: round;
+	}
+
+	.name {
+		width: 100%;
+		max-width: 36rem;
+		font-size: 1.1rem;
+		font-weight: 600;
 	}
 
 	.meta {
