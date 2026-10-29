@@ -35,6 +35,7 @@ export class Registry {
 		private readonly dir: string,
 		private readonly systemRoot: string,
 		private readonly log: (line: string) => void,
+		private readonly hubPid = process.pid,
 	) {}
 
 	async read(): Promise<OtherProcess[]> {
@@ -51,15 +52,20 @@ export class Registry {
 
 	// A pid alone may belong to a process started after the registered one ended, so the start time has to match too when it is known.
 	async running(pid: number, procStart?: string): Promise<boolean> {
+		const live = await this.live(pid);
+		return live !== null && (procStart === undefined || live.start === procStart);
+	}
+
+	private async live(pid: number): Promise<{ parent: number; start: string } | null> {
 		let stat: string;
 		try {
 			stat = await readFile(join(this.systemRoot, 'proc', String(pid), 'stat'), 'utf8');
 		} catch {
-			return false;
+			return null;
 		}
-		// The process name before these fields may hold spaces and parentheses. State is field 3 and the start time field 22.
-		const [state, ...fields] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-		return state !== 'Z' && (procStart === undefined || fields[18] === procStart);
+		// The process name before these fields may hold spaces and parentheses. State is field 3, the parent field 4, and the start time field 22.
+		const [state, parent, ...fields] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+		return state === 'Z' ? null : { parent: Number(parent), start: fields[17] ?? '' };
 	}
 
 	private async entry(path: string): Promise<OtherProcess | null> {
@@ -79,7 +85,9 @@ export class Registry {
 		}
 		const { pid, procStart, sessionId, cwd, name, status, statusUpdatedAt, startedAt, kind, tmux, parkedJobId, spare } = entry.data;
 		if (!SESSION_KINDS.has(kind ?? '') || parkedJobId || spare || basename(path) !== `${pid}.json`) return null;
-		if (!(await this.running(pid, procStart))) return null;
+		const live = await this.live(pid);
+		// The hub starts Claude Code itself only to list the commands of a folder, which is no session of its own.
+		if (live === null || live.start !== procStart || live.parent === this.hubPid) return null;
 		return {
 			session: {
 				pid,

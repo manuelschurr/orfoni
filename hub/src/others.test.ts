@@ -21,8 +21,8 @@ beforeEach(() => {
 	logs = [];
 });
 
-function registry(systemRoot = root): Registry {
-	return new Registry(dir, systemRoot, (line) => logs.push(line));
+function registry(systemRoot = root, hubPid = process.pid): Registry {
+	return new Registry(dir, systemRoot, (line) => logs.push(line), hubPid);
 }
 
 // Every field Claude Code 2.1.310 writes, so the reader is shown the real shape and not only the fields it reads.
@@ -54,9 +54,9 @@ function writeEntry(pid: number, fields: Record<string, unknown> = {}): void {
 }
 
 // A /proc/<pid>/stat line as Linux writes it, after one read on this VPS: the start time is field 22.
-function writeProcess(pid: number, startTime: string, { name = 'claude', state = 'S' } = {}): void {
+function writeProcess(pid: number, startTime: string, { name = 'claude', state = 'S', parent = 1171960 } = {}): void {
 	mkdirSync(join(root, 'proc', String(pid)), { recursive: true });
-	const line = `${pid} (${name}) ${state} 1171960 ${pid} 1171960 34821 ${pid} 4194304 3110604 4948212 8963 8614 212924 47566 12258 11049 20 0 11 0 ${startTime} 5784383488 77025 18446744073709551615 29260032 115375552`;
+	const line = `${pid} (${name}) ${state} ${parent} ${pid} 1171960 34821 ${pid} 4194304 3110604 4948212 8963 8614 212924 47566 12258 11049 20 0 11 0 ${startTime} 5784383488 77025 18446744073709551615 29260032 115375552`;
 	writeFileSync(join(root, 'proc', String(pid), 'stat'), `${line}\n`);
 }
 
@@ -118,6 +118,15 @@ describe('Registry', () => {
 		writeEntry(1172035, { kind: 'bg', tmux: null });
 		for (const pid of [1172031, 1172032, 1172033, 1172034, 1172035]) writeProcess(pid, '66936127');
 		expect((await registry().read()).map(({ session }) => session.pid)).toEqual([1172035]);
+	});
+
+	// Claude Code 2.1.312 registers a process the Agent SDK started as an interactive session in its folder, with the entrypoint sdk-cli.
+	test('a Claude Code process the hub started itself, as it does to list the commands of a folder, is skipped', async () => {
+		writeEntry(1172033, { entrypoint: 'sdk-cli', tmux: null, name: 'proj-03' });
+		writeProcess(1172033, '66936127', { parent: process.pid });
+		writeEntry(1181931, { procStart: '67079798' });
+		writeProcess(1181931, '67079798');
+		expect((await registry().read()).map(({ session }) => session.pid)).toEqual([1181931]);
 	});
 
 	test('a file whose name is not its own pid is skipped, so one process is never listed twice', async () => {
@@ -199,9 +208,10 @@ describe('Registry', () => {
 			const pid = child.pid as number;
 			const startTime = readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[21] as string;
 			writeEntry(pid, { procStart: startTime });
-			expect(await pids(registry('/'))).toEqual([pid]);
+			// This test process started sleep as a session outside orfoni would be started, so the hub is another process here.
+			expect(await pids(registry('/', 0))).toEqual([pid]);
 			writeEntry(pid, { procStart: String(Number(startTime) + 1) });
-			expect(await pids(registry('/'))).toEqual([]);
+			expect(await pids(registry('/', 0))).toEqual([]);
 		} finally {
 			child.kill();
 		}
