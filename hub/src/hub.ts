@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
-import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import type { SlashCommand as ClaudeCommand, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
 	Effort,
@@ -19,15 +19,18 @@ import {
 	type RequestOutcome,
 	type SessionStateKind,
 	type SessionSummary,
+	type SlashCommand,
 } from '@orfoni/protocol';
 import { z } from 'zod';
+import { parseActivity, type Activity } from './activity.js';
 import { writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
 import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { emptySession, endsSession, reduce, taskProgress, unread, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
+import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
 import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
@@ -38,10 +41,15 @@ const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const PANE_CHECK_INTERVAL_MS = 5_000;
+const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
+const COMMANDS_KEPT_MS = 10 * 60_000;
+const COMMANDS_TIMEOUT_MS = 20_000;
+// Typed into Claude Code, these also change the defaults of every new session, and the session header changes them for one session.
+const LEFT_OUT_COMMANDS = new Set(['model', 'effort']);
 const RELAUNCHABLE = new Set<SessionStateKind>(['idle', 'answered', 'failed', 'offline']);
 const HookPermissionMode = z.object({ permission_mode: PermissionMode });
 const NOT_IDLE: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
@@ -62,6 +70,8 @@ export interface HubOptions {
 	systemRoot: string;
 	claudeSessionsDir: string;
 	kill(pid: number, signal: NodeJS.Signals): void;
+	// Settles only once every process it started has ended.
+	listCommands(projectDir: string, signal: AbortSignal): Promise<ClaudeCommand[]>;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -108,6 +118,14 @@ const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
 });
 
+// Claude Code trusts a folder when the folder or one above it accepted the trust dialog, whatever it recorded for the folder itself.
+function trusts({ projects }: z.infer<typeof ClaudeConfig>, projectDir: string): boolean {
+	for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
+		if (projects?.[dir]?.hasTrustDialogAccepted === true) return true;
+		if (dirname(dir) === dir) return false;
+	}
+}
+
 function tmuxName(id: SessionId): string {
 	return `orfoni-${id}`;
 }
@@ -122,11 +140,11 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: null, activity: null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'tasks', 'memory', 'statusLine'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'tasks', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -168,6 +186,25 @@ async function subfolders(parent: string): Promise<string[]> {
 	}
 }
 
+async function isFolder(path: string): Promise<boolean> {
+	try {
+		return (await stat(path)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+// Rows can share a name, and /name then runs Claude Code's own command.
+function usable(listed: ClaudeCommand[]): SlashCommand[] {
+	const byName = new Map<string, ClaudeCommand>();
+	for (const command of listed) {
+		if (LEFT_OUT_COMMANDS.has(command.name)) continue;
+		const kept = byName.get(command.name);
+		if (!kept || (command.builtin && !kept.builtin)) byName.set(command.name, command);
+	}
+	return [...byName.values()].map(({ name, description, argumentHint, aliases = [] }) => ({ name, description, argumentHint, aliases }));
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -180,12 +217,15 @@ export class Hub {
 	private readonly waiters = new Set<Waiter>();
 	private saving = Promise.resolve();
 	private readonly paneCheck = setInterval(() => void this.checkPanes(), PANE_CHECK_INTERVAL_MS);
+	private readonly activityCheck = setInterval(() => void this.checkActivity(), ACTIVITY_CHECK_INTERVAL_MS);
+	private checkingActivity = false;
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
 	private readonly porting = new Set<ClaudeSessionId>();
 	private readonly summarizer: Summarizer;
 	private readonly reported = new Set<string>();
+	private readonly commandLists = new Map<string, { since: number; commands: Promise<SlashCommand[]> }>();
 
 	private constructor(
 		private readonly options: HubOptions,
@@ -213,9 +253,9 @@ export class Hub {
 			state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline' as const, lastTurnEndedAt: stored.lastTurnEndedAt })),
 		);
 		const now = Date.now();
-		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, tasks, lastViewedAt }, index) => {
+		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
 			const { state: kind, lastTurnEndedAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, tasks, lastTurnEndedAt, lastViewedAt, state: kind };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList, lastTurnEndedAt, lastViewedAt, state: kind };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -224,6 +264,7 @@ export class Hub {
 
 	close(): void {
 		clearInterval(this.paneCheck);
+		clearInterval(this.activityCheck);
 		clearInterval(this.registryCheck);
 		this.summarizer.close();
 	}
@@ -339,6 +380,8 @@ export class Hub {
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
+			case 'listCommands':
+				return { commands: await this.commands(resolve(request.projectDir)) };
 			case 'listOtherSessions':
 				return (await this.refreshOthers()).map(({ session }) => session);
 			case 'openOtherSession':
@@ -466,7 +509,7 @@ export class Hub {
 	private async needsTrust(projectDir: string): Promise<boolean> {
 		try {
 			const config = ClaudeConfig.safeParse(JSON.parse(await readFile(this.options.claudeConfigPath, 'utf8')));
-			return !(config.success && config.data.projects?.[projectDir]?.hasTrustDialogAccepted === true);
+			return !(config.success && trusts(config.data, projectDir));
 		} catch {
 			return true;
 		}
@@ -649,6 +692,33 @@ export class Hub {
 			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0) || a.path.localeCompare(b.path));
 	}
 
+	private commands(projectDir: string): Promise<SlashCommand[]> {
+		const kept = this.commandLists.get(projectDir);
+		if (kept && Date.now() - kept.since < COMMANDS_KEPT_MS) return kept.commands;
+		const commands = this.list(projectDir);
+		this.commandLists.set(projectDir, { since: Date.now(), commands });
+		commands.catch(() => {
+			if (this.commandLists.get(projectDir)?.commands === commands) this.commandLists.delete(projectDir);
+		});
+		return commands;
+	}
+
+	private async list(projectDir: string): Promise<SlashCommand[]> {
+		if (!(await isFolder(projectDir))) throw new HubError('not_found', `no folder ${projectDir}`);
+		// Claude Code started without a terminal loads the folder's settings without asking, which the trust dialog is there to prevent.
+		if (await this.needsTrust(projectDir)) throw new HubError('not_ready', `Claude Code does not trust ${projectDir} yet, so orfoni does not start it there to list its commands`);
+		const stop = new AbortController();
+		const timedOut = new Promise<never>((_, reject) => {
+			stop.signal.addEventListener('abort', () => reject(new HubError('internal', `Claude Code took over ${COMMANDS_TIMEOUT_MS / 1000} s to list the commands of ${projectDir}`)));
+		});
+		const timer = setTimeout(() => stop.abort(), COMMANDS_TIMEOUT_MS);
+		try {
+			return usable(await Promise.race([this.options.listCommands(projectDir, stop.signal), timedOut]));
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
 	private async killTmux(matches: (name: string) => boolean): Promise<void> {
 		const names = new Set((await this.options.tmux.listSessions()).map((pane) => pane.name).filter(matches));
 		for (const name of names) await this.options.tmux.killSession(name);
@@ -689,6 +759,27 @@ export class Hub {
 						return null;
 					});
 		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'memory_read', memory, at: Date.now() });
+	}
+
+	// Claude Code shows what it is doing only on its screen.
+	private async checkActivity(): Promise<void> {
+		if (this.checkingActivity) return;
+		this.checkingActivity = true;
+		try {
+			await Promise.all([...this.sessions.values()].filter(({ model }) => model.state === 'working' && model.viewing).map((session) => this.readActivity(session)));
+		} finally {
+			this.checkingActivity = false;
+		}
+	}
+
+	private async readActivity(session: Session): Promise<void> {
+		let activity: Activity | null = null;
+		try {
+			activity = parseActivity(await this.options.tmux.capturePane(tmuxName(session.id)));
+		} catch (error) {
+			this.report(`orfoni-hub: reading the screen of session ${session.id} failed: ${(error as Error).message}`);
+		}
+		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'activity', activity, at: Date.now() });
 	}
 
 	private paneExited(session: Session): void {
@@ -754,7 +845,7 @@ export class Hub {
 		this.saving = this.saving
 			.then(() =>
 				saveState(path, {
-					version: 2,
+					version: 3,
 					sessions: [...this.sessions.values()].map(({ id, projectDir, title, model, createdAt }) => ({
 						id,
 						projectDir,
@@ -762,7 +853,7 @@ export class Hub {
 						claudeSessionId: model.claudeSessionId,
 						createdAt,
 						summary: model.summary,
-						tasks: model.tasks,
+						taskList: model.taskList,
 						lastTurnEndedAt: model.lastTurnEndedAt,
 						lastViewedAt: model.lastViewedAt,
 					})),

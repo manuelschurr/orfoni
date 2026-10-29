@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.312
+▝▜██████▀  Haiku 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /var/tmp/claude-0/orfoni-spike-tui · /rc
+
+
+❯ Use the TaskCreate tool three times to create three tasks. Their subjects are alpha, beta, and gamma, and their activeForms are Doing alpha, Doing beta, and Doing gamma. Then use the TaskUpdate
+  tool to set alpha to in_progress. Then, without any other tool, write a 1500 word story about alpha particles in plain prose.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✽ Fermenting…
+                                                                                                                                                                                      ● high · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Haiku 5.5 | effort: high | 5h: ?, 7d: ? | project: orfoni-spike-tui
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent

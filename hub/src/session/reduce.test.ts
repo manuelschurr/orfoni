@@ -1,8 +1,10 @@
 import { ClaudeSessionId, RequestId, type ChatItem } from '@orfoni/protocol';
 import { describe, expect, test } from 'vitest';
+import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
 import type { StatusLine } from '../status-line.js';
-import { emptySession, reduce, taskProgress, type SessionInput, type SessionModel } from './reduce.js';
+import { emptySession, reduce, type SessionInput, type SessionModel } from './reduce.js';
+import { taskProgress } from './tasks.js';
 
 const first = ClaudeSessionId.parse('03e013df-1dd4-4168-8b32-2e3881a83f76');
 const second = ClaudeSessionId.parse('7dc09cb7-52a0-432d-96d1-96f2f3904ec0');
@@ -27,9 +29,9 @@ function approval(requestId: RequestId): ChatItem {
 }
 
 describe('reduce', () => {
-	test('emptySession starts idle with no conversation, no summary, no task progress, and no reported model', () => {
+	test('emptySession starts idle with no conversation, no summary, no tasks, no reported model, and no activity', () => {
 		const model = emptySession(7, first);
-		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, statusLine: null });
+		expect(model).toMatchObject({ state: 'idle', stateSince: 7, claudeSessionId: first, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], statusLine: null, activity: null });
 		expect(taskProgress(model)).toBeNull();
 	});
 
@@ -331,20 +333,93 @@ describe('reduce', () => {
 		expect(reduce(cleared, hook('prompt', { text: 'new' }, 4, second)).chatStartedAt).toBe(4);
 	});
 
-	test('task progress is null until the conversation creates a task', () => {
-		expect(taskProgress(run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3)))).toBeNull();
+	// The hooks Claude Code 2.1.312 sends for one TaskCreate call.
+	function createTask(id: string, subject: string, activeForm?: string, agentId?: string): SessionInput[] {
+		const toolUseId = `create-${id}`;
+		const input = { subject, description: `${subject}, in detail`, ...(activeForm === undefined ? {} : { activeForm }) };
+		return [
+			hook('tool_start', { toolUseId, name: 'TaskCreate', input, agentId }, 3),
+			hook('task_created', { taskId: id, subject }, 3),
+			hook('tool_end', { toolUseId, name: 'TaskCreate', output: { task: { id, subject } }, agentId }, 3),
+		];
+	}
+
+	let updates = 0;
+	function updateTask(input: { taskId: string } & Record<string, unknown>, output: unknown = { success: true, taskId: input.taskId, updatedFields: Object.keys(input).filter((key) => key !== 'taskId') }, agentId?: string): SessionInput[] {
+		const toolUseId = `update-${++updates}`;
+		return [hook('tool_start', { toolUseId, name: 'TaskUpdate', input, agentId }, 4), hook('tool_end', { toolUseId, name: 'TaskUpdate', output, agentId }, 4)];
+	}
+
+	test('the task list is empty, and task progress null, until the conversation creates a task', () => {
+		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3));
+		expect(model.taskList).toEqual([]);
+		expect(taskProgress(model)).toBeNull();
 	});
 
-	test('task progress counts created tasks and the completed ones among them', () => {
+	test('a created task is pending with the activeForm its TaskCreate gave, and takes each status a TaskUpdate gives it', () => {
+		const created = run(started, prompted, ...createTask('1', 'Run the tests', 'Running the tests'));
+		expect(created.taskList).toEqual([{ id: '1', subject: 'Run the tests', status: 'pending', activeForm: 'Running the tests' }]);
+		const working = run(started, prompted, ...createTask('1', 'Run the tests', 'Running the tests'), ...updateTask({ taskId: '1', status: 'in_progress' }));
+		expect(working.taskList).toEqual([{ id: '1', subject: 'Run the tests', status: 'in_progress', activeForm: 'Running the tests' }]);
+		const done = updateTask({ taskId: '1', status: 'completed' }).reduce(reduce, working);
+		expect(done.taskList).toEqual([{ id: '1', subject: 'Run the tests', status: 'completed', activeForm: 'Running the tests' }]);
+	});
+
+	test('tasks keep the order Claude Code created them in, and TaskCreate calls made at once each keep their own activeForm', () => {
 		const model = run(
 			started,
 			prompted,
-			hook('task_created', { taskId: '1', subject: 'Read' }, 3),
+			hook('tool_start', { toolUseId: 'a', name: 'TaskCreate', input: { subject: 'Read', description: 'Read it', activeForm: 'Reading' } }, 3),
+			hook('tool_start', { toolUseId: 'b', name: 'TaskCreate', input: { subject: 'Write', description: 'Write it', activeForm: 'Writing' } }, 3),
+			hook('tool_start', { toolUseId: 'c', name: 'TaskCreate', input: { subject: 'Test', description: 'Test it' } }, 3),
+			hook('task_created', { taskId: '1', subject: 'Read' }, 4),
 			hook('task_created', { taskId: '2', subject: 'Write' }, 4),
-			hook('task_created', { taskId: '3', subject: 'Test' }, 5),
-			hook('task_completed', { taskId: '1', subject: 'Read' }, 6),
+			hook('task_created', { taskId: '3', subject: 'Test' }, 4),
+			hook('tool_end', { toolUseId: 'a', name: 'TaskCreate', output: { task: { id: '1', subject: 'Read' } } }, 5),
+			hook('tool_end', { toolUseId: 'b', name: 'TaskCreate', output: { task: { id: '2', subject: 'Write' } } }, 5),
+			hook('tool_end', { toolUseId: 'c', name: 'TaskCreate', output: { task: { id: '3', subject: 'Test' } } }, 5),
 		);
-		expect(taskProgress(model)).toEqual({ done: 1, total: 3 });
+		expect(model.taskList).toEqual([
+			{ id: '1', subject: 'Read', status: 'pending', activeForm: 'Reading' },
+			{ id: '2', subject: 'Write', status: 'pending', activeForm: 'Writing' },
+			{ id: '3', subject: 'Test', status: 'pending', activeForm: null },
+		]);
+		expect(taskProgress(reduce(model, hook('task_completed', { taskId: '2', subject: 'Write' }, 6)))).toEqual({ done: 1, total: 3 });
+	});
+
+	test('a TaskUpdate can rename a task and change its activeForm', () => {
+		const model = run(started, prompted, ...createTask('1', 'Run the tests', 'Running the tests'), ...updateTask({ taskId: '1', subject: 'Run every test', activeForm: 'Running every test' }));
+		expect(model.taskList).toEqual([{ id: '1', subject: 'Run every test', status: 'pending', activeForm: 'Running every test' }]);
+	});
+
+	test('a deleted task leaves the list and the count', () => {
+		const model = run(started, prompted, ...createTask('1', 'Read'), ...createTask('2', 'Write'), ...updateTask({ taskId: '1', status: 'completed' }), ...updateTask({ taskId: '1', status: 'deleted' }));
+		expect(model.taskList).toEqual([{ id: '2', subject: 'Write', status: 'pending', activeForm: null }]);
+		expect(taskProgress(model)).toEqual({ done: 0, total: 1 });
+		expect(taskProgress(run(started, prompted, ...createTask('1', 'Read'), ...updateTask({ taskId: '1', status: 'deleted' })))).toBeNull();
+	});
+
+	test('a TaskUpdate that Claude Code refused, or that failed, changes nothing', () => {
+		const before = run(started, prompted, ...createTask('1', 'Read', 'Reading'));
+		const refused = [...updateTask({ taskId: '1', status: 'completed' }, { success: false, taskId: '1', updatedFields: [], error: 'Blocked by a hook' }), ...updateTask({ taskId: '9', status: 'in_progress' }, { success: false, taskId: '9', updatedFields: [], error: 'Task not found' })];
+		expect(refused.reduce(reduce, before).taskList).toEqual(before.taskList);
+		const failed = [
+			hook('tool_start', { toolUseId: 'f', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } }, 4),
+			hook('tool_failed', { toolUseId: 'f', name: 'TaskUpdate', error: 'InputValidationError', interrupted: false }, 4),
+		];
+		expect(failed.reduce(reduce, before).taskList).toEqual(before.taskList);
+	});
+
+	test('a TaskUpdate for a task the hub never saw created adds it under its number until a hook names it', () => {
+		const model = run(started, prompted, ...updateTask({ taskId: '4', status: 'in_progress', activeForm: 'Shipping' }));
+		expect(model.taskList).toEqual([{ id: '4', subject: 'Task #4', status: 'in_progress', activeForm: 'Shipping' }]);
+		expect(reduce(model, hook('task_completed', { taskId: '4', subject: 'Ship it' }, 5)).taskList).toEqual([{ id: '4', subject: 'Ship it', status: 'completed', activeForm: 'Shipping' }]);
+	});
+
+	test('a TaskCompleted that arrives before its TaskCreated leaves the task completed', () => {
+		const model = run(started, hook('task_completed', { taskId: '4', subject: 'Ship' }, 2), hook('task_created', { taskId: '4', subject: 'Ship' }, 3));
+		expect(model.taskList).toEqual([{ id: '4', subject: 'Ship', status: 'completed', activeForm: null }]);
+		expect(taskProgress(model)).toEqual({ done: 1, total: 1 });
 	});
 
 	test('a hook that repeats a task counts it once', () => {
@@ -358,14 +433,18 @@ describe('reduce', () => {
 		expect(taskProgress(model)).toEqual({ done: 1, total: 1 });
 	});
 
-	test('a completed task whose creation the hub missed counts as created and done', () => {
-		expect(taskProgress(run(started, hook('task_completed', { taskId: '4', subject: 'Ship' }, 2)))).toEqual({ done: 1, total: 1 });
+	test('the task tools of a subagent change the task list, though they stay out of the chat', () => {
+		const model = run(started, prompted, ...createTask('1', 'Read', 'Reading', 'agent-7'), ...updateTask({ taskId: '1', status: 'in_progress' }, undefined, 'agent-7'));
+		expect(model.taskList).toEqual([{ id: '1', subject: 'Read', status: 'in_progress', activeForm: 'Reading' }]);
+		expect(model.chat.map((item) => item.kind)).toEqual(['user']);
 	});
 
-	test('a new conversation after /clear starts task progress again at null, and compaction keeps it', () => {
-		const tasks = [hook('task_created', { taskId: '1', subject: 'Read' }, 3)];
+	test('a new conversation after /clear starts the task list again at null, and compaction keeps it', () => {
+		const tasks = createTask('1', 'Read');
 		expect(taskProgress(run(started, prompted, ...tasks, hook('session_start', { source: 'compact' }, 4)))).toEqual({ done: 0, total: 1 });
-		expect(taskProgress(run(started, prompted, ...tasks, hook('session_start', { source: 'clear' }, 4, second)))).toBeNull();
+		const cleared = run(started, prompted, ...tasks, hook('session_start', { source: 'clear' }, 4, second));
+		expect(cleared.taskList).toEqual([]);
+		expect(taskProgress(cleared)).toBeNull();
 	});
 
 	const MB = 1024 * 1024;
@@ -420,6 +499,34 @@ describe('reduce', () => {
 		expect(run(started, report(haikuLow), { kind: 'pane_exited', at: 11 }).statusLine).toBeNull();
 		expect(run(started, report(haikuLow), hook('session_end', { reason: 'prompt_input_exit' }, 11)).statusLine).toBeNull();
 		expect(run(started, report(haikuLow), hook('session_end', { reason: 'clear' }, 11), hook('session_start', { source: 'clear' }, 12, second)).statusLine).toEqual(haikuLow);
+	});
+
+	const brewing: Activity = { text: 'Brewing…', details: ['thinking with high effort'] };
+	const shown = (activity: Activity | null, at = 10): SessionInput => ({ kind: 'activity', activity, at });
+	const viewed: SessionInput = { kind: 'view_changed', viewing: true, at: 1 };
+
+	test('what Claude Code says it is doing shows while the session works with a client viewing it, and a reading that repeats it leaves the model as it was', () => {
+		const model = run(started, viewed, prompted, shown(brewing));
+		expect(model.activity).toEqual(brewing);
+		expect(reduce(model, shown({ text: 'Brewing…', details: ['thinking with high effort'] }, 11))).toBe(model);
+		expect(reduce(model, shown({ text: 'Brewing…', details: ['↓ 965 tokens', 'thinking with high effort'] })).activity).toEqual({ text: 'Brewing…', details: ['↓ 965 tokens', 'thinking with high effort'] });
+		expect(reduce(model, shown(null)).activity).toBeNull();
+	});
+
+	test.each<[string, SessionInput]>([
+		['the turn ends', hook('stop', { lastAssistantMessage: 'done' }, 11)],
+		['the turn fails', hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 11)],
+		['the session waits for an approval', { kind: 'request_opened', requestId: req1, item: approval(req1), at: 11 }],
+		['the turn is interrupted', { kind: 'interrupted', at: 11 }],
+		['the pane exits', { kind: 'pane_exited', at: 11 }],
+		['the last client stops viewing the session', { kind: 'view_changed', viewing: false, at: 11 }],
+	])('the activity goes away when %s', (_, input) => {
+		expect(reduce(run(started, viewed, prompted, shown(brewing)), input).activity).toBeNull();
+	});
+
+	test('a reading for a session that is not working, or that no client views, shows nothing', () => {
+		expect(run(started, viewed, shown(brewing)).activity).toBeNull();
+		expect(run(started, prompted, shown(brewing)).activity).toBeNull();
 	});
 
 	test('reduce returns a new model and leaves its input untouched', () => {

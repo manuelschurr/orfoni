@@ -17,6 +17,7 @@ const T0 = Date.parse('2026-10-26T11:00:00.000Z');
 function fakeTmux(running: string[] = [], typingMs = 0) {
 	const calls: { method: keyof Tmux; args: unknown[] }[] = [];
 	const live = new Set(running);
+	const screens = new Map<string, string | (() => Promise<string>)>();
 	const tmux: Tmux = {
 		async newSession(name, cwd, env, command) {
 			calls.push({ method: 'newSession', args: [name, cwd, env, command] });
@@ -36,8 +37,13 @@ function fakeTmux(running: string[] = [], typingMs = 0) {
 		async sendKeys(target, ...keys) {
 			calls.push({ method: 'sendKeys', args: [target, ...keys] });
 		},
+		async capturePane(target) {
+			calls.push({ method: 'capturePane', args: [target] });
+			const screen = screens.get(target) ?? '';
+			return typeof screen === 'string' ? screen : screen();
+		},
 	};
-	return { tmux, live, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
+	return { tmux, live, screens, of: (method: keyof Tmux) => calls.filter((call) => call.method === method).map((call) => call.args) };
 }
 
 type Method = ClientRequest['method'];
@@ -191,10 +197,19 @@ async function untilRealTime(check: () => boolean): Promise<void> {
 	if (!check()) throw new Error('condition never became true');
 }
 
+type ListedCommand = Awaited<ReturnType<HubOptions['listCommands']>>[number];
+interface Listing {
+	projectDir: string;
+	signal: AbortSignal;
+	answer(commands: ListedCommand[]): void;
+	fail(error: Error): void;
+}
+
 let dir: string;
 let fake: ReturnType<typeof fakeTmux>;
 let hub: Hub;
 let logs: string[];
+let listings: Listing[];
 let history: { claudeSessionId: ClaudeSessionId; projectDir: string }[];
 let transcript: SessionMessage[];
 let transcripts: Map<string, SessionMessage[]>;
@@ -227,6 +242,7 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 			kills.push([pid, signal]);
 			endOther(pid);
 		},
+		listCommands: (projectDir, signal) => new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail })),
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -255,6 +271,7 @@ beforeEach(() => {
 	apiKey = { missing: 'no key in tests' };
 	summaryPrompts = [];
 	kills = [];
+	listings = [];
 	writeMeminfo(6 * GB);
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
@@ -316,6 +333,15 @@ describe('startSession', () => {
 		expect((await start(client)).started.needsTrust).toBe(false);
 		expect((await start(client, { projectDir: '/elsewhere' })).started.needsTrust).toBe(true);
 		expect(readFileSync(join(dir, 'claude.json'), 'utf8')).toBe(config);
+	});
+
+	// Claude Code records a folder below a trusted one with hasTrustDialogAccepted false once a session ran there, and shows no dialog.
+	test('needsTrust is false in a folder below one Claude Code trusts, whatever Claude Code recorded for the folder itself', async () => {
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: true }, '/work/proj/sub': { hasTrustDialogAccepted: false } } }));
+		const client = await startHub();
+		expect((await start(client, { projectDir: '/work/proj/sub' })).started.needsTrust).toBe(false);
+		expect((await start(client, { projectDir: '/work/proj/' })).started.needsTrust).toBe(false);
+		expect((await start(client, { projectDir: '/workshop' })).started.needsTrust).toBe(true);
 	});
 
 	test('every connected client learns about the new session', async () => {
@@ -689,27 +715,174 @@ describe('summaries', () => {
 	});
 });
 
-describe('task progress', () => {
-	test('a session that never creates a task shows no task progress', async () => {
+// The hooks Claude Code 2.1.312 sends for one TaskCreate call and one TaskUpdate call.
+async function createTask(id: SessionId, claude: ClaudeSessionId, taskId: string, subject: string, activeForm: string): Promise<void> {
+	const tool_use_id = `toolu_create_${taskId}`;
+	await hub.hook(id, body('PreToolUse', claude, { tool_use_id, tool_name: 'TaskCreate', tool_input: { subject, description: subject, activeForm } }));
+	await hub.hook(id, body('TaskCreated', claude, { task_id: taskId, task_subject: subject, task_description: subject }));
+	await hub.hook(id, body('PostToolUse', claude, { tool_use_id, tool_name: 'TaskCreate', tool_response: { task: { id: taskId, subject } } }));
+}
+
+async function updateTask(id: SessionId, claude: ClaudeSessionId, input: { taskId: string; status: string }): Promise<void> {
+	const tool_use_id = `toolu_update_${randomUUID()}`;
+	await hub.hook(id, body('PreToolUse', claude, { tool_use_id, tool_name: 'TaskUpdate', tool_input: input }));
+	await hub.hook(id, body('PostToolUse', claude, { tool_use_id, tool_name: 'TaskUpdate', tool_response: { success: true, taskId: input.taskId, updatedFields: ['status'] } }));
+}
+
+describe('task list', () => {
+	test('a session that never creates a task shows no task list and no task progress', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
-		expect(client.session(id)).toMatchObject({ state: 'answered', tasks: null });
+		expect(client.session(id)).toMatchObject({ state: 'answered', taskList: null, tasks: null });
 	});
 
-	test('every client sees the task hooks as done out of total, and /clear takes the progress away', async () => {
+	test('every client sees the task list from the task hooks and the TaskCreate and TaskUpdate calls, with its progress, and /clear takes both away', async () => {
 		const client = await startHub();
 		const other = new TestClient(hub);
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
-		expect(other.session(id)?.tasks).toEqual({ done: 0, total: 2 });
-		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1' }));
-		expect(other.session(id)?.tasks).toEqual({ done: 1, total: 2 });
-		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, tasks: { done: 1, total: 2 } })]);
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await createTask(id, claude, '2', 'Write the summary', 'Writing the summary');
+		await updateTask(id, claude, { taskId: '1', status: 'in_progress' });
+		expect(other.session(id)).toMatchObject({
+			taskList: [
+				{ id: '1', subject: 'Read the notes', status: 'in_progress', activeForm: 'Reading the notes' },
+				{ id: '2', subject: 'Write the summary', status: 'pending', activeForm: 'Writing the summary' },
+			],
+			tasks: { done: 0, total: 2 },
+		});
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		const taskList = [
+			{ id: '1', subject: 'Read the notes', status: 'completed', activeForm: 'Reading the notes' },
+			{ id: '2', subject: 'Write the summary', status: 'pending', activeForm: 'Writing the summary' },
+		];
+		expect(other.session(id)).toMatchObject({ taskList, tasks: { done: 1, total: 2 } });
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, taskList, tasks: { done: 1, total: 2 } })]);
 		await hub.hook(id, body('SessionStart', '9b0c5d0e-0000-4000-8000-000000000001', { source: 'clear' }));
-		expect(other.session(id)?.tasks).toBeNull();
+		expect(other.session(id)).toMatchObject({ taskList: null, tasks: null });
+	});
+
+	test('a task hook or update that repeats what the list says tells no client', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		const updates = () => client.messages.filter((message) => message.type === 'sessionUpdated').length;
+		const before = updates();
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		await updateTask(id, claude, { taskId: '1', status: 'completed' });
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Read the notes' }));
+		expect(updates()).toBe(before);
+	});
+});
+
+describe('activity', () => {
+	const brewing = '✽ Brewing… (2s · thinking with high effort)';
+	const screen = (line: string) => `❯ write a story\n${line}\n❯\n  Haiku 5.5 | effort: high | ctx: 5%\n`;
+
+	async function working(client: TestClient) {
+		const session = await ready(client);
+		await client.ok('openSession', { sessionId: session.id });
+		await hub.hook(session.id, body('UserPromptSubmit', session.claude, { prompt: 'write a story' }));
+		return session;
+	}
+
+	async function shows(client: TestClient, id: SessionId, line: string): Promise<void> {
+		fake.screens.set(`orfoni-${id}`, screen(line));
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => client.session(id)?.activity?.text === line.slice(2, line.indexOf(' (')));
+	}
+
+	test('every client sees what Claude Code says it is doing, read once a second from the screen of a working session a client views, and nothing once the turn ends', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await working(client);
+		await shows(other, id, brewing);
+		expect(other.session(id)?.activity).toEqual({ text: 'Brewing…', details: ['thinking with high effort'] });
+		await shows(other, id, '✻ Writing the story… (14s · ↓ 965 tokens · thinking with high effort)');
+		const writing = { text: 'Writing the story…', details: ['↓ 965 tokens', 'thinking with high effort'] };
+		expect(other.session(id)?.activity).toEqual(writing);
+		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id, activity: writing })]);
+		expect(fake.of('capturePane')).toEqual([[`orfoni-${id}`], [`orfoni-${id}`]]);
+		await hub.hook(id, body('Stop', claude));
+		expect(other.session(id)).toMatchObject({ state: 'idle', activity: null });
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(fake.of('capturePane')).toHaveLength(2);
+	});
+
+	test('a screen that shows the same activity with another glyph and time tells no client', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		await shows(client, id, brewing);
+		const before = client.messages.length;
+		fake.screens.set(`orfoni-${id}`, screen('✶ Brewing… (3s · thinking with high effort)'));
+		await vi.advanceTimersByTimeAsync(2000);
+		await shows(client, id, '✻ Writing the story… (14s · thinking with high effort)');
+		expect(client.messages.slice(before).map((message) => message.type === 'sessionUpdated' && message.session.activity?.text)).toEqual(['Writing the story…']);
+	});
+
+	test('the screen of a session that no client views, or of one that is not working, is never read', async () => {
+		const client = await startHub();
+		const unviewed = await ready(client);
+		await hub.hook(unviewed.id, body('UserPromptSubmit', unviewed.claude, { prompt: 'work' }));
+		const idle = await ready(client);
+		await client.ok('openSession', { sessionId: idle.id });
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(fake.of('capturePane')).toEqual([]);
+	});
+
+	test('the activity goes away for every client when the last client viewing the session moves on', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id } = await working(client);
+		await shows(other, id, brewing);
+		client.close();
+		expect(other.session(id)).toMatchObject({ state: 'working', activity: null });
+	});
+
+	test('a screen without the line, or with it in a format orfoni does not know, shows no activity and leaves the session working', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		await shows(client, id, brewing);
+		fake.screens.set(`orfoni-${id}`, screen('⏺ Brewing in a new format'));
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => client.session(id)?.activity === null);
+		expect(client.session(id)?.state).toBe('working');
+	});
+
+	test('a screen read that has not answered yet is not started again', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		let answer: (text: string) => void = () => {};
+		const slow = new Promise<string>((resolve) => (answer = resolve));
+		fake.screens.set(`orfoni-${id}`, () => slow);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(fake.of('capturePane')).toHaveLength(1);
+		answer(screen(brewing));
+		await untilRealTime(() => client.session(id)?.activity !== null);
+		await vi.advanceTimersByTimeAsync(1000);
+		await untilRealTime(() => fake.of('capturePane').length === 2);
+	});
+
+	test('a screen read that fails shows no activity and is logged once', async () => {
+		const client = await startHub();
+		const { id } = await working(client);
+		fake.screens.set(`orfoni-${id}`, () => Promise.reject(new Error(`can't find pane: =orfoni-${id}:`)));
+		await vi.advanceTimersByTimeAsync(3000);
+		await untilRealTime(() => fake.of('capturePane').length === 3);
+		expect(logs).toEqual([expect.stringContaining("can't find pane")]);
+		expect(client.session(id)?.activity).toBeNull();
+	});
+
+	test('the activity is shown, never stored', async () => {
+		const client = await startHub();
+		const { id, claude } = await working(client);
+		await shows(client, id, brewing);
+		await hub.hook(id, body('TaskCreated', claude, { task_id: '1', task_subject: 'Write the story' }));
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes('Write the story'));
+		expect(readFileSync(join(dir, 'state.json'), 'utf8')).not.toContain('Brewing');
 	});
 });
 
@@ -1396,19 +1569,54 @@ describe('read state and the state file', () => {
 		expect(await again.ok('listSessions', {})).toEqual([expect.objectContaining({ id, state: 'idle' })]);
 	});
 
-	test('summaries and task progress survive a restart', async () => {
+	test('summaries and the task list survive a restart', async () => {
 		apiKey = { key: 'sk-test' };
 		const client = await startHub();
 		const { id, claude } = await ready(client);
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '1' }));
-		await hub.hook(id, body('TaskCreated', claude, { task_id: '2' }));
-		await hub.hook(id, body('TaskCompleted', claude, { task_id: '2' }));
+		await createTask(id, claude, '1', 'Read the notes', 'Reading the notes');
+		await createTask(id, claude, '2', 'Write the summary', 'Writing the summary');
+		await updateTask(id, claude, { taskId: '1', status: 'in_progress' });
+		await hub.hook(id, body('TaskCompleted', claude, { task_id: '2', task_subject: 'Write the summary' }));
 		await hub.hook(id, body('Stop', claude));
 		await untilRealTime(() => client.session(id)?.summary !== null);
 		const { summary } = client.session(id)!;
 		await saved((state) => state.sessions[0]?.summary !== null);
 		const after = await restart([`orfoni-${id}`]);
-		expect(await after.ok('listSessions', {})).toEqual([expect.objectContaining({ id, summary, tasks: { done: 1, total: 2 } })]);
+		expect(await after.ok('listSessions', {})).toEqual([
+			expect.objectContaining({
+				id,
+				summary,
+				taskList: [
+					{ id: '1', subject: 'Read the notes', status: 'in_progress', activeForm: 'Reading the notes' },
+					{ id: '2', subject: 'Write the summary', status: 'completed', activeForm: 'Writing the summary' },
+				],
+				tasks: { done: 1, total: 2 },
+			}),
+		]);
+	});
+
+	test('a version 2 state file from before task lists brings back each session with its task progress', async () => {
+		writeFileSync(
+			join(dir, 'state.json'),
+			JSON.stringify({
+				version: 2,
+				sessions: [{ id: 'v2', projectDir: PROJECT, title: null, claudeSessionId: '9a6c5b1e-0000-4000-8000-00000000000c', createdAt: T0 - 3_600_000, summary: null, tasks: { '1': true, '2': false }, lastTurnEndedAt: null, lastViewedAt: null }],
+				summaries: { day: '2026-10-26', requests: 3, spentUsd: 0.001 },
+			}),
+		);
+		const client = await startHub();
+		expect(await client.ok('listSessions', {})).toEqual([
+			expect.objectContaining({
+				id: 'v2',
+				state: 'offline',
+				taskList: [
+					{ id: '1', subject: 'Task #1', status: 'completed', activeForm: null },
+					{ id: '2', subject: 'Task #2', status: 'pending', activeForm: null },
+				],
+				tasks: { done: 1, total: 2 },
+			}),
+		]);
+		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
 	});
 
 	test("the day's summary spend survives a restart", async () => {
@@ -1446,7 +1654,7 @@ describe('read state and the state file', () => {
 		expect(readdirSync(dir).filter((name) => name.startsWith('state.json'))).toEqual(['state.json']);
 		await hub.hook('m1-running', body('UserPromptSubmit', running, { prompt: 'hi' }));
 		await hub.hook('m1-running', body('Stop', running));
-		await saved((state) => state.version === 2 && state.sessions.length === 2);
+		await saved((state) => state.version === 3 && state.sessions.length === 2);
 	});
 });
 
@@ -1478,6 +1686,120 @@ describe('listProjectDirs', () => {
 		const client = await startHub();
 		await start(client);
 		expect(await client.ok('listProjectDirs', {})).toEqual({ dirs: [{ path: PROJECT, lastActive: T0 }] });
+	});
+});
+
+describe('listCommands', () => {
+	// Rows as the Agent SDK lists them: Claude Code's own commands carry builtin, and a command without aliases has none.
+	const listed: ListedCommand[] = [
+		{ name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'], builtin: true },
+		{ name: 'model', description: 'Set the AI model for Claude Code', argumentHint: '[model]', builtin: true },
+		{ name: 'effort', description: 'Set the effort level of the model', argumentHint: '[low|medium|high|xhigh|max]', builtin: true },
+		{ name: 'pstack:poteto-mode', description: "(pstack) poteto's agent style for concise, detailed responses.", argumentHint: '', aliases: ['poteto-mode'] },
+		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>' },
+	];
+	const commands = [
+		{ name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'] },
+		{ name: 'pstack:poteto-mode', description: "(pstack) poteto's agent style for concise, detailed responses.", argumentHint: '', aliases: ['poteto-mode'] },
+		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>', aliases: [] },
+	];
+
+	function trustedFolder(name = 'project'): string {
+		const folder = join(dir, 'trusted', name);
+		mkdirSync(folder, { recursive: true });
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [join(dir, 'trusted')]: { hasTrustDialogAccepted: true } } }));
+		return folder;
+	}
+
+	test('answers the slash commands of a folder, skills included, without /model and /effort, which also change the defaults of every new session', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.ok('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		expect(listings[0]!.projectDir).toBe(folder);
+		listings[0]!.answer(listed);
+		expect(await answered).toEqual({ commands });
+		expect(listings[0]!.signal.aborted).toBe(false);
+	});
+
+	test('a name that rows share is listed once, as the command Claude Code runs for it', async () => {
+		const client = await startHub();
+		const answered = client.ok('listCommands', { projectDir: trustedFolder() });
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.answer([
+			{ name: 'review', description: 'Review it my way (user)', argumentHint: '' },
+			{ name: 'review', description: 'Review a pull request', argumentHint: '[pr]', builtin: true },
+			{ name: 'review', description: 'Review it the project way (project)', argumentHint: '' },
+		]);
+		expect(await answered).toEqual({ commands: [{ name: 'review', description: 'Review a pull request', argumentHint: '[pr]', aliases: [] }] });
+	});
+
+	test('requests for a folder share one listing while it runs, and every client gets it for 10 minutes without another', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const folder = trustedFolder();
+		const answers = [client, client, other].map((asking) => asking.ok('listCommands', { projectDir: folder }));
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.answer(listed);
+		expect(await Promise.all(answers)).toEqual([{ commands }, { commands }, { commands }]);
+		vi.setSystemTime(Date.now() + 9 * 60_000);
+		expect(await other.ok('listCommands', { projectDir: folder })).toEqual({ commands });
+		expect(listings).toHaveLength(1);
+		vi.setSystemTime(Date.now() + 2 * 60_000);
+		const fresh = client.ok('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+		listings[1]!.answer([]);
+		expect(await fresh).toEqual({ commands: [] });
+	});
+
+	test('each folder is listed on its own', async () => {
+		const client = await startHub();
+		const [first, second] = [trustedFolder('first'), trustedFolder('second')];
+		const answers = [first, second].map((projectDir) => client.ok('listCommands', { projectDir }));
+		await untilRealTime(() => listings.length === 2);
+		expect(listings.map(({ projectDir }) => projectDir)).toEqual([first, second]);
+		listings[0]!.answer(listed);
+		listings[1]!.answer([]);
+		expect(await Promise.all(answers)).toEqual([{ commands }, { commands: [] }]);
+	});
+
+	test('a listing that takes over 20 s fails with an error that says so, is told to end its Claude Code, and the next request lists again', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		await vi.advanceTimersByTimeAsync(19_000);
+		expect(listings[0]!.signal.aborted).toBe(false);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: expect.stringContaining('20 s') } });
+		expect(listings[0]!.signal.aborted).toBe(true);
+		void client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+	});
+
+	test('a listing that fails answers why, and the next request lists again', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.fail(new Error('Claude Code process exited with code 1'));
+		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: 'Claude Code process exited with code 1' } });
+		void client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+	});
+
+	test('a folder that does not exist, or that Claude Code does not trust, is refused with an error that says why, without starting Claude Code, until it is trusted', async () => {
+		const client = await startHub();
+		trustedFolder();
+		const missing = join(dir, 'trusted', 'missing');
+		expect(await client.request('listCommands', { projectDir: missing })).toMatchObject({ ok: false, error: { code: 'not_found', message: expect.stringContaining(missing) } });
+		const untrusted = join(dir, 'untrusted');
+		mkdirSync(untrusted);
+		expect(await client.request('listCommands', { projectDir: untrusted })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining(`does not trust ${untrusted}`) } });
+		expect(listings).toEqual([]);
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [untrusted]: { hasTrustDialogAccepted: true } } }));
+		void client.request('listCommands', { projectDir: untrusted });
+		await untilRealTime(() => listings.length === 1);
 	});
 });
 

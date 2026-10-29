@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { listenClients } from './client-server.js';
+import { listCommands } from './commands.js';
 import { listenHooks } from './hook-server.js';
 import { Hub } from './hub.js';
 import { claudeClient, readApiKey, SUMMARY_MODEL } from './summaries.js';
@@ -31,6 +32,7 @@ async function daemon(): Promise<void> {
 		systemRoot: '/',
 		claudeSessionsDir: join(homedir(), '.claude/sessions'),
 		kill: (pid, signal) => process.kill(pid, signal),
+		listCommands,
 		taskTools: process.env.ORFONI_TASK_TOOLS !== '0',
 		log,
 	});
