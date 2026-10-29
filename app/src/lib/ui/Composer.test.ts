@@ -1,5 +1,5 @@
 import type { SlashCommand } from '@orfoni/protocol';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { expect, test } from 'vitest';
 import { connectedClient, spoken, summary } from '../testing';
@@ -31,8 +31,7 @@ test('Enter sends and empties the box, Shift+Enter does not send', async () => {
 	await fireEvent.keyDown(box(), { key: 'Enter' });
 	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: 'first line' }]);
 	transport.respond('send', {});
-	await screen.findByDisplayValue('');
-	expect(box().value).toBe('');
+	await waitFor(() => expect(box().value).toBe(''));
 });
 
 test('a message the hub could not deliver stays in the box, with the reason under it', async () => {
@@ -245,4 +244,64 @@ test('the commands load once per folder for each connection to the hub', async (
 	transport.status({ kind: 'connected' });
 	await typed('/cle');
 	expect(transport.requests('listCommands').map((request) => request.projectDir)).toEqual(['/root/projects/alpha', '/root/code/beta', '/root/code/beta']);
+});
+
+const image = (name: string, content = name, type = 'image/png') => new File([content], name, { type });
+const base64 = (content: string) => Buffer.from(content).toString('base64');
+const shown = () => screen.queryAllByRole('img').map((img) => img.getAttribute('alt'));
+
+test('a pasted image shows above the message and goes with it, and both empty once it is sent', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [image('shot.png', 'png bytes')], types: ['Files'] } });
+	expect(await screen.findByRole('img', { name: 'shot.png' })).toBeTruthy();
+	await type('What is wrong here?');
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: 'What is wrong here?', images: [{ type: 'image/png', data: base64('png bytes') }] }]);
+	transport.respond('send', {});
+	await waitFor(() => expect(box().value).toBe(''));
+	expect(shown()).toEqual([]);
+});
+
+test('text pasted without an image goes into the box as usual', async () => {
+	const { client } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(await fireEvent.paste(box(), { clipboardData: { files: [], types: ['text/plain'] } })).toBe(true);
+	expect(shown()).toEqual([]);
+});
+
+test('images go without text, dropped or picked, and a removed one stays behind', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.drop(box(), { dataTransfer: { files: [image('first.png'), image('second.jpg', 'jpeg bytes', 'image/jpeg')], types: ['Files'] } });
+	await fireEvent.change(screen.getByLabelText('Attach images'), { target: { files: [image('third.webp', 'webp bytes', 'image/webp')] } });
+	await screen.findByRole('img', { name: 'third.webp' });
+	expect(shown()).toEqual(['first.png', 'second.jpg', 'third.webp']);
+	await fireEvent.click(screen.getByRole('button', { name: 'Remove first.png' }));
+	expect(shown()).toEqual(['second.jpg', 'third.webp']);
+	await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+	expect(transport.requests('send')).toMatchObject([{ text: '', images: [{ type: 'image/jpeg', data: base64('jpeg bytes') }, { type: 'image/webp', data: base64('webp bytes') }] }]);
+});
+
+test('a file Claude Code cannot take as an image, one over 10 MB, and a sixth image stay out, with the reason under the box', async () => {
+	const { client } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [image('notes.txt', 'text', 'text/plain'), image('drawing.svg', '<svg/>', 'image/svg+xml')], types: ['Files'] } });
+	expect((await screen.findByRole('alert')).textContent).toBe('orfoni sends PNG, JPEG, GIF and WebP images, which notes.txt and drawing.svg are not.');
+	await fireEvent.paste(box(), { clipboardData: { files: [new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' })], types: ['Files'] } });
+	expect(screen.getByRole('alert').textContent).toBe('An image can be at most 10 MB, which huge.png is not.');
+	await fireEvent.paste(box(), { clipboardData: { files: ['1', '2', '3', '4', '5', '6'].map((n) => image(`${n}.png`)), types: ['Files'] } });
+	await screen.findByRole('img', { name: '5.png' });
+	expect(shown()).toEqual(['1.png', '2.png', '3.png', '4.png', '5.png']);
+	expect(screen.getByRole('alert').textContent).toBe('A message takes at most 5 images, so 6.png stays out.');
+});
+
+test('a message the hub could not deliver keeps its images', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [image('shot.png')], types: ['Files'] } });
+	await screen.findByRole('img', { name: 'shot.png' });
+	await type('and now?');
+	transport.fail('send', 'not_delivered', 'Claude Code did not confirm the message within 5 s');
+	expect(await screen.findByText(/did not confirm/)).toBeTruthy();
+	expect(shown()).toEqual(['shot.png']);
 });

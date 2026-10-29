@@ -1,11 +1,20 @@
 <script lang="ts">
-	import type { SessionId, SlashCommand } from '@orfoni/protocol';
+	import { ImageType, MAX_IMAGE_BYTES, MAX_IMAGES, type SessionId, type SlashCommand } from '@orfoni/protocol';
 	import type { HubClient } from '../hub-client.svelte';
 	import { needsYou } from './format';
+
+	interface Attachment {
+		name: string;
+		type: ImageType;
+		// Read once, for the thumbnail and for sending.
+		dataUrl: string;
+	}
 
 	let { client, sessionId }: { client: HubClient; sessionId: SessionId } = $props();
 	const id = $props.id();
 	let text = $state('');
+	let images = $state<Attachment[]>([]);
+	let dragging = $state(false);
 	let sending = $state(false);
 	let error = $state<string | null>(null);
 	let box: HTMLTextAreaElement | undefined = $state();
@@ -50,14 +59,86 @@
 		box?.focus();
 	}
 
+	function read(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = () => reject(reader.error ?? new Error(`Reading ${file.name} failed.`));
+			reader.readAsDataURL(file);
+		});
+	}
+
+	function names(files: File[]): string {
+		const list = files.map((file) => file.name);
+		return list.length === 1 ? list[0]! : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`;
+	}
+
+	// What does not fit stays out with its reason, and what fits goes in.
+	async function attach(files: File[]): Promise<void> {
+		const unreadable = files.filter((file) => !ImageType.safeParse(file.type).success);
+		const large = files.filter((file) => !unreadable.includes(file) && file.size > MAX_IMAGE_BYTES);
+		const fitting = files.filter((file) => !unreadable.includes(file) && !large.includes(file));
+		const room = Math.max(0, MAX_IMAGES - images.length);
+		const left = fitting.slice(room);
+		const reasons = [
+			unreadable.length > 0 && `orfoni sends PNG, JPEG, GIF and WebP images, which ${names(unreadable)} ${unreadable.length === 1 ? 'is' : 'are'} not.`,
+			large.length > 0 && `An image can be at most ${MAX_IMAGE_BYTES / 1024 / 1024} MB, which ${names(large)} ${large.length === 1 ? 'is' : 'are'} not.`,
+			left.length > 0 && `A message takes at most ${MAX_IMAGES} images, so ${names(left)} ${left.length === 1 ? 'stays' : 'stay'} out.`,
+		].filter((reason) => reason !== false);
+		error = reasons.length > 0 ? reasons.join(' ') : null;
+		try {
+			const added = await Promise.all(fitting.slice(0, room).map(async (file) => ({ name: file.name, type: ImageType.parse(file.type), dataUrl: await read(file) })));
+			images = [...images, ...added].slice(0, MAX_IMAGES);
+		} catch (e) {
+			error = (e as Error).message;
+		}
+	}
+
+	function pasted(event: ClipboardEvent): void {
+		const files = [...(event.clipboardData?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		void attach(files);
+	}
+
+	function dropped(event: DragEvent): void {
+		dragging = false;
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		void attach(files);
+	}
+
+	function draggedOver(event: DragEvent): void {
+		if (!event.dataTransfer?.types.includes('Files')) return;
+		event.preventDefault();
+		dragging = true;
+	}
+
+	function picked(event: Event & { currentTarget: HTMLInputElement }): void {
+		const input = event.currentTarget;
+		void attach([...(input.files ?? [])]);
+		input.value = '';
+	}
+
+	function remove(attachment: Attachment): void {
+		images = images.filter((image) => image !== attachment);
+	}
+
 	async function submit(): Promise<void> {
 		const message = text;
-		if (message.trim() === '' || sending) return;
+		const attached = images;
+		if ((message.trim() === '' && attached.length === 0) || sending) return;
 		sending = true;
 		error = null;
 		try {
-			await client.send(sessionId, message);
+			await client.send(
+				sessionId,
+				message.trim() === '' ? '' : message,
+				attached.map((image) => ({ type: image.type, data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1) })),
+			);
 			if (text === message) text = '';
+			if (images === attached) images = [];
 		} catch (e) {
 			error = `${(e as Error).message} Your message is still here.`;
 		} finally {
@@ -102,7 +183,19 @@
 		void submit();
 	}}
 >
-	<div class="box" class:sending>
+	<div class="box" class:sending class:dragging ondragover={draggedOver} ondragleave={() => (dragging = false)} ondrop={dropped} role="group" aria-label="Message">
+		{#if images.length > 0}
+			<ul class="images" aria-label="Images">
+				{#each images as image (image)}
+					<li>
+						<img src={image.dataUrl} alt={image.name} />
+						<button type="button" class="remove" aria-label="Remove {image.name}" title="Remove {image.name}" onclick={() => remove(image)}>
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+						</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 		{#if suggestions.length > 0}
 			<ul class="commands" id="{id}-commands" role="listbox" aria-label="Commands">
 				{#each suggestions as command, index}
@@ -123,6 +216,10 @@
 				{/each}
 			</ul>
 		{/if}
+		<label class="attach" title="Attach images">
+			<input type="file" accept={ImageType.options.join(',')} multiple aria-label="Attach images" onchange={picked} />
+			<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5l-5.3 5.3a3.2 3.2 0 01-4.5-4.5l6-6a2.1 2.1 0 013 3l-6 6a1 1 0 01-1.5-1.5l5.3-5.3" /></svg>
+		</label>
 		<textarea
 			bind:this={box}
 			bind:value={text}
@@ -134,13 +231,14 @@
 			{placeholder}
 			rows="1"
 			onkeydown={keydown}
+			onpaste={pasted}
 			onfocus={() => (focused = true)}
 			onblur={() => (focused = false)}
 		></textarea>
-		<button class="send btn btn-primary" type="submit" disabled={sending || text.trim() === ''}>{sending ? 'Sending' : 'Send'}</button>
+		<button class="send btn btn-primary" type="submit" disabled={sending || (text.trim() === '' && images.length === 0)}>{sending ? 'Sending' : 'Send'}</button>
 	</div>
 	{#if error}<p class="error" id="composer-error" role="alert">{error}</p>{/if}
-	<p class="hint">Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.</p>
+	<p class="hint">Enter sends, Shift+Enter adds a line, pasted or dropped images go along, and a message that starts with ! runs in the shell.</p>
 </form>
 
 <style>
@@ -154,6 +252,7 @@
 	.box {
 		position: relative;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: flex-end;
 		gap: 0.6rem;
 		padding: 0.6rem 0.6rem 0.6rem 1rem;
@@ -169,6 +268,101 @@
 
 	.box.sending {
 		opacity: 0.75;
+	}
+
+	.box.dragging {
+		border-style: dashed;
+		border-color: var(--accent);
+	}
+
+	/* The thumbnails take a row of their own above the message. */
+	.images {
+		display: flex;
+		flex-basis: 100%;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		margin: 0.2rem 0 0.3rem;
+		padding: 0;
+		list-style: none;
+	}
+
+	.images li {
+		position: relative;
+	}
+
+	.images img {
+		display: block;
+		width: 4.5rem;
+		height: 4.5rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-control);
+		object-fit: cover;
+	}
+
+	.remove {
+		position: absolute;
+		top: -0.45rem;
+		right: -0.45rem;
+		display: grid;
+		place-items: center;
+		width: 1.35rem;
+		height: 1.35rem;
+		padding: 0;
+		border: 1px solid var(--border-strong);
+		border-radius: 50%;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+	}
+
+	.remove svg {
+		width: 0.6rem;
+		height: 0.6rem;
+		stroke: currentColor;
+		stroke-width: 2;
+		stroke-linecap: round;
+	}
+
+	/* The input stays focusable for the keyboard, and the label around it is what you see and click. */
+	.attach {
+		position: relative;
+		display: grid;
+		flex: none;
+		place-items: center;
+		width: 2.1rem;
+		height: 2.1rem;
+		margin-left: -0.5rem;
+		border-radius: 10px;
+		color: var(--muted);
+		cursor: pointer;
+	}
+
+	.attach:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.attach:focus-within {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+
+	.attach input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.attach svg {
+		width: 1.15rem;
+		height: 1.15rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	textarea {
