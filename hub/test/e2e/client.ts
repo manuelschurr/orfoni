@@ -1,6 +1,6 @@
 import { spawn, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { parseHubMessage, type ChatItem, type ClientRequest, type HubMessage, type SessionId, type SessionSummary } from '@orfoni/protocol';
 
 type Method = ClientRequest['method'];
@@ -112,7 +112,14 @@ export function pane(sessionId: SessionId): string {
 export function newProjectDir(): string {
 	const base = '/var/tmp/claude-0/orfoni-e2e';
 	mkdirSync(base, { recursive: true });
-	return mkdtempSync(`${base}/project-`);
+	return offRemoteControl(mkdtempSync(`${base}/project-`));
+}
+
+// The user starts every session with Remote Control, which would list each test session on claude.ai, and Claude Code 2.1.312 lets a folder's local settings turn it off, trusted or not.
+export function offRemoteControl(dir: string): string {
+	mkdirSync(`${dir}/.claude`, { recursive: true });
+	writeFileSync(`${dir}/.claude/settings.local.json`, '{ "remoteControlAtStartup": false }\n');
+	return dir;
 }
 
 export async function acceptTrustPrompt(started: Started): Promise<void> {

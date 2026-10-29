@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ChatItem, Effort, OtherSession, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
-import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
 const started: SessionId[] = [];
@@ -29,7 +29,7 @@ async function start({ dir = newProjectDir(), ...params }: { prompt?: string; pe
 const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.status === 'pending';
 
 // A folder Claude Code already trusts, so no trust dialog holds up a session started there, and its status line runs from the start.
-const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
+const TRUSTED_DIR = offRemoteControl('/var/tmp/claude-0/orfoni-spike-tui');
 
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
 
