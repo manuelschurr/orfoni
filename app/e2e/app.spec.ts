@@ -392,7 +392,7 @@ test('while Claude works the conversation shows a timer and what it is doing, an
 	await expect(claude(page).last()).toContainText(/\w{3}/);
 });
 
-test('while Claude works its task list shows under the conversation, and once the turn is over the header opens it', async ({ page }) => {
+test('Claude\'s task list shows in the sidebar beside the conversation while it works and after, and the sidebar collapses to its count', async ({ page }) => {
 	const session = await startReady({ title: 'task list check' });
 	await openSession(page, session);
 	const box = page.getByRole('textbox', { name: 'Message' });
@@ -400,19 +400,24 @@ test('while Claude works its task list shows under the conversation, and once th
 		'Use the TaskCreate tool three times to create the tasks alpha, beta, and gamma, in that order, each with an activeForm. Then use the TaskUpdate tool to mark alpha as in_progress. Then, without any tools, write a 1500-word story about a lighthouse keeper. Then use the TaskUpdate tool to mark alpha as completed and reply with exactly: tasks done',
 	);
 	await box.press('Enter');
+	const sidebar = page.getByRole('complementary', { name: 'Task list' });
 	const conversation = page.getByRole('region', { name: 'Conversation' });
-	await expect(conversation.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/alpha/i, /beta/i, /gamma/i], { timeout: REPLY_MS });
+	await expect(sidebar.getByRole('listitem')).toHaveText([/alpha/i, /beta/i, /gamma/i], { timeout: REPLY_MS });
 	await expect(conversation.getByRole('status')).toBeVisible();
+	await expect(conversation.getByRole('list', { name: 'Tasks' })).toHaveCount(0);
 
 	await expect(claude(page).last()).toContainText('tasks done', { timeout: REPLY_MS });
-	await expect(conversation.getByRole('list', { name: 'Tasks' })).toHaveCount(0);
-	const main = page.getByRole('main');
-	await main.getByRole('button', { name: 'Task list', exact: true }).click();
-	// haiku sometimes leaves out the last update, so the header is held to what Claude Code recorded rather than to the prompt.
+	// haiku sometimes leaves out the last update, so the sidebar is held to what Claude Code recorded rather than to the prompt.
 	const words = { pending: 'Pending', in_progress: 'In progress', completed: 'Done' };
 	const recorded = taskFiles(session.claudeSessionId);
 	expect(recorded.map((task) => task.subject.toLowerCase())).toEqual(['alpha', 'beta', 'gamma']);
-	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText(recorded.map((task) => new RegExp(`^\\s*${words[task.status]}:\\s.*${task.subject}`, 'i')));
+	await expect(sidebar.getByRole('listitem')).toHaveText(recorded.map((task) => new RegExp(`^\\s*${words[task.status]}:\\s.*${task.subject}`, 'i')));
+	const done = recorded.filter((task) => task.status === 'completed').length;
+	await sidebar.getByRole('button', { name: 'Hide the task list' }).click();
+	await expect(sidebar.getByRole('listitem')).toHaveCount(0);
+	await expect(sidebar.getByRole('button', { name: `Show the task list, ${done} of 3 done` })).toHaveText(`${done}/3`);
+	await sidebar.getByRole('button', { name: /^Show the task list/ }).click();
+	await expect(sidebar.getByRole('listitem')).toHaveCount(3);
 });
 
 test('typing /cl suggests /clear from the commands of the folder, and Tab completes it, with the user settings unchanged', async ({ page }) => {

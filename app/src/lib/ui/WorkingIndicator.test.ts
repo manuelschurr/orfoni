@@ -1,23 +1,13 @@
-import type { ChatItem, TaskItem } from '@orfoni/protocol';
-import { render, screen, within } from '@testing-library/svelte';
+import type { ChatItem } from '@orfoni/protocol';
+import { render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { connectedClient, spoken } from '../testing';
+import { connectedClient } from '../testing';
 import ChatView from './ChatView.svelte';
 import { elapsed } from './format';
 import WorkingIndicator from './WorkingIndicator.svelte';
 
 const T0 = Date.parse('2026-10-29T10:00:00.000Z');
 const prompt: ChatItem = { kind: 'user', id: 'u1', text: 'Plan the ranging tests.', at: T0 };
-const tasks: TaskItem[] = [
-	{ id: '1', subject: 'Get the laptop tunnel up', status: 'completed', activeForm: 'Getting the laptop tunnel up' },
-	{ id: '2', subject: 'Test 1: two pairs ranging at once', status: 'in_progress', activeForm: 'Running the two-pair test' },
-	{ id: '3', subject: 'Test 2: four pairs ranging at once', status: 'pending', activeForm: null },
-];
-
-function shownTasks(): string[] {
-	return within(screen.getByRole('list', { name: 'Tasks' })).getAllByRole('listitem').map(spoken);
-}
-
 beforeEach(() => {
 	vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0 + 43_000);
@@ -77,28 +67,9 @@ test('the conversation shows the indicator after its last item while a turn runs
 	expect(screen.queryByRole('status')).toBeNull();
 });
 
-test('while a turn runs, the task list shows under the indicator in its order, each task with its status, and goes with the indicator', async () => {
-	const { client } = await connectedClient([]);
-	const props = { client, chat: [prompt], error: null, empty: '', onretry: () => {}, tasks };
-	const { rerender } = render(ChatView, { ...props, working: T0 });
-	expect(shownTasks()).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once', 'Pending: Test 2: four pairs ranging at once']);
-	await rerender({ ...props, working: null });
-	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
-});
-
 test('the conversation passes on the line Claude Code shows while it works', async () => {
 	const { client } = await connectedClient([]);
 	render(ChatView, { client, chat: [prompt], error: null, empty: '', onretry: () => {}, working: T0, activity: { text: 'Writing the story…', details: ['↓ 965 tokens'] } });
 	expect(screen.getByRole('status').textContent).toBe('Writing the story…');
 	expect(screen.getByText('↓ 965 tokens')).toBeTruthy();
-});
-
-test('a turn in a session without tasks shows no task list', async () => {
-	const { client } = await connectedClient([]);
-	const props = { client, chat: [prompt], error: null, empty: '', onretry: () => {}, working: T0 };
-	const { rerender } = render(ChatView, { ...props, tasks: null });
-	expect(screen.getByRole('status').textContent).toBe('Thinking');
-	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
-	await rerender({ ...props, tasks: [] });
-	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
 });

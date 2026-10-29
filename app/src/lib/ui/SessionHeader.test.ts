@@ -69,36 +69,11 @@ test('the header shows where the session stands, how many tasks are done, and it
 	expect(screen.queryByText(/near the limit/)).toBeNull();
 });
 
-test.each(['idle', 'answered', 'needs_approval'] as const)('while the session is %s, its Tasks progress opens and closes the task list', async (state) => {
+test.each(['idle', 'working'] as const)('while the session is %s, the header shows the task progress and leaves the list to the sidebar beside the conversation', async (state) => {
 	await header({ state, tasks: { done: 1, total: 3 }, taskList });
-	const toggle = screen.getByRole('button', { name: 'Task list' });
-	expect(toggle.getAttribute('aria-expanded')).toBe('false');
-	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
-
-	await fireEvent.click(toggle);
-	expect(toggle.getAttribute('aria-expanded')).toBe('true');
-	const items = within(screen.getByRole('list', { name: 'Tasks' })).getAllByRole('listitem').map(spoken);
-	expect(items).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once', 'Pending: Test 2: four pairs ranging at once']);
 	expect(screen.getByRole('progressbar', { name: 'Tasks' }).getAttribute('aria-valuetext')).toBe('1 of 3 tasks done');
-
-	await fireEvent.click(toggle);
-	expect(toggle.getAttribute('aria-expanded')).toBe('false');
+	expect(screen.queryByRole('button', { name: 'Task list' })).toBeNull();
 	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
-});
-
-test('while the session works, the header shows the task progress but not the list, which shows under the working indicator', async () => {
-	const { report } = await header({ state: 'idle', tasks: { done: 1, total: 3 }, taskList });
-	await fireEvent.click(screen.getByRole('button', { name: 'Task list' }));
-	report({ state: 'working' });
-	await vi.waitFor(() => expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull());
-	expect(screen.queryByRole('button', { name: 'Task list' })).toBeNull();
-	expect(screen.getByRole('progressbar', { name: 'Tasks' }).getAttribute('aria-valuetext')).toBe('1 of 3 tasks done');
-});
-
-test('task progress from a hub that sends no task list shows without a list to open', async () => {
-	await header({ state: 'idle', tasks: { done: 3, total: 7 }, taskList: null });
-	expect(screen.getByRole('progressbar', { name: 'Tasks' })).toBeTruthy();
-	expect(screen.queryByRole('button', { name: 'Task list' })).toBeNull();
 });
 
 test('a session that never created a task, has no summary, and reports no memory, model, or effort shows none of them', async () => {

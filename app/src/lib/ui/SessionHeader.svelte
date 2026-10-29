@@ -2,7 +2,6 @@
 	import type { SessionSummary } from '@orfoni/protocol';
 	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
 	import { bytes, effortChoices, effortLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
-	import TaskList from './TaskList.svelte';
 
 	let {
 		client,
@@ -18,14 +17,11 @@
 	let forkPrompt = $state('');
 	let forking = $state(false);
 	let forkError = $state<string | null>(null);
-	let tasksOpen = $state(false);
 	const id = $props.id();
 	const title = $derived(sessionTitle(session, client.chats.get(session.id)));
 	const memory = $derived(session.memory);
 	const limit = $derived(memory?.maxBytes ? { max: memory.maxBytes, warning: memory.currentBytes > 0.8 * memory.maxBytes } : null);
 	const used = $derived(memory && limit ? `${bytes(memory.currentBytes)} of ${bytes(limit.max)}` : '');
-	// While the session works, its task list shows under the working indicator instead.
-	const taskList = $derived(session.state !== 'working' && session.taskList?.length ? session.taskList : null);
 	// A change restarts the session, which a failed turn leaves at its prompt and an offline one does not need.
 	const takesChanges = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed' || session.state === 'offline');
 	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
@@ -133,17 +129,12 @@
 		<div class="gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
-				<div class="gauge" class:opens={taskList !== null}>
+				<div class="gauge">
 					<span class="label" aria-hidden="true">Tasks</span>
 					<div class="bar" role="progressbar" aria-label="Tasks" aria-valuemin={0} aria-valuemax={tasks.total} aria-valuenow={tasks.done} aria-valuetext={tasksDone(tasks)}>
 						<span class="fill" style:width={percent(tasks.done, tasks.total)}></span>
 					</div>
 					<span class="value" aria-hidden="true">{tasks.done}/{tasks.total}</span>
-					{#if taskList}
-						<button class="toggle" aria-label="Task list" aria-expanded={tasksOpen} aria-controls={tasksOpen ? `${id}-tasks` : undefined} onclick={() => (tasksOpen = !tasksOpen)}>
-							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
-						</button>
-					{/if}
 				</div>
 			{/if}
 			{#if memory}
@@ -183,9 +174,6 @@
 				{/each}
 			{/if}
 		</div>
-	{/if}
-	{#if taskList && tasksOpen}
-		<div class="task-panel"><TaskList tasks={taskList} id="{id}-tasks" /></div>
 	{/if}
 	{#if error}<p class="error" role="alert">{error}</p>{/if}
 </header>
@@ -322,66 +310,6 @@
 		display: flex;
 		align-items: center;
 		gap: 0.55rem;
-	}
-
-	/* The toggle covers the whole gauge, so the progress itself opens the list while the progressbar stays outside the button. */
-	.gauge.opens {
-		position: relative;
-	}
-
-	.toggle {
-		display: grid;
-		place-items: center;
-		width: 1rem;
-		height: 1rem;
-		padding: 0;
-		border: 0;
-		background: none;
-		color: var(--muted);
-		cursor: pointer;
-	}
-
-	.toggle::after {
-		position: absolute;
-		inset: -0.25rem -0.45rem;
-		border-radius: 6px;
-		content: '';
-	}
-
-	.toggle:hover::after {
-		background: var(--hover);
-	}
-
-	.toggle:focus-visible {
-		outline: none;
-	}
-
-	.toggle:focus-visible::after {
-		outline: 2px solid var(--accent);
-	}
-
-	.toggle svg {
-		width: 0.75rem;
-		height: 0.75rem;
-		fill: none;
-		stroke: currentColor;
-		stroke-width: 1.8;
-		stroke-linecap: round;
-		stroke-linejoin: round;
-		transition: transform 0.15s ease;
-	}
-
-	.toggle[aria-expanded='true'] svg {
-		transform: rotate(180deg);
-	}
-
-	.task-panel {
-		flex-basis: 100%;
-		padding: 0.6rem 0.8rem;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-control);
-		background: var(--surface-sunk);
-		font-size: 0.875rem;
 	}
 
 	.select {

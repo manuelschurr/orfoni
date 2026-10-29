@@ -17,6 +17,7 @@
 	import OtherSessionView from './lib/ui/OtherSessionView.svelte';
 	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
 	import SessionHeader from './lib/ui/SessionHeader.svelte';
+	import TaskSidebar from './lib/ui/TaskSidebar.svelte';
 	import SettingsView from './lib/ui/SettingsView.svelte';
 	import Sidebar from './lib/ui/Sidebar.svelte';
 	import TerminalPanel from './lib/ui/TerminalPanel.svelte';
@@ -111,34 +112,38 @@
 		<main>
 			{#if session}
 				{#key session.id}
-					<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
-					<ChatView
-						{client}
-						chat={client.chats.get(session.id)}
-						working={session.state === 'working' ? session.stateSince : null}
-						activity={session.activity}
-						tasks={session.taskList}
-						error={client.openError}
-						empty="No messages yet. What you send here goes to Claude in this session's terminal."
-						onretry={() => void client?.select(session.id).catch(() => {})}
-					>
-						{#snippet banner()}
-							{#if memoryHint}
-								<div class="note" role="note">
-									<p>The VPS had {bytes(memoryHint.availableBytes)} of {bytes(memoryHint.totalBytes)} free when this session started. Stop sessions you no longer need before it runs out.</p>
-									<button class="btn btn-quiet" onclick={() => (lowMemory = lowMemory.filter((entry) => entry.id !== session.id))}>Dismiss</button>
-								</div>
-							{/if}
-							{#if trustHint}
-								<div class="note" role="note">
-									<p>Claude Code asks whether you trust this folder before it starts. Open the terminal and choose "Yes, I trust this folder".</p>
-									<button class="btn btn-primary" onclick={() => sessionTerminal(session)}>Open terminal</button>
-									<button class="btn btn-quiet" onclick={() => (untrusted = untrusted.filter((id) => id !== session.id))}>Dismiss</button>
-								</div>
-							{/if}
-						{/snippet}
-					</ChatView>
-					<Composer bind:this={composer} {client} sessionId={session.id} />
+					<div class="session">
+						<div class="conversation">
+							<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<ChatView
+								{client}
+								chat={client.chats.get(session.id)}
+								working={session.state === 'working' ? session.stateSince : null}
+								activity={session.activity}
+								error={client.openError}
+								empty="No messages yet. What you send here goes to Claude in this session's terminal."
+								onretry={() => void client?.select(session.id).catch(() => {})}
+							>
+								{#snippet banner()}
+									{#if memoryHint}
+										<div class="note" role="note">
+											<p>The VPS had {bytes(memoryHint.availableBytes)} of {bytes(memoryHint.totalBytes)} free when this session started. Stop sessions you no longer need before it runs out.</p>
+											<button class="btn btn-quiet" onclick={() => (lowMemory = lowMemory.filter((entry) => entry.id !== session.id))}>Dismiss</button>
+										</div>
+									{/if}
+									{#if trustHint}
+										<div class="note" role="note">
+											<p>Claude Code asks whether you trust this folder before it starts. Open the terminal and choose "Yes, I trust this folder".</p>
+											<button class="btn btn-primary" onclick={() => sessionTerminal(session)}>Open terminal</button>
+											<button class="btn btn-quiet" onclick={() => (untrusted = untrusted.filter((id) => id !== session.id))}>Dismiss</button>
+										</div>
+									{/if}
+								{/snippet}
+							</ChatView>
+							<Composer bind:this={composer} {client} sessionId={session.id} />
+						</div>
+						{#if session.taskList?.length}<TaskSidebar tasks={session.taskList} />{/if}
+					</div>
 				{/key}
 			{:else if client.other}
 				{#key client.other.session.pid}
@@ -212,6 +217,21 @@
 
 	main {
 		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+	}
+
+	/* The task list sits beside the conversation, header included, like the session list on the other side. */
+	.session {
+		display: flex;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.conversation {
+		display: flex;
+		flex: 1;
 		flex-direction: column;
 		min-width: 0;
 		min-height: 0;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ChatItem, SessionSummary, TaskItem } from '@orfoni/protocol';
+	import type { ChatItem, SessionSummary } from '@orfoni/protocol';
 	import type { Snippet } from 'svelte';
 	import { itemKey, type HubClient } from '../hub-client.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
@@ -18,8 +18,7 @@
 		banner,
 		working = null,
 		activity = null,
-		tasks = null,
-	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; activity?: SessionSummary['activity']; tasks?: TaskItem[] | null } = $props();
+	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; activity?: SessionSummary['activity'] } = $props();
 	// A question or a plan shows as its own card, so the tool call that asked for it stays out of the groups, though history, which has no cards, keeps it.
 	const cardOf: Record<string, ChatItem['kind']> = { AskUserQuestion: 'question', ExitPlanMode: 'plan' };
 
@@ -56,7 +55,6 @@
 		void chat;
 		void working;
 		void activity;
-		void tasks;
 		if (pinned && scroller) scroller.scrollTop = scroller.scrollHeight;
 	});
 </script>
@@ -105,7 +103,7 @@
 			{/each}
 		{/if}
 		<!-- While a turn runs, this says Claude is at work and for how long, so a long think does not look stuck. -->
-		{#if working !== null && chat !== undefined}<WorkingIndicator since={working} {chat} {activity} {tasks} />{/if}
+		{#if working !== null && chat !== undefined}<WorkingIndicator since={working} {chat} {activity} />{/if}
 	</div>
 </section>
 

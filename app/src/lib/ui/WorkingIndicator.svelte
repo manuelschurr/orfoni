@@ -1,9 +1,8 @@
 <script lang="ts">
-	import type { ChatItem, SessionSummary, TaskItem } from '@orfoni/protocol';
+	import type { ChatItem, SessionSummary } from '@orfoni/protocol';
 	import { elapsed } from './format';
-	import TaskList from './TaskList.svelte';
 
-	let { since, chat, activity = null, tasks = null }: { since: number; chat: ChatItem[]; activity?: SessionSummary['activity']; tasks?: TaskItem[] | null } = $props();
+	let { since, chat, activity = null }: { since: number; chat: ChatItem[]; activity?: SessionSummary['activity'] } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -34,7 +33,6 @@
 				<span>{detail}</span>
 			{/each}
 		</p>
-		{#if tasks?.length}<TaskList {tasks} />{/if}
 	</div>
 </div>
 

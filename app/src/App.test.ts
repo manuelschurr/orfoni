@@ -216,7 +216,7 @@ test('porting a session outside orfoni opens the new orfoni session in its place
 	expect(screen.getByRole('button', { name: /^swarm-73/ }).getAttribute('aria-current')).toBe('true');
 });
 
-test('a working session shows the line Claude Code shows and its task list under the conversation', async () => {
+test('a working session shows the line Claude Code shows in the conversation and its task list in the sidebar beside it, and a session without one shows no sidebar', async () => {
 	const working = summary('w1', 'working', {
 		title: 'Range the pairs',
 		tasks: { done: 1, total: 2 },
@@ -226,6 +226,7 @@ test('a working session shows the line Claude Code shows and its task list under
 		],
 		activity: { text: 'Running the two-pair test…', details: ['↓ 69.3k tokens'] },
 	});
+	const plain = summary('p1', 'idle', { title: 'Read the notes' });
 	let hubLine: (message: unknown) => void = () => {};
 	inTauri((cmd, args, push) => {
 		switch (cmd) {
@@ -236,8 +237,9 @@ test('a working session shows the line Claude Code shows and its task list under
 				push({ kind: 'status', value: { kind: 'connected' } });
 				return { kind: 'connected' };
 			case 'hub_send': {
-				const request = JSON.parse(args.line as string) as { id: number; method: string };
-				const results: Record<string, unknown> = { listSessions: [working], listOtherSessions: [], openSession: { session: working, chat: [] } };
+				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string };
+				const opened = request.sessionId === plain.id ? plain : working;
+				const results: Record<string, unknown> = { listSessions: [working, plain], listOtherSessions: [], openSession: { session: opened, chat: [] } };
 				if (request.method in results) hubLine({ type: 'response', id: request.id, ok: true, result: results[request.method] });
 				return null;
 			}
@@ -248,9 +250,12 @@ test('a working session shows the line Claude Code shows and its task list under
 	render(App);
 	await fireEvent.click(await screen.findByRole('button', { name: /^Range the pairs/ }));
 	const conversation = await screen.findByRole('region', { name: 'Conversation' });
-	const tasks = await within(conversation).findByRole('list', { name: 'Tasks' });
-	expect(within(tasks).getAllByRole('listitem').map(spoken)).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once']);
+	const sidebar = await screen.findByRole('complementary', { name: 'Task list' });
+	expect(within(sidebar).getAllByRole('listitem').map(spoken)).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once']);
+	expect(within(conversation).queryByRole('list', { name: 'Tasks' })).toBeNull();
 	expect(within(conversation).getByRole('status').textContent).toBe('Running the two-pair test…');
+	await fireEvent.click(screen.getByRole('button', { name: /^Read the notes/ }));
+	await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Task list' })).toBeNull());
 });
 
 test('in Tauri, the sidebar shows the installed version next to the app name', async () => {
