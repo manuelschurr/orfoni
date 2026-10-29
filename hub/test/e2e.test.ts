@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, Effort, OtherSession, PermissionMode, SessionId } from '@orfoni/protocol';
+import type { ChatItem, Effort, OtherSession, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -32,6 +32,46 @@ const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.sta
 const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
 
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
+
+// /model and /effort typed into Claude Code save these as the defaults of every new session, so no check may change them.
+function defaults(): Record<string, unknown> {
+	const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+	return { model, effortLevel, modelSettings };
+}
+
+function processes(): number[] {
+	return readdirSync('/proc')
+		.filter((name) => /^\d+$/.test(name))
+		.map(Number);
+}
+
+function stat(pid: number): { parent: number; group: number } | null {
+	try {
+		const line = readFileSync(`/proc/${pid}/stat`, 'utf8');
+		const [, parent, group] = line.slice(line.lastIndexOf(')') + 2).split(' ');
+		return { parent: Number(parent), group: Number(group) };
+	} catch {
+		return null;
+	}
+}
+
+// The Agent SDK starts Claude Code with these flags, which no orfoni session has, and a process Claude Code starts shows them too until it runs its own program.
+function listingProcesses(dir: string): number[] {
+	const listing = new Map<number, number | undefined>();
+	for (const pid of processes()) {
+		try {
+			const args = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+			if (args.includes('stream-json') && args.includes('--no-session-persistence') && readlinkSync(`/proc/${pid}/cwd`) === dir) listing.set(pid, stat(pid)?.parent);
+		} catch {
+			// The process ended while the list was read.
+		}
+	}
+	return [...listing].filter(([, parent]) => parent === undefined || !listing.has(parent)).map(([pid]) => pid);
+}
+
+function processGroup(group: number): number[] {
+	return processes().filter((pid) => stat(pid)?.group === group);
+}
 
 describe('orfoni-hub against real Claude Code sessions', () => {
 	test('approval from the client creates the file', async () => {
@@ -165,7 +205,8 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const { id } = await start();
 		const panePid = tmux('list-panes', '-t', pane(id), '-F', '#{pane_pid}').trim();
 		const cgroup = readFileSync(`/proc/${panePid}/cgroup`, 'utf8').trim().split('/').pop() ?? '';
-		const memoryMax = execFileSync('systemctl', ['--user', 'show', cgroup, '-p', 'MemoryMax'], { encoding: 'utf8' }).trim();
+		// A run against a scratch hub points XDG_RUNTIME_DIR at that hub's sockets, and systemctl finds the user manager through it.
+		const memoryMax = execFileSync('systemctl', ['--user', 'show', cgroup, '-p', 'MemoryMax'], { encoding: 'utf8', env: { ...process.env, XDG_RUNTIME_DIR: `/run/user/${process.getuid?.()}` } }).trim();
 		expect(memoryMax).toBe('MemoryMax=8589934592');
 	});
 
@@ -222,10 +263,6 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 
 	// /model and /effort typed into Claude Code also change the defaults of every new session, so a change restarts this one session on the flags and leaves the user's settings alone.
 	test('a session shows the model and effort it runs on, and a relaunch changes the effort of that session only', async () => {
-		const defaults = () => {
-			const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
-			return { model, effortLevel, modelSettings };
-		};
 		const before = defaults();
 		const { id } = await start({ prompt: 'Reply with exactly: ok', effort: 'low', dir: TRUSTED_DIR });
 		const reported = await client.waitForSession(id, (s) => s.model !== null && s.state === 'answered', undefined, 60_000);
@@ -239,13 +276,73 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(defaults()).toEqual(before);
 	});
 
-	test('a session reports its task progress and its memory against the pane cap', async () => {
+	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
+		const before = defaults();
 		const { id } = await start({
-			prompt: 'Use the TaskCreate tool to create two tasks, one named alpha and one named beta. Then use the TaskUpdate tool to mark alpha as completed. Do not work on beta. Then reply with exactly: tasks set',
+			dir: TRUSTED_DIR,
+			prompt: 'Use the TaskCreate tool three times to create three tasks. Their subjects are alpha, beta, and gamma, and their activeForms are Doing alpha, Doing beta, and Doing gamma. Then use the TaskUpdate tool to set alpha to in_progress, and use it again to set beta to completed. Do not work on any task. Then reply with exactly: tasks set',
 		});
-		const session = await client.waitForSession(id, (s) => s.state === 'answered' && s.tasks?.done === 1 && s.memory !== null);
-		expect(session.tasks).toEqual({ done: 1, total: 2 });
+		const session = await client.waitForSession(id, (s) => s.state === 'answered' && s.tasks?.total === 3 && s.tasks.done === 1 && s.memory !== null);
+		const shown = (session.taskList ?? []).map(({ subject, status, activeForm }) => ({ subject: subject.toLowerCase(), status, activeForm: activeForm?.toLowerCase() ?? null }));
+		expect(shown).toEqual([
+			{ subject: 'alpha', status: 'in_progress', activeForm: 'doing alpha' },
+			{ subject: 'beta', status: 'completed', activeForm: 'doing beta' },
+			{ subject: 'gamma', status: 'pending', activeForm: 'doing gamma' },
+		]);
 		expect(session.memory?.maxBytes).toBe(8589934592);
 		expect(session.memory?.currentBytes).toBeGreaterThan(0);
+		expect(defaults()).toEqual(before);
+	});
+
+	test('a session a client views shows what Claude Code says it is doing while it works, and nothing once it is done', async () => {
+		const before = defaults();
+		const { id } = await start({ dir: TRUSTED_DIR, prompt: 'Write a 1000 word story about a lighthouse keeper, in plain prose. No tools.' });
+		await client.request('openSession', { sessionId: id });
+		const working = await client.waitForSession(id, (s) => s.state === 'working' && s.activity !== null, undefined, 90_000);
+		expect(working.activity?.text).toMatch(/…$/);
+		const done = await client.waitForSession(id, (s) => s.state === 'idle', client.mark());
+		expect(done.activity).toBeNull();
+		expect(((await client.request('listSessions', {})) as SessionSummary[]).find((s) => s.id === id)?.activity).toBeNull();
+		expect(defaults()).toEqual(before);
+	});
+
+	test('listCommands answers the slash commands of a trusted folder, skills included but not model or effort, with one listing for many requests and no Claude Code left behind', async () => {
+		const before = defaults();
+		// Trusted through its parent, and never listed before, so the hub has to list it now.
+		const dir = mkdtempSync(`${TRUSTED_DIR}/commands-`);
+		const seen = new Set<number>();
+		let most = 0;
+		// Claude Code registers the listing's process as a session in its folder while it runs, and orfoni must not list it among the other sessions.
+		const othersWhileRegistered: OtherSession[][] = [];
+		const watching = setInterval(() => {
+			const pids = listingProcesses(dir);
+			for (const pid of pids) seen.add(pid);
+			most = Math.max(most, pids.length);
+			if (pids.some((pid) => existsSync(join(homedir(), '.claude/sessions', `${pid}.json`)))) {
+				void client.request('listOtherSessions', {}).then((others) => othersWhileRegistered.push(others as OtherSession[]), () => {});
+			}
+		}, 50);
+		let answers: { commands: SlashCommand[] }[] = [];
+		try {
+			answers = (await Promise.all([1, 2, 3].map(() => client.request('listCommands', { projectDir: dir })))) as { commands: SlashCommand[] }[];
+			expect(listingProcesses(dir)).toEqual([]);
+			await expect(client.request('listCommands', { projectDir: `${dir}-missing` })).rejects.toThrow(/^not_found/);
+		} finally {
+			clearInterval(watching);
+			rmSync(dir, { recursive: true, force: true });
+		}
+		expect([seen.size, most]).toEqual([1, 1]);
+		// Claude Code runs a system probe, the MCP servers of the user's settings, and rg scans in the listing's process group.
+		for (const listing of seen) expect(processGroup(listing)).toEqual([]);
+		expect(othersWhileRegistered.length).toBeGreaterThan(0);
+		expect(othersWhileRegistered.flat().filter((other) => other.projectDir === dir)).toEqual([]);
+		expect(answers[1]).toEqual(answers[0]);
+		expect(answers[2]).toEqual(answers[0]);
+		const names = answers[0]!.commands.map((command) => command.name);
+		expect(names).toEqual(expect.arrayContaining(['clear', 'compact']));
+		expect(names).not.toContain('model');
+		expect(names).not.toContain('effort');
+		expect(answers[0]!.commands.some((command) => command.name.includes(':') && command.aliases.length > 0)).toBe(true);
+		expect(defaults()).toEqual(before);
 	});
 });
