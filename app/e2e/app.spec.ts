@@ -46,6 +46,12 @@ function shownState(page: Page, label: string) {
 	return page.getByRole('main').getByText(label, { exact: true });
 }
 
+// What /model and /effort typed into Claude Code would change for every new session, which no check may touch.
+function userDefaults() {
+	const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+	return { model, effortLevel, modelSettings };
+}
+
 test('the bridge refuses connections that lack its token', async () => {
 	const refused = (url: string) =>
 		new Promise<boolean>((resolve) => {
@@ -204,11 +210,7 @@ test('a summary shows on the row and in the header when the hub has an API key',
 
 // /model and /effort typed into Claude Code also change the defaults of every new session, so the header restarts this one session and leaves the user's settings alone.
 test('change the effort from the header and see the level Claude Code reports there, with the user settings unchanged', async ({ page }) => {
-	const defaults = () => {
-		const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
-		return { model, effortLevel, modelSettings };
-	};
-	const before = defaults();
+	const before = userDefaults();
 	const session = await startReady({ title: 'effort check', effort: 'low', prompt: 'Reply with exactly: ok' });
 	await openSession(page, session);
 	const main = page.getByRole('main');
@@ -222,7 +224,7 @@ test('change the effort from the header and see the level Claude Code reports th
 	await expect(main.getByRole('status')).toHaveCount(0);
 	await expect(main.getByRole('alert')).toHaveCount(0);
 	expect((await hub.sessions()).find((s) => s.id === session.id)?.effort).toBe('high');
-	expect(defaults()).toEqual(before);
+	expect(userDefaults()).toEqual(before);
 });
 
 test('remove a session', async ({ page }) => {
@@ -348,9 +350,46 @@ test('while Claude works the conversation shows a timer and what it is doing, an
 	await box.fill('Write a 600-word story about a terminal that learns to dream. No tools.');
 	await box.press('Enter');
 	const main = page.getByRole('main');
-	const working = main.getByRole('status').filter({ hasText: /^(Thinking|Writing)$/ });
+	// The app's own word, or the line Claude Code shows, such as "Writing the story…", once the hub reads it.
+	const working = main.getByRole('status').filter({ hasText: /^(Thinking|Writing|.+…)$/ });
 	await expect(working).toBeVisible({ timeout: 15_000 });
 	await expect(main.getByText(/^\d+s$/)).toBeVisible();
 	await expect(working).toHaveCount(0, { timeout: REPLY_MS });
 	await expect(claude(page).last()).toContainText(/\w{3}/);
+});
+
+test('while Claude works its task list shows under the conversation, and once the turn is over the header opens it', async ({ page }) => {
+	const session = await startReady({ title: 'task list check' });
+	await openSession(page, session);
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.fill(
+		'Use the TaskCreate tool three times to create the tasks alpha, beta, and gamma, in that order, each with an activeForm. Then use the TaskUpdate tool to mark alpha as in_progress. Then, without any tools, write a 1500-word story about a lighthouse keeper. Then use the TaskUpdate tool to mark alpha as completed and reply with exactly: tasks done',
+	);
+	await box.press('Enter');
+	const conversation = page.getByRole('region', { name: 'Conversation' });
+	await expect(conversation.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/alpha/i, /beta/i, /gamma/i], { timeout: REPLY_MS });
+	await expect(conversation.getByRole('status')).toBeVisible();
+
+	await expect(claude(page).last()).toContainText('tasks done', { timeout: REPLY_MS });
+	await expect(conversation.getByRole('list', { name: 'Tasks' })).toHaveCount(0);
+	const main = page.getByRole('main');
+	await main.getByRole('button', { name: 'Task list' }).click();
+	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/^Done:\s.*alpha/i, /^Pending:\s.*beta/i, /^Pending:\s.*gamma/i]);
+});
+
+test('typing /cl suggests /clear from the commands of the folder, and Tab completes it, with the user settings unchanged', async ({ page }) => {
+	const before = userDefaults();
+	const session = await startReady({ title: 'commands check' });
+	await openSession(page, session);
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.click();
+	await box.pressSequentially('/cl');
+	const commands = page.getByRole('listbox', { name: 'Commands' });
+	await expect(commands.getByRole('option', { selected: true })).toHaveAccessibleName(/^\/clear /, { timeout: 30_000 });
+	await box.press('Tab');
+	await expect(box).toHaveValue('/clear ');
+	await expect(box).toBeFocused();
+	await expect(commands).toHaveCount(0);
+	await box.fill('');
+	expect(userDefaults()).toEqual(before);
 });
