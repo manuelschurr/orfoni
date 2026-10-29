@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SlashCommand as ClaudeCommand, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
 	Effort,
@@ -19,6 +19,7 @@ import {
 	type RequestOutcome,
 	type SessionStateKind,
 	type SessionSummary,
+	type SlashCommand,
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { parseActivity, type Activity } from './activity.js';
@@ -45,6 +46,10 @@ const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
+const COMMANDS_KEPT_MS = 10 * 60_000;
+const COMMANDS_TIMEOUT_MS = 20_000;
+// Typed into Claude Code, these also change the defaults of every new session, and the session header changes them for one session.
+const LEFT_OUT_COMMANDS = new Set(['model', 'effort']);
 const RELAUNCHABLE = new Set<SessionStateKind>(['idle', 'answered', 'failed', 'offline']);
 const HookPermissionMode = z.object({ permission_mode: PermissionMode });
 const NOT_IDLE: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
@@ -65,6 +70,8 @@ export interface HubOptions {
 	systemRoot: string;
 	claudeSessionsDir: string;
 	kill(pid: number, signal: NodeJS.Signals): void;
+	// Lists the slash commands Claude Code takes in a folder, and has ended every process it started by the time it settles.
+	listCommands(projectDir: string, signal: AbortSignal): Promise<ClaudeCommand[]>;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -179,6 +186,25 @@ async function subfolders(parent: string): Promise<string[]> {
 	}
 }
 
+async function isFolder(path: string): Promise<boolean> {
+	try {
+		return (await stat(path)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+// Rows can share a name, and /name then runs Claude Code's own command.
+function usable(listed: ClaudeCommand[]): SlashCommand[] {
+	const byName = new Map<string, ClaudeCommand>();
+	for (const command of listed) {
+		if (LEFT_OUT_COMMANDS.has(command.name)) continue;
+		const kept = byName.get(command.name);
+		if (!kept || (command.builtin && !kept.builtin)) byName.set(command.name, command);
+	}
+	return [...byName.values()].map(({ name, description, argumentHint, aliases = [] }) => ({ name, description, argumentHint, aliases }));
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -199,6 +225,7 @@ export class Hub {
 	private readonly porting = new Set<ClaudeSessionId>();
 	private readonly summarizer: Summarizer;
 	private readonly reported = new Set<string>();
+	private readonly commandLists = new Map<string, { since: number; commands: Promise<SlashCommand[]> }>();
 
 	private constructor(
 		private readonly options: HubOptions,
@@ -353,6 +380,8 @@ export class Hub {
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
+			case 'listCommands':
+				return { commands: await this.commands(resolve(request.projectDir)) };
 			case 'listOtherSessions':
 				return (await this.refreshOthers()).map(({ session }) => session);
 			case 'openOtherSession':
@@ -661,6 +690,34 @@ export class Hub {
 		return [...lastActive]
 			.map(([path, lastActive]) => ({ path, lastActive }))
 			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0) || a.path.localeCompare(b.path));
+	}
+
+	// One listing answers every request for its folder for 10 minutes, and one that failed is tried again on the next request.
+	private commands(projectDir: string): Promise<SlashCommand[]> {
+		const kept = this.commandLists.get(projectDir);
+		if (kept && Date.now() - kept.since < COMMANDS_KEPT_MS) return kept.commands;
+		const commands = this.list(projectDir);
+		this.commandLists.set(projectDir, { since: Date.now(), commands });
+		commands.catch(() => {
+			if (this.commandLists.get(projectDir)?.commands === commands) this.commandLists.delete(projectDir);
+		});
+		return commands;
+	}
+
+	private async list(projectDir: string): Promise<SlashCommand[]> {
+		if (!(await isFolder(projectDir))) throw new HubError('not_found', `no folder ${projectDir}`);
+		// Claude Code started without a terminal loads the folder's settings without asking, which the trust dialog is there to prevent.
+		if (await this.needsTrust(projectDir)) throw new HubError('not_ready', `Claude Code does not trust ${projectDir} yet, so orfoni does not start it there to list its commands`);
+		const stop = new AbortController();
+		const timedOut = new Promise<never>((_, reject) => {
+			stop.signal.addEventListener('abort', () => reject(new HubError('internal', `Claude Code took over ${COMMANDS_TIMEOUT_MS / 1000} s to list the commands of ${projectDir}`)));
+		});
+		const timer = setTimeout(() => stop.abort(), COMMANDS_TIMEOUT_MS);
+		try {
+			return usable(await Promise.race([this.options.listCommands(projectDir, stop.signal), timedOut]));
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	private async killTmux(matches: (name: string) => boolean): Promise<void> {

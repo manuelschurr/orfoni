@@ -197,10 +197,19 @@ async function untilRealTime(check: () => boolean): Promise<void> {
 	if (!check()) throw new Error('condition never became true');
 }
 
+type ListedCommand = Awaited<ReturnType<HubOptions['listCommands']>>[number];
+interface Listing {
+	projectDir: string;
+	signal: AbortSignal;
+	answer(commands: ListedCommand[]): void;
+	fail(error: Error): void;
+}
+
 let dir: string;
 let fake: ReturnType<typeof fakeTmux>;
 let hub: Hub;
 let logs: string[];
+let listings: Listing[];
 let history: { claudeSessionId: ClaudeSessionId; projectDir: string }[];
 let transcript: SessionMessage[];
 let transcripts: Map<string, SessionMessage[]>;
@@ -233,6 +242,7 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 			kills.push([pid, signal]);
 			endOther(pid);
 		},
+		listCommands: (projectDir, signal) => new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail })),
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -261,6 +271,7 @@ beforeEach(() => {
 	apiKey = { missing: 'no key in tests' };
 	summaryPrompts = [];
 	kills = [];
+	listings = [];
 	writeMeminfo(6 * GB);
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
@@ -1675,6 +1686,121 @@ describe('listProjectDirs', () => {
 		const client = await startHub();
 		await start(client);
 		expect(await client.ok('listProjectDirs', {})).toEqual({ dirs: [{ path: PROJECT, lastActive: T0 }] });
+	});
+});
+
+describe('listCommands', () => {
+	// Rows as the Agent SDK lists them: Claude Code's own commands carry builtin, and a command without aliases has none.
+	const listed: ListedCommand[] = [
+		{ name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'], builtin: true },
+		{ name: 'model', description: 'Set the AI model for Claude Code', argumentHint: '[model]', builtin: true },
+		{ name: 'effort', description: 'Set the effort level of the model', argumentHint: '[low|medium|high|xhigh|max]', builtin: true },
+		{ name: 'pstack:poteto-mode', description: "(pstack) poteto's agent style for concise, detailed responses.", argumentHint: '', aliases: ['poteto-mode'] },
+		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>' },
+	];
+	const commands = [
+		{ name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'] },
+		{ name: 'pstack:poteto-mode', description: "(pstack) poteto's agent style for concise, detailed responses.", argumentHint: '', aliases: ['poteto-mode'] },
+		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>', aliases: [] },
+	];
+
+	// Claude Code trusts every folder below one that accepted its trust dialog.
+	function trustedFolder(name = 'project'): string {
+		const folder = join(dir, 'trusted', name);
+		mkdirSync(folder, { recursive: true });
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [join(dir, 'trusted')]: { hasTrustDialogAccepted: true } } }));
+		return folder;
+	}
+
+	test('answers the slash commands of a folder, skills included, without /model and /effort, which also change the defaults of every new session', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.ok('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		expect(listings[0]!.projectDir).toBe(folder);
+		listings[0]!.answer(listed);
+		expect(await answered).toEqual({ commands });
+		expect(listings[0]!.signal.aborted).toBe(false);
+	});
+
+	test('a name that rows share is listed once, as the command Claude Code runs for it', async () => {
+		const client = await startHub();
+		const answered = client.ok('listCommands', { projectDir: trustedFolder() });
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.answer([
+			{ name: 'review', description: 'Review it my way (user)', argumentHint: '' },
+			{ name: 'review', description: 'Review a pull request', argumentHint: '[pr]', builtin: true },
+			{ name: 'review', description: 'Review it the project way (project)', argumentHint: '' },
+		]);
+		expect(await answered).toEqual({ commands: [{ name: 'review', description: 'Review a pull request', argumentHint: '[pr]', aliases: [] }] });
+	});
+
+	test('requests for a folder share one listing while it runs, and every client gets it for 10 minutes without another', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const folder = trustedFolder();
+		const answers = [client, client, other].map((asking) => asking.ok('listCommands', { projectDir: folder }));
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.answer(listed);
+		expect(await Promise.all(answers)).toEqual([{ commands }, { commands }, { commands }]);
+		vi.setSystemTime(Date.now() + 9 * 60_000);
+		expect(await other.ok('listCommands', { projectDir: folder })).toEqual({ commands });
+		expect(listings).toHaveLength(1);
+		vi.setSystemTime(Date.now() + 2 * 60_000);
+		const fresh = client.ok('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+		listings[1]!.answer([]);
+		expect(await fresh).toEqual({ commands: [] });
+	});
+
+	test('each folder is listed on its own', async () => {
+		const client = await startHub();
+		const [first, second] = [trustedFolder('first'), trustedFolder('second')];
+		const answers = [first, second].map((projectDir) => client.ok('listCommands', { projectDir }));
+		await untilRealTime(() => listings.length === 2);
+		expect(listings.map(({ projectDir }) => projectDir)).toEqual([first, second]);
+		listings[0]!.answer(listed);
+		listings[1]!.answer([]);
+		expect(await Promise.all(answers)).toEqual([{ commands }, { commands: [] }]);
+	});
+
+	test('a listing that takes over 20 s fails with an error that says so, is told to end its Claude Code, and the next request lists again', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		await vi.advanceTimersByTimeAsync(19_000);
+		expect(listings[0]!.signal.aborted).toBe(false);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: expect.stringContaining('20 s') } });
+		expect(listings[0]!.signal.aborted).toBe(true);
+		void client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+	});
+
+	test('a listing that fails answers why, and the next request lists again', async () => {
+		const client = await startHub();
+		const folder = trustedFolder();
+		const answered = client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 1);
+		listings[0]!.fail(new Error('Claude Code process exited with code 1'));
+		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: 'Claude Code process exited with code 1' } });
+		void client.request('listCommands', { projectDir: folder });
+		await untilRealTime(() => listings.length === 2);
+	});
+
+	test('a folder that does not exist, or that Claude Code does not trust, is refused with an error that says why, without starting Claude Code, until it is trusted', async () => {
+		const client = await startHub();
+		trustedFolder();
+		const missing = join(dir, 'trusted', 'missing');
+		expect(await client.request('listCommands', { projectDir: missing })).toMatchObject({ ok: false, error: { code: 'not_found', message: expect.stringContaining(missing) } });
+		const untrusted = join(dir, 'untrusted');
+		mkdirSync(untrusted);
+		expect(await client.request('listCommands', { projectDir: untrusted })).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining(`does not trust ${untrusted}`) } });
+		expect(listings).toEqual([]);
+		writeFileSync(join(dir, 'claude.json'), JSON.stringify({ projects: { [untrusted]: { hasTrustDialogAccepted: true } } }));
+		void client.request('listCommands', { projectDir: untrusted });
+		await untilRealTime(() => listings.length === 1);
 	});
 });
 
