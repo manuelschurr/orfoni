@@ -6,14 +6,13 @@ export type Activity = NonNullable<SessionSummary['activity']>;
 const LINE = /^\s*[✢✳✶✻✽·*] (.+…) \(([^()]+)\)$/u;
 const ELAPSED = /^\d+[hms](?: \d+[hms])*$/;
 
-// The app counts the elapsed time itself, so it is left out.
+// The app counts the elapsed time itself, so it is left out. It comes first, or after the name of a hook that runs.
 export function parseActivity(screen: string): Activity | null {
 	for (const line of screen.split('\n').reverse()) {
 		const match = LINE.exec(line.trimEnd());
 		if (!match) continue;
 		const [, text = '', list = ''] = match;
-		const parts = list.split(' · ');
-		return { text, details: ELAPSED.test(parts[0] ?? '') ? parts.slice(1) : parts };
+		return { text, details: list.split(' · ').filter((part) => !ELAPSED.test(part)) };
 	}
 	return null;
 }

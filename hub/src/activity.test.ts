@@ -29,6 +29,13 @@ describe('parseActivity', () => {
 		expect(parseActivity(`✻ Running the two-pair test… (${elapsed} · ↓ 69.3k tokens)`)).toEqual({ text: 'Running the two-pair test…', details: ['↓ 69.3k tokens'] });
 	});
 
+	test.each([
+		['✻ Befuddling… (running TaskCreated hook · 5s · ↓ 298 tokens)', { text: 'Befuddling…', details: ['running TaskCreated hook', '↓ 298 tokens'] }],
+		['✢ Flibbertigibbeting… (running UserPromptSubmit hooks… 0/2 · 0s)', { text: 'Flibbertigibbeting…', details: ['running UserPromptSubmit hooks… 0/2'] }],
+	])('leaves out the elapsed time that follows a running hook, as Claude Code 2.1.312 shows it: %s', (line, activity) => {
+		expect(parseActivity(line)).toEqual(activity);
+	});
+
 	test('keeps a first part that is no elapsed time, and parentheses inside the text', () => {
 		expect(parseActivity('✻ Running the test (fast)… (thinking with high effort)')).toEqual({ text: 'Running the test (fast)…', details: ['thinking with high effort'] });
 	});
