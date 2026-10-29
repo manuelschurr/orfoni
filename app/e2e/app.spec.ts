@@ -48,8 +48,8 @@ function shownState(page: Page, label: string) {
 
 // What /model and /effort typed into Claude Code would change for every new session, which no check may touch.
 function userDefaults() {
-	const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
-	return { model, effortLevel, modelSettings };
+	const { model, effortLevel, modelSettings, fastMode } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+	return { model, effortLevel, modelSettings, fastMode };
 }
 
 test('the bridge refuses connections that lack its token', async () => {

@@ -34,8 +34,8 @@ const TRUSTED_DIR = '/var/tmp/claude-0/orfoni-spike-tui';
 const replied = (text: string) => (item: ChatItem) => item.kind === 'assistant' && item.text.includes(text);
 
 function defaults(): Record<string, unknown> {
-	const { model, effortLevel, modelSettings } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
-	return { model, effortLevel, modelSettings };
+	const { model, effortLevel, modelSettings, fastMode } = JSON.parse(readFileSync(join(homedir(), '.claude/settings.json'), 'utf8')) as Record<string, unknown>;
+	return { model, effortLevel, modelSettings, fastMode };
 }
 
 function processes(): number[] {

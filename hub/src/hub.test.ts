@@ -1807,6 +1807,7 @@ describe('listCommands', () => {
 		{ name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'], builtin: true },
 		{ name: 'model', description: 'Set the AI model for Claude Code', argumentHint: '[model]', builtin: true },
 		{ name: 'effort', description: 'Set the effort level of the model', argumentHint: '[low|medium|high|xhigh|max]', builtin: true },
+		{ name: 'fast', description: 'Toggle fast mode', argumentHint: '[on|off]', builtin: true },
 		{ name: 'pstack:poteto-mode', description: "(pstack) poteto's agent style for concise, detailed responses.", argumentHint: '', aliases: ['poteto-mode'] },
 		{ name: 'release-notes', description: 'Draft the release notes (project)', argumentHint: '<version>' },
 	];
@@ -1823,7 +1824,7 @@ describe('listCommands', () => {
 		return folder;
 	}
 
-	test('answers the slash commands of a folder, skills included, without /model and /effort, which also change the defaults of every new session', async () => {
+	test('answers the slash commands of a folder, skills included, without /model, /effort and /fast, which also change the defaults of every new session', async () => {
 		const client = await startHub();
 		const folder = trustedFolder();
 		const answered = client.ok('listCommands', { projectDir: folder });

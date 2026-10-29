@@ -50,7 +50,7 @@ const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 const COMMANDS_KEPT_MS = 10 * 60_000;
 const COMMANDS_TIMEOUT_MS = 20_000;
 // Typed into Claude Code, these also change the defaults of every new session, and the session header changes them for one session.
-const LEFT_OUT_COMMANDS = new Set(['model', 'effort']);
+const LEFT_OUT_COMMANDS = new Set(['model', 'effort', 'fast']);
 const RELAUNCHABLE = new Set<SessionStateKind>(['idle', 'answered', 'failed', 'offline']);
 const HookPermissionMode = z.object({ permission_mode: PermissionMode });
 const NOT_IDLE: Record<Exclude<OtherSession['status'], 'idle'>, string> = {
