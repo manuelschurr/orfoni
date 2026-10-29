@@ -14,7 +14,7 @@ function rejectsOnAbort(signal: AbortSignal): Promise<never> {
 }
 
 // Claude Code answers supportedCommands() as it starts, without calling the API, so the prompt never yields and only ends once the listing is done.
-export async function listCommands(projectDir: string, signal: AbortSignal): Promise<SlashCommand[]> {
+export function listCommands(projectDir: string, signal: AbortSignal): { commands: Promise<SlashCommand[]>; ended: Promise<void> } {
 	const done = new AbortController();
 	const prompt = {
 		async *[Symbol.asyncIterator]() {
@@ -36,13 +36,16 @@ export async function listCommands(projectDir: string, signal: AbortSignal): Pro
 	});
 	const listing = session.supportedCommands();
 	listing.catch(() => {});
-	try {
-		return await Promise.race([listing, rejectsOnAbort(signal)]);
-	} finally {
-		done.abort();
-		session.close();
-		if (child?.pid !== undefined) await ended(child.pid, EXIT_GRACE_MS);
-	}
+	const commands = Promise.race([listing, rejectsOnAbort(signal)]);
+	// Claude Code takes about two seconds to end, which the commands do not wait for.
+	const exited = commands
+		.catch(() => {})
+		.then(async () => {
+			done.abort();
+			session.close();
+			if (child?.pid !== undefined) await ended(child.pid, EXIT_GRACE_MS);
+		});
+	return { commands, ended: exited };
 }
 
 function signalGroup(group: number, signal: NodeJS.Signals | 0): boolean {

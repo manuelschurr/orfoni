@@ -197,12 +197,14 @@ async function untilRealTime(check: () => boolean): Promise<void> {
 	if (!check()) throw new Error('condition never became true');
 }
 
-type ListedCommand = Awaited<ReturnType<HubOptions['listCommands']>>[number];
+type ListedCommand = Awaited<ReturnType<HubOptions['listCommands']>['commands']>[number];
 interface Listing {
 	projectDir: string;
 	signal: AbortSignal;
 	answer(commands: ListedCommand[]): void;
 	fail(error: Error): void;
+	// Every process the listing started has ended.
+	end(): void;
 }
 
 let dir: string;
@@ -243,7 +245,11 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 			kills.push([pid, signal]);
 			endOther(pid);
 		},
-		listCommands: (projectDir, signal) => new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail })),
+		listCommands: (projectDir, signal) => {
+			let end = () => {};
+			const ended = new Promise<void>((resolve) => (end = resolve));
+			return { commands: new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail, end })), ended };
+		},
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -1824,6 +1830,7 @@ describe('listCommands', () => {
 		return folder;
 	}
 
+	// The listing's Claude Code takes about two seconds more to end, which the answer does not wait for.
 	test('answers the slash commands of a folder, skills included, without /model, /effort and /fast, which also change the defaults of every new session', async () => {
 		const client = await startHub();
 		const folder = trustedFolder();
@@ -1876,7 +1883,7 @@ describe('listCommands', () => {
 		expect(await Promise.all(answers)).toEqual([{ commands }, { commands: [] }]);
 	});
 
-	test('a listing that takes over 20 s fails with an error that says so, is told to end its Claude Code, and the next request lists again', async () => {
+	test('a listing that takes over 20 s fails with an error that says so, is told to end its Claude Code, and the folder lists again only once that Claude Code has ended', async () => {
 		const client = await startHub();
 		const folder = trustedFolder();
 		const answered = client.request('listCommands', { projectDir: folder });
@@ -1886,17 +1893,23 @@ describe('listCommands', () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: expect.stringContaining('20 s') } });
 		expect(listings[0]!.signal.aborted).toBe(true);
+		expect(await client.request('listCommands', { projectDir: folder })).toMatchObject({ ok: false, error: { message: expect.stringContaining('20 s') } });
+		expect(listings).toHaveLength(1);
+		listings[0]!.end();
+		await new Promise((resolve) => setImmediate(resolve));
 		void client.request('listCommands', { projectDir: folder });
 		await untilRealTime(() => listings.length === 2);
 	});
 
-	test('a listing that fails answers why, and the next request lists again', async () => {
+	test('a listing that fails answers why, and the folder lists again once its Claude Code has ended', async () => {
 		const client = await startHub();
 		const folder = trustedFolder();
 		const answered = client.request('listCommands', { projectDir: folder });
 		await untilRealTime(() => listings.length === 1);
 		listings[0]!.fail(new Error('Claude Code process exited with code 1'));
 		expect(await answered).toMatchObject({ ok: false, error: { code: 'internal', message: 'Claude Code process exited with code 1' } });
+		listings[0]!.end();
+		await new Promise((resolve) => setImmediate(resolve));
 		void client.request('listCommands', { projectDir: folder });
 		await untilRealTime(() => listings.length === 2);
 	});

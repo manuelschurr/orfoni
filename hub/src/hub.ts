@@ -72,8 +72,8 @@ export interface HubOptions {
 	claudeSessionsDir: string;
 	claudeTasksDir: string;
 	kill(pid: number, signal: NodeJS.Signals): void;
-	// Settles only once every process it started has ended.
-	listCommands(projectDir: string, signal: AbortSignal): Promise<ClaudeCommand[]>;
+	// commands settles once Claude Code has listed them, and ended once every process the listing started has ended.
+	listCommands(projectDir: string, signal: AbortSignal): { commands: Promise<ClaudeCommand[]>; ended: Promise<void> };
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -728,15 +728,20 @@ export class Hub {
 	private commands(projectDir: string): Promise<SlashCommand[]> {
 		const kept = this.commandLists.get(projectDir);
 		if (kept && Date.now() - kept.since < COMMANDS_KEPT_MS) return kept.commands;
-		const commands = this.list(projectDir);
+		let ended = Promise.resolve();
+		const commands = this.list(projectDir, (listing) => (ended = listing.ended));
 		this.commandLists.set(projectDir, { since: Date.now(), commands });
+		// The folder lists again after a failure only once the failed listing's processes have ended, so it never has two listings at once.
 		commands.catch(() => {
-			if (this.commandLists.get(projectDir)?.commands === commands) this.commandLists.delete(projectDir);
+			const forget = () => {
+				if (this.commandLists.get(projectDir)?.commands === commands) this.commandLists.delete(projectDir);
+			};
+			void ended.then(forget, forget);
 		});
 		return commands;
 	}
 
-	private async list(projectDir: string): Promise<SlashCommand[]> {
+	private async list(projectDir: string, started: (listing: ReturnType<HubOptions['listCommands']>) => void): Promise<SlashCommand[]> {
 		if (!(await isFolder(projectDir))) throw new HubError('not_found', `no folder ${projectDir}`);
 		// Claude Code started without a terminal loads the folder's settings without asking, which the trust dialog is there to prevent.
 		if (await this.needsTrust(projectDir)) throw new HubError('not_ready', `Claude Code does not trust ${projectDir} yet, so orfoni does not start it there to list its commands`);
@@ -745,8 +750,10 @@ export class Hub {
 			stop.signal.addEventListener('abort', () => reject(new HubError('internal', `Claude Code took over ${COMMANDS_TIMEOUT_MS / 1000} s to list the commands of ${projectDir}`)));
 		});
 		const timer = setTimeout(() => stop.abort(), COMMANDS_TIMEOUT_MS);
+		const listing = this.options.listCommands(projectDir, stop.signal);
+		started(listing);
 		try {
-			return usable(await Promise.race([this.options.listCommands(projectDir, stop.signal), timedOut]));
+			return usable(await Promise.race([listing.commands, timedOut]));
 		} finally {
 			clearTimeout(timer);
 		}

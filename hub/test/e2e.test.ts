@@ -305,18 +305,20 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(defaults()).toEqual(before);
 	});
 
-	test('listCommands answers the slash commands of a trusted folder, skills included but not model or effort, with one listing for many requests and no Claude Code left behind', async () => {
+	test('listCommands answers the slash commands of a trusted folder, skills included but not model, effort or fast, with one listing for many requests, before its Claude Code has ended, and no Claude Code left behind', async () => {
 		const before = defaults();
 		// Trusted through its parent, and never listed before, so the hub has to list it now.
 		const dir = mkdtempSync(`${TRUSTED_DIR}/commands-`);
 		const seen = new Set<number>();
 		let most = 0;
+		let lastRunning = 0;
 		// Claude Code registers the listing's process as a session in its folder while it runs, and orfoni must not list it among the other sessions.
 		const othersWhileRegistered: OtherSession[][] = [];
 		const watching = setInterval(() => {
 			const pids = listingProcesses(dir);
 			for (const pid of pids) seen.add(pid);
 			most = Math.max(most, pids.length);
+			if (pids.length > 0) lastRunning = performance.now();
 			if (pids.some((pid) => existsSync(join(homedir(), '.claude/sessions', `${pid}.json`)))) {
 				void client.request('listOtherSessions', {}).then((others) => othersWhileRegistered.push(others as OtherSession[]), () => {});
 			}
@@ -324,7 +326,9 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		let answers: { commands: SlashCommand[] }[] = [];
 		try {
 			answers = (await Promise.all([1, 2, 3].map(() => client.request('listCommands', { projectDir: dir })))) as { commands: SlashCommand[] }[];
-			expect(listingProcesses(dir)).toEqual([]);
+			const answered = performance.now();
+			await until(() => listingProcesses(dir).length === 0, 10_000);
+			expect(lastRunning).toBeGreaterThan(answered);
 			await expect(client.request('listCommands', { projectDir: `${dir}-missing` })).rejects.toThrow(/^not_found/);
 		} finally {
 			clearInterval(watching);
@@ -341,6 +345,7 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(names).toEqual(expect.arrayContaining(['clear', 'compact']));
 		expect(names).not.toContain('model');
 		expect(names).not.toContain('effort');
+		expect(names).not.toContain('fast');
 		expect(answers[0]!.commands.some((command) => command.name.includes(':') && command.aliases.length > 0)).toBe(true);
 		expect(defaults()).toEqual(before);
 	});
