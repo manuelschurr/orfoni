@@ -234,7 +234,7 @@ export function describeTools(tools: { name: string }[]): string {
 }
 
 // One running call names what it works on, as the terminal does.
-export function describeRunning(tools: { name: string; input: unknown }[]): string {
+export function describeRunning(tools: { name: string; input?: unknown }[]): string {
 	const [only] = tools;
 	const on = only && tools.length === 1 ? toolWords[kindOf(only.name)]?.on : undefined;
 	const target = only && on ? toolSummary(only.name, only.input) : '';

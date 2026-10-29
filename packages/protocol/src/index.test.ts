@@ -97,6 +97,12 @@ describe('parseHubMessage', () => {
 	});
 });
 
+// A hub that starts again while a tool runs sees the tool end without its start, and JSON leaves out the input it never learned.
+test('a tool item without its input round-trips', () => {
+	const message: HubMessage = { type: 'chatItem', sessionId: 's' as HubMessage extends { sessionId: infer S } ? S : never, item: { kind: 'tool', toolUseId: 't1', name: 'Bash', input: undefined, status: 'done', output: { stdout: 'ok' } } };
+	expect(parseHubMessage(JSON.stringify(message))).toEqual({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'Bash', status: 'done', output: { stdout: 'ok' } } });
+});
+
 describe('milestone 3 fields', () => {
 	const base = { id: 's', projectDir: '/p', title: null, claudeSessionId: null, state: 'idle', stateSince: 1 };
 

@@ -91,7 +91,8 @@ export const ChatItem = z.discriminatedUnion('kind', [
 		kind: z.literal('tool'),
 		toolUseId: z.string(),
 		name: z.string(),
-		input: z.unknown(),
+		// Missing for a tool the hub saw only end, as after it started again while the tool ran.
+		input: z.unknown().optional(),
 		status: z.enum(['running', 'done', 'failed']),
 		output: z.unknown().optional(),
 	}),
