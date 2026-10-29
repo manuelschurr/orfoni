@@ -123,6 +123,60 @@ function text(value: unknown): string {
 	return typeof value === 'string' ? value : '';
 }
 
+// Phrases for a group of tool calls, worded like the lines Claude Code's terminal folds them into.
+const toolPhrases: Record<string, (count: number) => string> = {
+	command: (n) => (n === 1 ? 'ran a command' : `ran ${n} commands`),
+	read: (n) => (n === 1 ? 'read a file' : `read ${n} files`),
+	edit: (n) => (n === 1 ? 'edited a file' : `edited ${n} files`),
+	notebook: (n) => (n === 1 ? 'edited a notebook' : `edited ${n} notebooks`),
+	write: (n) => (n === 1 ? 'wrote a file' : `wrote ${n} files`),
+	grep: (n) => (n === 1 ? 'searched the code' : `searched the code ${n} times`),
+	glob: (n) => (n === 1 ? 'looked for files' : `looked for files ${n} times`),
+	fetch: (n) => (n === 1 ? 'fetched a page' : `fetched ${n} pages`),
+	websearch: (n) => (n === 1 ? 'searched the web' : `searched the web ${n} times`),
+	agent: (n) => (n === 1 ? 'ran an agent' : `ran ${n} agents`),
+	tasks: () => 'updated the task list',
+	skill: (n) => (n === 1 ? 'used a skill' : `used ${n} skills`),
+};
+const toolKinds: Record<string, string> = {
+	Bash: 'command',
+	Read: 'read',
+	Edit: 'edit',
+	MultiEdit: 'edit',
+	NotebookEdit: 'notebook',
+	Write: 'write',
+	Grep: 'grep',
+	Glob: 'glob',
+	WebFetch: 'fetch',
+	WebSearch: 'websearch',
+	Task: 'agent',
+	Agent: 'agent',
+	TaskCreate: 'tasks',
+	TaskUpdate: 'tasks',
+	TaskList: 'tasks',
+	TaskGet: 'tasks',
+	TodoWrite: 'tasks',
+	Skill: 'skill',
+};
+
+function otherTool(name: string, count: number): string {
+	const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+	const used = mcp ? `used ${mcp[2]} from ${mcp[1]}` : `used ${name}`;
+	return count === 1 ? used : `${used} ${count} times`;
+}
+
+export function describeTools(tools: { name: string }[]): string {
+	const counts = new Map<string, { name: string; count: number }>();
+	for (const { name } of tools) {
+		const kind = toolKinds[name] ?? `other:${name}`;
+		const seen = counts.get(kind);
+		counts.set(kind, { name, count: (seen?.count ?? 0) + 1 });
+	}
+	const phrases = [...counts].map(([kind, { name, count }]) => toolPhrases[kind]?.(count) ?? otherTool(name, count));
+	const text = phrases.length > 1 ? `${phrases.slice(0, -1).join(', ')} and ${phrases.at(-1)}` : (phrases[0] ?? '');
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function toolSummary(name: string, input: unknown): string {
 	const f = fields(input);
 	switch (name) {

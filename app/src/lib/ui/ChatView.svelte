@@ -6,7 +6,7 @@
 	import Bubble from './Bubble.svelte';
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
-	import ToolCard from './ToolCard.svelte';
+	import ToolGroup from './ToolGroup.svelte';
 	import WorkingIndicator from './WorkingIndicator.svelte';
 
 	let {
@@ -20,6 +20,17 @@
 		activity = null,
 		tasks = null,
 	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; activity?: SessionSummary['activity']; tasks?: TaskItem[] | null } = $props();
+	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added.
+	const segments = $derived.by(() => {
+		const groups: ({ kind: 'tools'; key: string; tools: Extract<ChatItem, { kind: 'tool' }>[] } | { kind: 'item'; key: string; item: ChatItem })[] = [];
+		for (const item of chat ?? []) {
+			const last = groups.at(-1);
+			if (item.kind !== 'tool') groups.push({ kind: 'item', key: itemKey(item), item });
+			else if (last?.kind === 'tools') last.tools.push(item);
+			else groups.push({ kind: 'tools', key: `tools-${item.toolUseId}`, tools: [item] });
+		}
+		return groups;
+	});
 	let scroller: HTMLElement | undefined = $state();
 	let pinned = true;
 
@@ -53,27 +64,30 @@
 		{:else if chat.length === 0}
 			<p class="state">{empty}</p>
 		{:else}
-			{#each chat as item (itemKey(item))}
-				<div class="item" data-kind={item.kind}>
-					{#if item.kind === 'user' || item.kind === 'assistant'}
-						<Bubble {item} />
-					{:else if item.kind === 'tool'}
-						<ToolCard {item} />
-					{:else if item.kind === 'approval'}
-						<ApprovalCard {client} {item} />
-					{:else if item.kind === 'question'}
-						<QuestionCard {client} {item} />
-					{:else if item.kind === 'plan'}
-						<PlanCard {client} {item} />
-					{:else if item.text.includes('\n')}
-						<details class="notice">
-							<summary>{item.text.trim().split('\n', 1)[0]}</summary>
-							<p>{item.text}</p>
-						</details>
-					{:else}
-						<p class="notice">{item.text}</p>
-					{/if}
-				</div>
+			{#each segments as segment (segment.key)}
+				{#if segment.kind === 'tools'}
+					<div class="item" data-kind="tools"><ToolGroup tools={segment.tools} /></div>
+				{:else}
+					{@const item = segment.item}
+					<div class="item" data-kind={item.kind}>
+						{#if item.kind === 'user' || item.kind === 'assistant'}
+							<Bubble {item} />
+						{:else if item.kind === 'approval'}
+							<ApprovalCard {client} {item} />
+						{:else if item.kind === 'question'}
+							<QuestionCard {client} {item} />
+						{:else if item.kind === 'plan'}
+							<PlanCard {client} {item} />
+						{:else if item.kind === 'notice' && item.text.includes('\n')}
+							<details class="notice">
+								<summary>{item.text.trim().split('\n', 1)[0]}</summary>
+								<p>{item.text}</p>
+							</details>
+						{:else if item.kind === 'notice'}
+							<p class="notice">{item.text}</p>
+						{/if}
+					</div>
+				{/if}
 			{/each}
 		{/if}
 		<!-- While a turn runs, this says Claude is at work and for how long, so a long think does not look stuck. -->

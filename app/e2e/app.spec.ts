@@ -128,7 +128,10 @@ test('approve a plan from its card', async ({ page }) => {
 	await expect(card).toContainText('c.txt', { timeout: REPLY_MS });
 	await card.getByRole('button', { name: 'Approve plan' }).click();
 	await expect(card.getByText('Approved')).toBeVisible();
-	const next = page.getByRole('article', { name: /^Approval for / }).filter({ hasText: 'c.txt' }).or(page.getByRole('button', { name: /c\.txt/ }));
+	const next = page
+		.getByRole('article', { name: /^Approval for / })
+		.filter({ hasText: 'c.txt' })
+		.or(page.getByRole('button', { name: /c\.txt|Wrote a file/ }));
 	await expect(next.first()).toBeVisible({ timeout: REPLY_MS });
 });
 
@@ -336,6 +339,7 @@ test('the app scrolls inside its panes and never as a whole page', async ({ page
 	await box.fill('Use the Bash tool to run: echo done. Then reply with exactly: listed');
 	await box.press('Enter');
 	await expect(claude(page).last()).toContainText(/listed/i, { timeout: REPLY_MS });
+	await page.getByRole('main').getByRole('button', { name: /^Ran a command/ }).click();
 	await expect(page.getByRole('main').getByRole('button', { name: /echo done/ })).toBeVisible();
 	await claude(page).first().hover();
 	await page.mouse.wheel(0, -20_000);
