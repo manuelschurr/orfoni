@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,15 @@ function claude(page: Page) {
 
 function shownState(page: Page, label: string) {
 	return page.getByRole('main').getByText(label, { exact: true });
+}
+
+// Claude Code's own record of a session's task list, in the order it numbered the tasks.
+function taskFiles(claudeSessionId: string): { subject: string; status: 'pending' | 'in_progress' | 'completed' }[] {
+	const folder = join(homedir(), '.claude/tasks', claudeSessionId);
+	return readdirSync(folder)
+		.filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+		.map((name) => JSON.parse(readFileSync(join(folder, name), 'utf8')) as { id: string; subject: string; status: 'pending' | 'in_progress' | 'completed' })
+		.sort((a, b) => Number(a.id) - Number(b.id));
 }
 
 // What /model and /effort typed into Claude Code would change for every new session, which no check may touch.
@@ -399,7 +408,11 @@ test('while Claude works its task list shows under the conversation, and once th
 	await expect(conversation.getByRole('list', { name: 'Tasks' })).toHaveCount(0);
 	const main = page.getByRole('main');
 	await main.getByRole('button', { name: 'Task list', exact: true }).click();
-	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText([/^\s*Done:\s.*alpha/i, /^\s*Pending:\s.*beta/i, /^\s*Pending:\s.*gamma/i]);
+	// haiku sometimes leaves out the last update, so the header is held to what Claude Code recorded rather than to the prompt.
+	const words = { pending: 'Pending', in_progress: 'In progress', completed: 'Done' };
+	const recorded = taskFiles(session.claudeSessionId);
+	expect(recorded.map((task) => task.subject.toLowerCase())).toEqual(['alpha', 'beta', 'gamma']);
+	await expect(main.getByRole('list', { name: 'Tasks' }).getByRole('listitem')).toHaveText(recorded.map((task) => new RegExp(`^\\s*${words[task.status]}:\\s.*${task.subject}`, 'i')));
 });
 
 test('typing /cl suggests /clear from the commands of the folder, and Tab completes it, with the user settings unchanged', async ({ page }) => {
