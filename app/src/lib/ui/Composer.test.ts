@@ -151,7 +151,7 @@ test('Enter sends a command typed in full, by its name or its alias, as typed', 
 
 test('Enter sends a command typed in full as typed while a longer command is highlighted, as /new is while /new-project ranks first', async () => {
 	const { client, transport } = await connectedClient([summary('a1')]);
-	render(Composer, { client, sessionId: 'a1' });
+	render(Composer, { client, sessionId: summary('a1').id });
 	await typed('/');
 	transport.respond('listCommands', { commands: [...commands, command('new-project', 'Start a project from a template')] });
 	await screen.findByRole('listbox', { name: 'Commands' });

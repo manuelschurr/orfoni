@@ -187,7 +187,7 @@ test('a change still waiting for Claude Code shows again after switching to anot
 	transport.respond('relaunchSession', { session });
 	await vi.waitFor(() => expect(transport.requests('relaunchSession')).toHaveLength(1));
 	unmount();
-	render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {} });
+	render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {}, onforked: () => {} });
 	expect(note()).toBe('Restarting on Max');
 });
 
