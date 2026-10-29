@@ -90,6 +90,25 @@ describe('client server', () => {
 		await until(() => hub.closed() === 1);
 	});
 
+	// A Unix socket closed with messages it has not read resets its peer, which then reads ECONNRESET, as when a client process is killed.
+	test('a client whose connection resets closes its hub connection, and the server goes on serving others', async () => {
+		const hub = fakeHub();
+		const path = await listen(hub);
+		const dropped = connect(path);
+		sockets.push(dropped);
+		await once(dropped, 'connect');
+		dropped.pause();
+		await until(() => hub.senders.length === 1);
+		// More than the client's stream buffers ahead, so some stays unread in the socket.
+		for (let i = 0; i < 10_000; i++) hub.senders[0]!({ type: 'otherSessions', sessions: [] });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		dropped.destroy();
+		await until(() => hub.closed() === 1);
+		const { socket } = await client(path);
+		socket.write('{"id":1,"method":"listSessions"}\n');
+		await until(() => hub.requests.length === 1);
+	});
+
 	test('a socket file that nobody answers on is replaced', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'orfoni-sock-'));
 		const path = join(dir, 'hub.sock');

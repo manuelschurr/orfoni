@@ -24,7 +24,8 @@ function serve(hub: Pick<Hub, 'connect'>, socket: Socket): void {
 		if (socket.writable) socket.write(`${JSON.stringify(message)}\n`);
 	};
 	const connection = hub.connect(write);
-	createInterface({ input: socket, crlfDelay: Infinity }).on('line', (line) => {
+	const lines = createInterface({ input: socket, crlfDelay: Infinity });
+	lines.on('line', (line) => {
 		let request: ClientRequest;
 		try {
 			request = parseClientRequest(line);
@@ -36,6 +37,7 @@ function serve(hub: Pick<Hub, 'connect'>, socket: Socket): void {
 		connection.request(request);
 	});
 	socket.on('close', () => connection.close());
-	// A client that drops its connection raises ECONNRESET here, and the close handler above still runs.
+	// A client that drops its connection raises ECONNRESET on the socket, which readline raises again on itself, and the close handler above still runs.
 	socket.on('error', () => {});
+	lines.on('error', () => {});
 }
