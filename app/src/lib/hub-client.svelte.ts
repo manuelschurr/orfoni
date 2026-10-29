@@ -162,6 +162,8 @@ export class HubClient {
 	others = $state.raw<OtherSession[]>([]);
 	other = $state.raw<OtherView | null>(null);
 	changes = $state.raw<Change[]>([]);
+	// The slash commands of each folder, listed once per connection. A folder whose listing is under way or failed has none.
+	commands = $state.raw(new Map<string, SlashCommand[]>());
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
@@ -169,6 +171,7 @@ export class HubClient {
 	private readonly pending = new Map<number, Pending>();
 	private readonly loading = new Map<SessionId, Loading>();
 	private otherLoads = 0;
+	private readonly listedCommands = new Set<string>();
 
 	constructor(transport: HubTransport) {
 		this.transport = transport;
@@ -261,6 +264,15 @@ export class HubClient {
 		return (await this.request('listProjectDirs', {})).dirs;
 	}
 
+	loadCommands(projectDir: string): void {
+		if (this.listedCommands.has(projectDir)) return;
+		this.listedCommands.add(projectDir);
+		this.request('listCommands', { projectDir }).then(
+			({ commands }) => (this.commands = new Map(this.commands).set(projectDir, commands)),
+			() => {},
+		);
+	}
+
 	close(): void {
 		this.transport.close();
 	}
@@ -268,6 +280,8 @@ export class HubClient {
 	private statusChanged(status: ConnectionStatus): void {
 		this.status = status;
 		if (status.kind === 'connected') {
+			this.listedCommands.clear();
+			this.commands = new Map();
 			this.refresh().catch((error: Error) => {
 				// A lost link loads again when it comes back, so only a failure while still connected would leave the list empty for good.
 				if (this.status.kind === 'connected') this.problem = `Loading the sessions failed: ${error.message}`;
