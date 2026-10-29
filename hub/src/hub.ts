@@ -170,6 +170,13 @@ function claudeOptions({ model, effort, permissionMode }: Pick<Extract<ClientReq
 	];
 }
 
+// The model and effort Claude Code last reported and the permission mode its hooks last carried, so a restart or a fork goes on the way the session ran.
+function reportedOptions(session: Session, { model, effort }: { model?: string; effort?: Effort } = {}): string[] {
+	const reported = session.model.statusLine;
+	const reportedEffort = Effort.safeParse(reported?.effort);
+	return claudeOptions({ model: model ?? reported?.model.id, effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined), permissionMode: session.permissionMode });
+}
+
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
 	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity };
@@ -413,6 +420,8 @@ export class Hub {
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status() };
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
+			case 'forkSession':
+				return this.fork(this.session(request.sessionId), request.title);
 			case 'listCommands':
 				return { commands: await this.commands(resolve(request.projectDir)) };
 			case 'listOtherSessions':
@@ -440,7 +449,22 @@ export class Hub {
 			...(request.title ? ['--name', request.title] : []),
 			...(request.prompt ? ['--', request.prompt] : []),
 		];
-		const started = await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], options);
+		return this.withMemoryWarning(await this.newSession(request.projectDir, request.title ?? null, claudeSessionId, [`--session-id=${claudeSessionId}`], options));
+	}
+
+	// Claude Code copies the conversation into the fork's own transcript under the ID --session-id names, so the two sessions go on from the same point.
+	private async fork(original: Session, title: string | undefined): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
+		if (!RELAUNCHABLE.has(original.model.state)) throw new HubError('not_ready', `session ${original.id} is ${original.model.state}, and forks once Claude has finished`);
+		const from = original.model.claudeSessionId;
+		const messages = await this.options.readHistory(from, original.projectDir);
+		if (!messages.some((message) => message.type !== 'system')) throw new HubError('not_ready', `session ${original.id} has nothing to fork yet`);
+		const name = title ?? (original.title ? `${original.title} ⑂` : null);
+		const claudeSessionId = ClaudeSessionId.parse(randomUUID());
+		const identity = [`--resume=${from}`, '--fork-session', `--session-id=${claudeSessionId}`];
+		return this.withMemoryWarning(await this.newSession(original.projectDir, name, claudeSessionId, identity, [...reportedOptions(original), ...(name ? ['--name', name] : [])]));
+	}
+
+	private async withMemoryWarning<T extends object>(started: T): Promise<T & { memoryWarning?: HubStatus['memory'] }> {
 		const memory = await systemMemory(this.options.systemRoot).catch((error: Error) => {
 			this.options.log(`orfoni-hub: reading the VPS memory failed: ${error.message}`);
 			return null;
@@ -484,13 +508,7 @@ export class Hub {
 	private async relaunch(session: Session, { model, effort }: Extract<ClientRequest, { method: 'relaunchSession' }>): Promise<{ session: SessionSummary }> {
 		if (model === undefined && effort === undefined) throw new HubError('bad_message', 'relaunchSession needs a model or an effort');
 		if (!RELAUNCHABLE.has(session.model.state)) throw new HubError('not_ready', `session ${session.id} is ${session.model.state}`);
-		const reported = session.model.statusLine;
-		const reportedEffort = Effort.safeParse(reported?.effort);
-		const options = claudeOptions({
-			model: model ?? reported?.model.id,
-			effort: effort ?? (reportedEffort.success ? reportedEffort.data : undefined),
-			permissionMode: session.permissionMode,
-		});
+		const options = reportedOptions(session, { model, effort });
 		const pane = (await this.options.tmux.listSessions()).find((candidate) => candidate.name === tmuxName(session.id) && !candidate.paneDead);
 		await this.killTmux((name) => name === tmuxName(session.id));
 		if (pane && !(await this.ended(pane.panePid))) {

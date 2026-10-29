@@ -22,9 +22,10 @@ type Method = ClientRequest['method'];
 export type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }>, 'id' | 'method'>;
 
 const done = z.object({});
+const started = z.object({ session: SessionSummary, needsTrust: z.boolean(), memoryWarning: HubStatus.shape.memory.optional() });
 const results = {
 	listSessions: z.array(SessionSummary),
-	startSession: z.object({ session: SessionSummary, needsTrust: z.boolean(), memoryWarning: HubStatus.shape.memory.optional() }),
+	startSession: started,
 	openSession: z.object({ session: SessionSummary, chat: z.array(ChatItem) }),
 	send: done,
 	decide: z.object({ outcome: z.enum(['allowed', 'denied', 'answered', 'approved', 'rejected']) }),
@@ -35,6 +36,7 @@ const results = {
 	removeSession: done,
 	hubStatus: HubStatus,
 	relaunchSession: z.object({ session: SessionSummary }),
+	forkSession: started,
 	listCommands: z.object({ commands: z.array(SlashCommand) }),
 	listOtherSessions: z.array(OtherSession),
 	openOtherSession: z.object({ session: OtherSession, chat: z.array(ChatItem) }),
