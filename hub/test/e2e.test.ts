@@ -385,6 +385,14 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		await client.waitForChat(id, (item) => item.kind === 'assistant' && /blue/i.test(item.text), resumed);
 	});
 
+	test('a background command that finishes shows as a notice in a turn a task started, not as a message from you', async () => {
+		const { id } = await start({ prompt: 'Use the Bash tool with run_in_background set to true to run: sleep 5; echo bg-done. Then reply with exactly: started, and stop.', permissionMode: 'auto', dir: TRUSTED_DIR });
+		await client.waitForChat(id, (item) => item.kind === 'notice' && /^Background command .* completed/.test(item.text));
+		await client.waitForSession(id, (s) => s.turnFrom === 'task');
+		const { chat } = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		expect(chat.filter((item) => item.kind === 'user').map((item) => (item.kind === 'user' ? item.text : ''))).toEqual(['Use the Bash tool with run_in_background set to true to run: sleep 5; echo bg-done. Then reply with exactly: started, and stop.']);
+	});
+
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
 		const before = defaults();
 		const { id } = await start({
