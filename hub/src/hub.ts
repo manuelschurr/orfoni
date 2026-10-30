@@ -201,10 +201,10 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push'] as const satisfies (keyof SessionModel)[];
 const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {

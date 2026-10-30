@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatItem, ClaudeSessionId, PermissionMode, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
+import { z } from 'zod';
 import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
@@ -26,6 +27,8 @@ export interface SessionModel {
 	activity: Activity | null;
 	// The mode Claude Code last reported in a hook, so a relaunch or a fork keeps it.
 	permissionMode: PermissionMode | null;
+	turnFrom: 'you' | 'task' | null;
+	push: { message: string; at: number } | null;
 	lastTurnEndedAt: number | null;
 	lastViewedAt: number | null;
 }
@@ -53,16 +56,20 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
 	return lastTurnEndedAt !== null && lastTurnEndedAt > (lastViewedAt ?? -Infinity);
 }
 
+// A turn that a background task started is not news by itself, since Claude tells you what is through PushNotification, so it leaves the session read or unread as it was.
 function endTurn(model: SessionModel, at: number): SessionModel {
+	if (model.turnFrom === 'task') return enter(model, !model.viewing && unread(model) ? 'answered' : 'idle', at);
 	return enter({ ...model, lastTurnEndedAt: at, lastViewedAt: model.viewing ? at : model.lastViewedAt }, model.viewing ? 'idle' : 'answered', at);
 }
+
+const PushInput = z.object({ message: z.string().min(1) });
 
 // No Claude Code runs to report a model or effort for a session that is offline.
 function goOffline(model: SessionModel, at: number): SessionModel {
@@ -152,7 +159,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				case 'prompt': {
 					const notice = taskNotice(event.text);
 					const item: ChatItem = notice === null ? { kind: 'user', id: `user-${randomUUID()}`, text: event.text, at } : { kind: 'notice', id: `notice-${randomUUID()}`, text: notice, at };
-					return enter({ ...model, chat: [...model.chat, item] }, 'working', at);
+					return enter({ ...model, chat: [...model.chat, item], turnFrom: notice === null ? 'you' : 'task' }, 'working', at);
 				}
 				case 'assistant_text':
 					return {
@@ -164,10 +171,12 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 							done: event.final,
 						})),
 					};
-				case 'tool_start':
-					if (event.agentId !== undefined) return model;
+				case 'tool_start': {
+					const push = event.name === 'PushNotification' ? PushInput.safeParse(event.input) : undefined;
+					const pushed = push?.success ? { ...model, push: { message: push.data.message, at } } : model;
+					if (event.agentId !== undefined) return pushed;
 					return {
-						...model,
+						...pushed,
 						chat: upsert(model.chat, isTool(event.toolUseId), () => ({
 							kind: 'tool',
 							toolUseId: event.toolUseId,
@@ -176,6 +185,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 							status: 'running',
 						})),
 					};
+				}
 				case 'tool_end':
 					if (event.agentId !== undefined) return model;
 					return {

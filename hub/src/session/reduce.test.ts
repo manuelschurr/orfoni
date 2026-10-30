@@ -214,6 +214,24 @@ describe('reduce', () => {
 		expect(model.stateSince).toBe(3);
 	});
 
+	// Claude Code's own signal that you should hear about something is its PushNotification tool, so the end of a turn a background task started is not news by itself.
+	test('a turn a task notification started ends without marking the session unread, and leaves an unread answer from before as it was', () => {
+		const notified = (at: number) => hook('prompt', { text: '<task-notification>\n<summary>Monitor event: "flash"</summary>\n<event>node3 ok</event>\n</task-notification>' }, at);
+		const quiet = run(started, notified(2), hook('stop', { lastAssistantMessage: 'Routine.' }, 3));
+		expect(quiet).toMatchObject({ state: 'idle', lastTurnEndedAt: null, turnFrom: 'task' });
+		const afterAnswer = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), notified(4), hook('stop', { lastAssistantMessage: 'Routine.' }, 5));
+		expect(afterAnswer).toMatchObject({ state: 'answered', lastTurnEndedAt: 3, turnFrom: 'task' });
+		expect(run(started, notified(2), hook('stop', { lastAssistantMessage: 'x' }, 3), hook('prompt', { text: 'and now?' }, 4))).toMatchObject({ turnFrom: 'you' });
+	});
+
+	test('a PushNotification Claude calls becomes the session\'s latest push, from a subagent too', () => {
+		const push = (message: string, at: number, agentId?: string) => hook('tool_start', { toolUseId: `t${at}`, name: 'PushNotification', input: { message, status: 'proactive' }, ...(agentId ? { agentId } : {}) }, at);
+		expect(run(started, prompted).push).toBeNull();
+		expect(run(started, prompted, push('Flashing done, node 5 failed.', 3)).push).toEqual({ message: 'Flashing done, node 5 failed.', at: 3 });
+		expect(run(started, prompted, push('From the subagent.', 4, 'agent-1')).push).toEqual({ message: 'From the subagent.', at: 4 });
+		expect(run(started, prompted, hook('tool_start', { toolUseId: 't5', name: 'PushNotification', input: { status: 'proactive' } }, 5)).push).toBeNull();
+	});
+
 	test('stop goes idle while a client views the session', () => {
 		const model = run(started, prompted, { kind: 'view_changed', viewing: true, at: 3 }, hook('stop', { lastAssistantMessage: 'done' }, 4));
 		expect(model.state).toBe('idle');

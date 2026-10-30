@@ -42,6 +42,10 @@ export const SessionSummary = z.object({
 	permissionMode: PermissionMode.nullable().default(null),
 	// How full the conversation fills the model's context window, in percent, which Claude Code compacts near the end. Null until Claude Code reports it after the first reply.
 	context: z.number().nullable().default(null),
+	// Who started the current or last turn: you, or Claude Code telling Claude that a background task or monitor reported back.
+	turnFrom: z.enum(['you', 'task']).nullable().default(null),
+	// The last message Claude sent you with Claude Code's PushNotification tool.
+	push: z.object({ message: z.string(), at: z.number() }).nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
