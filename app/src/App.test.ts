@@ -205,6 +205,20 @@ test('in Tauri, while the window is in the background, a session that needs you 
 	await waitFor(() => expect(commands).toEqual(expect.arrayContaining(['plugin:window|unminimize', 'plugin:window|set_focus'])));
 });
 
+test('in Tauri, what Claude pushes from a turn a background task started shows as a notification that flashes the taskbar, and the end of that turn shows none', async () => {
+	const shown = notifications();
+	vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+	const { hub, commands } = withSessions([summary('a1', 'idle', { title: 'Flash the boards' })]);
+	render(App);
+	expect(await screen.findByText('Flash the boards')).toBeTruthy();
+
+	hub.line({ type: 'sessionUpdated', session: summary('a1', 'working', { title: 'Flash the boards', turnFrom: 'task', stateSince: 2000 }) });
+	hub.line({ type: 'sessionUpdated', session: summary('a1', 'working', { title: 'Flash the boards', turnFrom: 'task', stateSince: 2000, push: { message: 'Node 5 failed to flash.', at: 2500 } }) });
+	hub.line({ type: 'sessionUpdated', session: summary('a1', 'idle', { title: 'Flash the boards', turnFrom: 'task', stateSince: 3000, push: { message: 'Node 5 failed to flash.', at: 2500 } }) });
+	await waitFor(() => expect(shown).toEqual([{ title: 'Flash the boards', body: 'Node 5 failed to flash.', extra: { sessionId: 'a1' } }]));
+	await waitFor(() => expect(commands.filter((cmd) => cmd === 'plugin:window|request_user_attention')).toHaveLength(1));
+});
+
 test('in Tauri, while the window has focus, a session that needs you shows no notification', async () => {
 	const shown = notifications();
 	vi.spyOn(document, 'hasFocus').mockReturnValue(true);

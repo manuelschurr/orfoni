@@ -51,3 +51,12 @@ test('a session without a title is named after its first message, as in the sess
 	const notice = notices(sessions(summary('a1', 'working')), sessions(summary('a1', 'idle', { stateSince: 2000 })), new Map([[SessionId.parse('a1'), chat]]));
 	expect(notice.map(({ title }) => title)).toEqual(['Check the radio logs']);
 });
+
+// Claude Code's own signal that you should hear about something is its PushNotification tool.
+test('the answer to a turn a background task started is not news, and a push Claude sends is, once', () => {
+	const push = { message: 'Flashing done, node 5 failed.', at: 3000 };
+	const before = sessions(summary('a1', 'working', { title: 'Flash the boards', turnFrom: 'task' }), summary('a2', 'working', { title: 'SD cards', turnFrom: 'task' }));
+	const after = sessions(summary('a1', 'answered', { title: 'Flash the boards', turnFrom: 'task', stateSince: 2000 }), summary('a2', 'working', { title: 'SD cards', turnFrom: 'task', push }));
+	expect(notices(before, after)).toEqual([{ sessionId: 'a2', kind: 'push', title: 'SD cards', body: 'Flashing done, node 5 failed.' }]);
+	expect(notices(after, sessions(...after.values()))).toEqual([]);
+});
