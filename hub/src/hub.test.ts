@@ -103,6 +103,11 @@ function fixture(name: string): Record<string, unknown> {
 	return JSON.parse(readFileSync(new URL(`../test/fixtures/hooks/${name}.json`, import.meta.url), 'utf8'));
 }
 
+// Screens of a session in a 200 by 50 tmux pane, as tmux capture-pane -p captured them from Claude Code 2.1.314.
+function screen(name: string): string {
+	return readFileSync(new URL(`../test/fixtures/screens/${name}.txt`, import.meta.url), 'utf8');
+}
+
 function recordedConversation(): SessionMessage[] {
 	return JSON.parse(readFileSync(new URL('../test/fixtures/history.json', import.meta.url), 'utf8'));
 }
@@ -738,6 +743,65 @@ describe('requests', () => {
 		await hub.hook(id, body('PostToolUse', claude, { tool_use_id: 'toolu_b' }));
 		expect(await second).toEqual({});
 		expect(client.chat(id).filter((item) => item.kind === 'approval').at(-1)).toEqual({ ...b, status: 'withdrawn' });
+	});
+
+	const deleteArtifact = { tool_name: 'mcp__claude-artifacts__delete_artifact', tool_input: { slug: '00000000-0000-4000-8000-000000000000', artifact_title: 'orfoni probe' }, permission_suggestions: [] };
+
+	function latest(client: TestClient, id: SessionId, requestId: string): ChatItem | undefined {
+		return client.chat(id).findLast((item) => 'requestId' in item && item.requestId === requestId);
+	}
+
+	test('an approval whose dialog opens on No, as deleting an artifact does, is left to the terminal, and the hub refuses to allow it', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		fake.screens.set(`orfoni-${id}`, screen('dialog-opens-on-no'));
+		await hub.hook(id, body('PreToolUse', claude, deleteArtifact));
+		let answer: unknown;
+		const held = hub.hook(id, body('PermissionRequest', claude, deleteArtifact)).then((r) => (answer = r));
+		const approval = client.chat(id).at(-1);
+		if (approval?.kind !== 'approval') throw new Error('expected an approval');
+		await untilRealTime(() => client.chat(id).length > 0 && 'terminalOnly' in (client.chat(id).at(-1) ?? {}));
+		expect(client.chat(id).at(-1)).toEqual({ ...approval, terminalOnly: true });
+		expect(fake.of('capturePane')).toEqual([[`orfoni-${id}`]]);
+		expect(await client.request('decide', { requestId: approval.requestId, decision: { type: 'allow' } })).toMatchObject({ ok: false, error: { code: 'wrong_decision' } });
+		expect(client.state(id)).toBe('needs_approval');
+		expect(answer).toBeUndefined();
+		await hub.hook(id, body('PostToolUse', claude, deleteArtifact));
+		expect(await held).toEqual({});
+		expect(latest(client, id, approval.requestId)).toEqual({ ...approval, terminalOnly: true, status: 'withdrawn' });
+	});
+
+	test('the dialog of a request behind another is read once the one before it closes', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		fake.screens.set(`orfoni-${id}`, screen('dialog-opens-on-yes'));
+		void hub.hook(id, body('PermissionRequest', claude));
+		void hub.hook(id, body('PermissionRequest', claude, deleteArtifact));
+		const [write, remove] = client.chat(id).filter((item) => item.kind === 'approval');
+		if (!write || !remove) throw new Error('expected two approvals');
+		await untilRealTime(() => fake.of('capturePane').length === 1);
+		fake.screens.set(`orfoni-${id}`, screen('dialog-opens-on-no'));
+		await client.ok('decide', { requestId: write.requestId, decision: { type: 'allow' } });
+		await vi.advanceTimersByTimeAsync(300);
+		await untilRealTime(() => latest(client, id, remove.requestId)?.kind === 'approval' && 'terminalOnly' in (latest(client, id, remove.requestId) ?? {}));
+		expect(latest(client, id, write.requestId)).toEqual({ ...write, status: 'allowed' });
+		expect(latest(client, id, remove.requestId)).toEqual({ ...remove, terminalOnly: true });
+		expect(fake.of('capturePane')).toHaveLength(2);
+	});
+
+	test('an approval whose dialog does not show within a second keeps Allow', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		void hub.hook(id, body('PermissionRequest', claude));
+		const approval = client.chat(id).at(-1);
+		if (approval?.kind !== 'approval') throw new Error('expected an approval');
+		await step(1500);
+		const reads = fake.of('capturePane').length;
+		expect(reads).toBeGreaterThan(5);
+		await step(1000);
+		expect(fake.of('capturePane')).toHaveLength(reads);
+		expect(latest(client, id, approval.requestId)).toEqual(approval);
+		expect(await client.request('decide', { requestId: approval.requestId, decision: { type: 'allow' } })).toMatchObject({ ok: true });
 	});
 
 	test('a question and a plan need an answer', async () => {

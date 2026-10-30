@@ -156,6 +156,50 @@ describe('PendingRequests.decide', () => {
 	});
 });
 
+describe('PendingRequests.nextDialog', () => {
+	test('names each approval once, when it is the oldest open request of its session', () => {
+		const requests = new PendingRequests();
+		const first = requests.open(session, write);
+		const second = requests.open(session, write);
+		const other = requests.open(otherSession, write);
+		expect(requests.nextDialog(session)).toBe(first.requestId);
+		expect(requests.nextDialog(session)).toBeUndefined();
+		requests.decide(first.requestId, { type: 'allow' });
+		expect(requests.nextDialog(session)).toBe(second.requestId);
+		expect(requests.nextDialog(otherSession)).toBe(other.requestId);
+	});
+
+	test('names no question or plan, and none ahead of the approvals behind one', () => {
+		const requests = new PendingRequests();
+		const asked = requests.open(session, question);
+		const approval = requests.open(session, write);
+		expect(requests.nextDialog(session)).toBeUndefined();
+		requests.decide(asked.requestId, { type: 'answer', answers: {} });
+		expect(requests.nextDialog(session)).toBe(approval.requestId);
+		expect(new PendingRequests().nextDialog(session)).toBeUndefined();
+	});
+});
+
+describe('PendingRequests.keepToTerminal', () => {
+	test('an approval kept to the terminal refuses allow and allow_always but still takes deny', async () => {
+		const requests = new PendingRequests();
+		const { requestId, response } = requests.open(session, write);
+		expect(requests.keepToTerminal(requestId)).toBe(true);
+		expectRequestError(() => requests.decide(requestId, { type: 'allow' }), 'wrong_decision');
+		expectRequestError(() => requests.decide(requestId, { type: 'allow_always' }), 'wrong_decision');
+		expect(requests.decide(requestId, { type: 'deny', message: 'no' })).toBe('denied');
+		await expect(response).resolves.toEqual(decision({ behavior: 'deny', message: 'no' }));
+	});
+
+	test('a request that is no longer open is not kept', () => {
+		const requests = new PendingRequests();
+		const { requestId } = requests.open(session, write);
+		requests.decide(requestId, { type: 'allow' });
+		expect(requests.keepToTerminal(requestId)).toBe(false);
+		expect(requests.isPending(requestId)).toBe(false);
+	});
+});
+
 function toolStart(toolUseId: string, input: unknown = writeInput, agentId?: string): HookEvent {
 	return { type: 'tool_start', claudeSessionId: claude, toolUseId, name: 'Write', input, agentId };
 }

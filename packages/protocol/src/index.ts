@@ -106,6 +106,8 @@ export const ChatItem = z.discriminatedUnion('kind', [
 		toolName: z.string(),
 		input: z.unknown(),
 		status: z.enum(['pending', 'allowed', 'denied', 'withdrawn']),
+		// Claude Code takes the answer only in its terminal, so the app offers no Allow.
+		terminalOnly: z.literal(true).optional(),
 	}),
 	z.object({
 		kind: z.literal('question'),

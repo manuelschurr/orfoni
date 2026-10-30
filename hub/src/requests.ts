@@ -35,6 +35,8 @@ interface OpenRequest {
 	kind: RequestKind;
 	input: unknown;
 	suggestions: unknown[];
+	dialogRead: boolean;
+	terminalOnly: boolean;
 	resolve: (response: HookResponse) => void;
 }
 
@@ -101,6 +103,8 @@ export class PendingRequests {
 				kind: item.kind,
 				input: event.input,
 				suggestions: event.suggestions,
+				dialogRead: false,
+				terminalOnly: false,
 				resolve,
 			});
 		});
@@ -116,6 +120,8 @@ export class PendingRequests {
 		if (decisionKind[decision.type] !== request.kind) {
 			throw new RequestError('wrong_decision', `${decision.type} does not answer a ${request.kind} request`);
 		}
+		// Claude Code still takes a hook's deny for these.
+		if (request.terminalOnly && decision.type !== 'deny') throw new RequestError('wrong_decision', `Claude Code takes the answer to request ${requestId} only in its terminal`);
 		const { outcome, decision: answer } = respond(request, decision);
 		this.close(requestId, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: answer } });
 		return outcome;
@@ -139,6 +145,25 @@ export class PendingRequests {
 			default:
 				return [];
 		}
+	}
+
+	// The terminal shows one dialog at a time, that of the oldest request it still asks about, so each approval's dialog is read once, when it becomes its session's oldest open request.
+	nextDialog(sessionId: SessionId): RequestId | undefined {
+		const [requestId, request] = [...this.pending].find(([, candidate]) => candidate.sessionId === sessionId) ?? [];
+		if (requestId === undefined || request?.kind !== 'approval' || request.dialogRead) return undefined;
+		request.dialogRead = true;
+		return requestId;
+	}
+
+	keepToTerminal(requestId: RequestId): boolean {
+		const request = this.pending.get(requestId);
+		if (!request) return false;
+		request.terminalOnly = true;
+		return true;
+	}
+
+	isPending(requestId: RequestId): boolean {
+		return this.pending.has(requestId);
 	}
 
 	cancel(requestId: RequestId): boolean {

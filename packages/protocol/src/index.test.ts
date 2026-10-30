@@ -95,6 +95,15 @@ describe('parseHubMessage', () => {
 		};
 		expect(parseHubMessage(JSON.stringify(message))).toEqual(message);
 	});
+
+	test('round-trips an approval that Claude Code takes only in its terminal', () => {
+		const message: HubMessage = {
+			type: 'chatItem',
+			sessionId: 's',
+			item: { kind: 'approval', requestId: 'r1', toolName: 'mcp__claude-artifacts__delete_artifact', input: { slug: 'a' }, status: 'pending', terminalOnly: true },
+		};
+		expect(parseHubMessage(JSON.stringify(message))).toEqual(message);
+	});
 });
 
 // A hub that starts again while a tool runs sees the tool end without its start, and JSON leaves out the input it never learned.

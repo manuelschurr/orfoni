@@ -25,6 +25,7 @@ import {
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { parseActivity, type Activity } from './activity.js';
+import { dialogOpensOnNo } from './dialog.js';
 import { privateDir, writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
@@ -59,6 +60,10 @@ const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
+// Claude Code draws a request's dialog as it runs the hook, and the next one once the hook's answer has closed the one before.
+const DIALOG_WAIT_MS = 1_000;
+const DIALOG_POLL_MS = 100;
+const DIALOG_SETTLE_MS = 300;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 const COMMANDS_KEPT_MS = 10 * 60_000;
 const COMMANDS_TIMEOUT_MS = 20_000;
@@ -962,6 +967,27 @@ export class Hub {
 		return opened.response;
 	}
 
+	// Claude Code opens the dialog of an approval that a stray keystroke must not give on No, and ignores a hook's allow for some of those, so for those the app sends you to the terminal.
+	private async readDialog(session: Session, settleMs: number): Promise<void> {
+		const requestId = this.requests.nextDialog(session.id);
+		if (requestId === undefined) return;
+		const deadline = Date.now() + settleMs + DIALOG_WAIT_MS;
+		for (let wait = settleMs; ; wait = DIALOG_POLL_MS) {
+			if (wait > 0) await delay(wait);
+			if (!this.requests.isPending(requestId)) return;
+			let opensOnNo: boolean | undefined;
+			try {
+				opensOnNo = dialogOpensOnNo(await this.options.tmux.capturePane(tmuxName(session.id)));
+			} catch (error) {
+				this.report(`orfoni-hub: reading the screen of session ${session.id} failed: ${(error as Error).message}`);
+				return;
+			}
+			if (opensOnNo === undefined && Date.now() < deadline) continue;
+			if (opensOnNo && this.requests.keepToTerminal(requestId)) this.apply(session, { kind: 'request_kept_to_terminal', requestId, at: Date.now() });
+			return;
+		}
+	}
+
 	private receive(session: Session, event: HookEvent): void {
 		const at = Date.now();
 		for (const requestId of this.requests.observe(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
@@ -988,6 +1014,9 @@ export class Hub {
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);
 		void this.tellName(session);
+		// The terminal shows the dialog of the oldest open request, so a request's dialog shows when it opens alone or when those before it close.
+		if (input.kind === 'request_opened') void this.readDialog(session, 0);
+		if (input.kind === 'request_closed' || input.kind === 'request_cancelled') void this.readDialog(session, DIALOG_SETTLE_MS);
 	}
 
 	private broadcast(message: HubMessage): void {

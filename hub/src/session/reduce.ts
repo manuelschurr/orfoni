@@ -38,6 +38,7 @@ export type SessionInput =
 	| { kind: 'request_opened'; requestId: RequestId; item: ChatItem; at: number }
 	| { kind: 'request_closed'; requestId: RequestId; outcome: RequestOutcome | 'withdrawn'; at: number }
 	| { kind: 'request_cancelled'; requestId: RequestId; at: number }
+	| { kind: 'request_kept_to_terminal'; requestId: RequestId; at: number }
 	| { kind: 'view_changed'; viewing: boolean; at: number }
 	| { kind: 'interrupted'; at: number }
 	| { kind: 'pane_exited'; at: number }
@@ -245,6 +246,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			return closeRequest(model, input.requestId, input.outcome, 'working', at);
 		case 'request_cancelled':
 			return closeRequest(model, input.requestId, 'withdrawn', 'idle', at);
+		case 'request_kept_to_terminal':
+			return { ...model, chat: model.chat.map((item) => (item.kind === 'approval' && item.requestId === input.requestId && item.status === 'pending' ? { ...item, terminalOnly: true } : item)) };
 		case 'view_changed':
 			return enter({ ...model, viewing: input.viewing, lastViewedAt: at }, input.viewing && model.state === 'answered' ? 'idle' : model.state, at);
 		case 'interrupted':

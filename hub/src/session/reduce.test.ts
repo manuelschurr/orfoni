@@ -196,6 +196,17 @@ describe('reduce', () => {
 		expect(model.state).toBe('needs_approval');
 	});
 
+	test('request_kept_to_terminal marks the pending approval and keeps the session waiting', () => {
+		const opened = { kind: 'request_opened', requestId: req1, item: approval(req1), at: 3 } as const;
+		const model = run(started, prompted, opened, { kind: 'request_kept_to_terminal', requestId: req1, at: 4 });
+		expect(model.chat[1]).toEqual({ ...approval(req1), terminalOnly: true });
+		expect(model.state).toBe('needs_approval');
+		expect(model.stateSince).toBe(3);
+
+		const closed = run(started, prompted, opened, { kind: 'request_closed', requestId: req1, outcome: 'withdrawn', at: 4 }, { kind: 'request_kept_to_terminal', requestId: req1, at: 5 });
+		expect(closed.chat[1]).toEqual({ ...approval(req1), status: 'withdrawn' });
+	});
+
 	test('request_closed after the turn already stopped keeps the stopped state', () => {
 		const model = run(
 			started,

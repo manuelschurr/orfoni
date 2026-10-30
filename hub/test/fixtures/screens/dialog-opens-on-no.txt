@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /var/tmp/claude-0/orfoni-spike-tui
+
+
+❯ This is a test of permission prompts. Load the tools mcp__claude-artifacts__unpin_artifact and mcp__claude-artifacts__delete_artifact with ToolSearch. Then call unpin_artifact once with slug
+  "00000000-0000-4000-8000-000000000000", and after it returns, call delete_artifact once with slug "00000000-0000-4000-8000-000000000000" and artifact_title "orfoni probe". That artifact does not
+  exist, so both calls are harmless. Do nothing else and do not retry.
+
+● Calling claude-artifacts 2 times…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tool use
+ claude-artifacts — Delete Artifact Tool: (MCP)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ slug: "00000000-0000-4000-8000-000000000000"
+ artifact_title: "orfoni probe"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ About the claude-artifacts — Delete Artifact Tool:
+ │ Permanently delete an artifact the user owns. Every version and file is removed, and its link stops working for everyone it was shared with. This cannot be undone. Call it only when the user
+ │ has asked to delete this artifact; the user is asked to confirm each call. An artifact someone else owns cannot be deleted, even one the user can edit.
+
+ Do you want to proceed?
+ ❯ No
+   Yes
+
+ Esc to cancel · Tab to amend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── orfoni probe: person-only prompt ─
