@@ -5,6 +5,7 @@ import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
+import { taskNotice } from '../task-notification.js';
 import { sameTaskList, trackTasks, type PendingTaskCall } from './tasks.js';
 
 export interface SessionModel {
@@ -148,12 +149,11 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, taskList: [], pendingTaskCalls: [] } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
-				case 'prompt':
-					return enter(
-						{ ...model, chat: [...model.chat, { kind: 'user', id: `user-${randomUUID()}`, text: event.text, at }] },
-						'working',
-						at,
-					);
+				case 'prompt': {
+					const notice = taskNotice(event.text);
+					const item: ChatItem = notice === null ? { kind: 'user', id: `user-${randomUUID()}`, text: event.text, at } : { kind: 'notice', id: `notice-${randomUUID()}`, text: notice, at };
+					return enter({ ...model, chat: [...model.chat, item] }, 'working', at);
+				}
 				case 'assistant_text':
 					return {
 						...model,

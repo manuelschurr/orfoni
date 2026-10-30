@@ -35,6 +35,14 @@ describe('reduce', () => {
 		expect(taskProgress(model)).toBeNull();
 	});
 
+	// Claude Code tells Claude about a finished background task or a monitor's event in a message of its own, which fires the prompt hook like one you typed.
+	test('a task notification Claude Code sends Claude shows as a notice with its summary and event, not as a message from you', () => {
+		const text = `<task-notification>\n<task-id>bcc2900fg</task-id>\n<summary>Monitor event: "SD probe on n1, n5 and n0"</summary>\n<event>n5 B t 1024 25: write 1164 KB/s</event>\nIf this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.\n</task-notification>`;
+		const model = run(started, hook('prompt', { text }, 2));
+		expect(model.chat).toEqual([{ kind: 'notice', id: expect.any(String), text: 'Monitor event: "SD probe on n1, n5 and n0": n5 B t 1024 25: write 1164 KB/s', at: 2 }]);
+		expect(model.state).toBe('working');
+	});
+
 	test('session_start with source clear takes the new Claude session ID, empties the chat, and goes idle', () => {
 		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_start', { source: 'clear' }, 4, second));
 		expect(model.claudeSessionId).toBe(second);

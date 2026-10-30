@@ -1,6 +1,7 @@
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatItem } from '@orfoni/protocol';
 import { z } from 'zod';
+import { taskNotice } from './task-notification.js';
 
 const Entry = z.object({
 	type: z.enum(['user', 'assistant', 'system']),
@@ -47,6 +48,11 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 		if (text.success) {
 			if (role === 'assistant') {
 				items.push({ kind: 'assistant', id: `assistant-${id}`, text: text.data.text, done: true });
+				return;
+			}
+			const notice = taskNotice(text.data.text);
+			if (notice !== null) {
+				items.push({ kind: 'notice', id: `notice-${id}`, text: notice, at });
 				return;
 			}
 			const shown = typed(text.data.text);
@@ -97,7 +103,7 @@ export function lastEntryAt(messages: SessionMessage[]): number | null {
 }
 
 function sameEvent(a: ChatItem, b: ChatItem): boolean {
-	if (a.kind === 'user' && b.kind === 'user') return a.text === b.text;
+	if ((a.kind === 'user' && b.kind === 'user') || (a.kind === 'notice' && b.kind === 'notice')) return a.text === b.text;
 	if (a.kind === 'tool' && b.kind === 'tool') return a.toolUseId === b.toolUseId;
 	return false;
 }

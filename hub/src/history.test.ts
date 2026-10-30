@@ -90,6 +90,11 @@ describe('normalizeHistory', () => {
 	});
 });
 
+test('a task notification in the transcript shows as a notice with its summary, without what it tells Claude alone', () => {
+	const text = `<task-notification>\n<task-id>b8p6nnejf</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/var/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Background command "Run the full simulator test suite" completed (exit code 0)</summary>\n</task-notification>\n<system-reminder>\nGoal check-in: keep going\n</system-reminder>`;
+	expect(normalizeHistory([message('user', text)])).toEqual([{ kind: 'notice', id: expect.any(String), text: 'Background command "Run the full simulator test suite" completed (exit code 0)', at: Date.parse('2026-10-26T12:00:00.000Z') }]);
+});
+
 describe('joinHistory', () => {
 	const notice: ChatItem = { kind: 'notice', id: 'n1', text: 'summary', at: 1 };
 	const firstPrompt: ChatItem = { kind: 'user', id: 'user-h1', text: 'first', at: 2 };
@@ -108,6 +113,11 @@ describe('joinHistory', () => {
 	test('a first live tool item cuts the history at the same tool call', () => {
 		const live: ChatItem[] = [{ ...tool, status: 'done', output: 'x' }];
 		expect(joinHistory([firstPrompt, tool], live)).toEqual([firstPrompt, ...live]);
+	});
+
+	test('a first live notice cuts the history at its transcript copy', () => {
+		const live: ChatItem[] = [{ kind: 'notice', id: 'notice-p1', text: 'Agent "Research" finished', at: 9 }];
+		expect(joinHistory([firstPrompt, reply, { kind: 'notice', id: 'notice-h3', text: 'Agent "Research" finished', at: 8 }], live)).toEqual([firstPrompt, reply, ...live]);
 	});
 
 	test('history without a copy of the first live item stays whole', () => {
