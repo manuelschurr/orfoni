@@ -16,9 +16,10 @@
 		empty,
 		onretry,
 		banner,
+		onterminal,
 		working = null,
 		activity = null,
-	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; working?: number | null; activity?: SessionSummary['activity'] } = $props();
+	}: { client: HubClient; chat: ChatItem[] | undefined; error: string | null; empty: string; onretry: () => void; banner?: Snippet; onterminal?: () => void; working?: number | null; activity?: SessionSummary['activity'] } = $props();
 	// A question or a plan shows as its own card, so the tool call that asked for it stays out of the groups, though history, which has no cards, keeps it.
 	const cardOf: Record<string, ChatItem['kind']> = { AskUserQuestion: 'question', ExitPlanMode: 'plan' };
 
@@ -85,7 +86,7 @@
 						{#if item.kind === 'user' || item.kind === 'assistant'}
 							<Bubble {item} />
 						{:else if item.kind === 'approval'}
-							<ApprovalCard {client} {item} />
+							<ApprovalCard {client} {item} {onterminal} />
 						{:else if item.kind === 'question'}
 							<QuestionCard {client} {item} />
 						{:else if item.kind === 'plan'}

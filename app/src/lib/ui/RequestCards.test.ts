@@ -17,6 +17,24 @@ test('a pending approval offers Allow, Always allow, and Deny, and Allow answers
 	expect(transport.requests('decide')).toMatchObject([{ requestId: 'r1', decision: { type: 'allow' } }]);
 });
 
+test('an approval Claude Code takes only in its terminal offers no Allow or Deny, only a button that opens the terminal', async () => {
+	const { client, transport } = await connectedClient([summary('a1', 'needs_approval')]);
+	let opened = 0;
+	const item = { kind: 'approval', requestId, toolName: 'mcp__claude-artifacts__delete_artifact', input: { slug: '9e43d5f3', artifact_title: 'Swarm run pages' }, status: 'pending', terminalOnly: true } as const;
+	const card = render(ApprovalCard, { client, item, onterminal: () => opened++ });
+	expect(screen.getByText('Claude Code takes this answer only in its terminal.')).toBeTruthy();
+	expect(document.body.textContent).toContain('Swarm run pages');
+	expect(screen.getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['Open terminal']);
+	await fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+	expect(opened).toBe(1);
+	expect(transport.requests('decide')).toEqual([]);
+	card.unmount();
+
+	render(ApprovalCard, { client, item });
+	expect(screen.getByText('Claude Code takes this answer only in its terminal.')).toBeTruthy();
+	expect(screen.queryAllByRole('button')).toEqual([]);
+});
+
 test('an approval for a long command or file shows the whole input on demand before you decide', async () => {
 	const { client } = await connectedClient([summary('a1', 'needs_approval')]);
 	const command = Array.from({ length: 450 }, (_, i) => `echo line ${i + 1}`).join('\n');

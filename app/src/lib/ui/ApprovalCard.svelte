@@ -4,7 +4,7 @@
 	import Excerpt from './Excerpt.svelte';
 	import { inputText, toolSummary } from './format';
 
-	let { client, item }: { client: HubClient; item: Extract<ChatItem, { kind: 'approval' }> } = $props();
+	let { client, item, onterminal }: { client: HubClient; item: Extract<ChatItem, { kind: 'approval' }>; onterminal?: () => void } = $props();
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	const outcome = { pending: '', allowed: 'Allowed', denied: 'Denied', withdrawn: 'Withdrawn' } as const;
@@ -33,16 +33,30 @@
 	{:else}
 		{#if summary && item.toolName !== 'Bash'}<p class="target">{summary}</p>{/if}
 		<Excerpt label={item.toolName === 'Bash' ? 'Command' : 'Input'} text={inputText(item.toolName, item.input)} expandable />
-		<div class="request-actions">
-			<button class="btn btn-primary" disabled={busy} onclick={() => decide({ type: 'allow' })}>Allow</button>
-			<button class="btn" disabled={busy} onclick={() => decide({ type: 'allow_always' })}>Always allow</button>
-			<button class="btn btn-danger" disabled={busy} onclick={() => decide({ type: 'deny' })}>Deny</button>
-		</div>
+		{#if item.terminalOnly}
+			<!-- Claude Code ignores an allow from the hub for some of these. -->
+			<p class="terminal-only">Claude Code takes this answer only in its terminal.</p>
+			{#if onterminal}
+				<div class="request-actions">
+					<button class="btn btn-primary" onclick={onterminal}>Open terminal</button>
+				</div>
+			{/if}
+		{:else}
+			<div class="request-actions">
+				<button class="btn btn-primary" disabled={busy} onclick={() => decide({ type: 'allow' })}>Allow</button>
+				<button class="btn" disabled={busy} onclick={() => decide({ type: 'allow_always' })}>Always allow</button>
+				<button class="btn btn-danger" disabled={busy} onclick={() => decide({ type: 'deny' })}>Deny</button>
+			</div>
+		{/if}
 	{/if}
 	{#if error}<p class="error" role="alert">{error}</p>{/if}
 </article>
 
 <style>
+	.terminal-only {
+		margin: 0;
+	}
+
 	.target {
 		margin: -0.35rem 0 0;
 		font-family: var(--font-mono);

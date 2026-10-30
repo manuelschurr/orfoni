@@ -145,6 +145,7 @@
 								error={client.openError}
 								empty="No messages yet. What you send here goes to Claude in this session's terminal."
 								onretry={() => void client?.select(session.id).catch(() => {})}
+								onterminal={() => sessionTerminal(session)}
 							>
 								{#snippet banner()}
 									{#if memoryHint}
