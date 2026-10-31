@@ -518,7 +518,7 @@ test('on a narrow screen, a terminal opens over the conversation with a history 
 	await waitFor(() => expect(layers()).toBe(0));
 });
 
-test('on a touch screen, a terminal opens without taking the focus, so the phone keyboard stays closed', async () => {
+test('on a touch screen, a terminal opens with the row of keys and without taking the focus, so the phone keyboard stays closed', async () => {
 	stubMedia((query) => query === NARROW || query === '(pointer: coarse)');
 	vi.stubGlobal(
 		'ResizeObserver',
@@ -533,6 +533,7 @@ test('on a touch screen, a terminal opens without taking the focus, so the phone
 	await fireEvent.click(await screen.findByRole('button', { name: 'More' }));
 	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
 	const terminals = screen.getByRole('complementary', { name: 'Terminals' });
+	expect(within(terminals).getByRole('group', { name: 'Terminal keys' })).toBeTruthy();
 	await waitFor(() => expect(within(terminals).queryByRole('status')).toBeNull());
 	expect(document.activeElement?.closest('.xterm')).toBeNull();
 

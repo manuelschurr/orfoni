@@ -1,3 +1,45 @@
+<script lang="ts" module>
+	interface Modes {
+		applicationCursorKeys: boolean;
+		ctrl: boolean;
+	}
+
+	interface Key {
+		label: string;
+		name: string;
+		sends: (modes: Modes) => string;
+	}
+
+	// An arrow sends what xterm sends for it: the application form once a full-screen program has switched the cursor keys mode on, and with Ctrl the modifier form.
+	function arrow(final: string): Key['sends'] {
+		return ({ applicationCursorKeys, ctrl }) => (ctrl ? `\x1b[1;5${final}` : `\x1b${applicationCursorKeys ? 'O' : '['}${final}`);
+	}
+
+	// The keys a phone keyboard lacks. xterm sends the same for Esc and the Tabs with Ctrl as without.
+	const keys: Key[] = [
+		{ label: 'Esc', name: 'Esc', sends: () => '\x1b' },
+		{ label: 'Tab', name: 'Tab', sends: () => '\t' },
+		{ label: '⇧Tab', name: 'Shift+Tab', sends: () => '\x1b[Z' },
+		{ label: '←', name: 'Left', sends: arrow('D') },
+		{ label: '↑', name: 'Up', sends: arrow('A') },
+		{ label: '↓', name: 'Down', sends: arrow('B') },
+		{ label: '→', name: 'Right', sends: arrow('C') },
+	];
+
+	// What xterm sends for Ctrl with a key: a letter or one of @[\]^_ gives its caret code, space gives NUL, and 3 to 8 give ESC to DEL as on a VT220. A capital counts as its letter, since a phone keyboard may capitalize on its own.
+	const controls = new Map<string, string>([
+		...[...'@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'].map((char, code): [string, string] => [char, String.fromCharCode(code)]),
+		...[...'abcdefghijklmnopqrstuvwxyz'].map((char, index): [string, string] => [char, String.fromCharCode(index + 1)]),
+		[' ', '\x00'],
+		['3', '\x1b'],
+		['4', '\x1c'],
+		['5', '\x1d'],
+		['6', '\x1e'],
+		['7', '\x1f'],
+		['8', '\x7f'],
+	]);
+</script>
+
 <script lang="ts">
 	import { FitAddon } from '@xterm/addon-fit';
 	import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -17,8 +59,11 @@
 	let container: HTMLDivElement;
 	let phase = $state<'opening' | 'open' | 'closed' | 'failed'>('opening');
 	let error = $state<string | null>(null);
+	// Whether Ctrl from the row of keys applies to the next key.
+	let ctrl = $state(false);
 	let focusTerminal = () => {};
 	let reconnect = () => {};
+	let press = (_key: Key) => {};
 
 	onMount(() => {
 		const term = new Terminal({
@@ -50,6 +95,12 @@
 			// Without WebGL the DOM renderer draws the terminal.
 		}
 		focusTerminal = () => term.focus();
+		// Through xterm's own input, so a key from the row scrolls to the prompt and reaches the stream as a typed one does.
+		press = (key) => {
+			const sends = key.sends({ applicationCursorKeys: term.modes.applicationCursorKeysMode, ctrl });
+			ctrl = false;
+			term.input(sends);
+		};
 
 		const visible = () => container.offsetWidth > 0 && container.offsetHeight > 0;
 		const resizer = new ResizeObserver(() => {
@@ -60,7 +111,14 @@
 		let stream: TerminalStream | null = null;
 		let disposed = false;
 		const encoder = new TextEncoder();
-		const input = term.onData((data) => stream?.write(encoder.encode(data)));
+		const input = term.onData((data) => {
+			// An armed Ctrl takes the next character typed and leaves alone what starts with a control character, such as the focus reports the terminal sends by itself.
+			if (ctrl && /^[^\x00-\x1f\x7f]/.test(data)) {
+				ctrl = false;
+				data = (controls.get(data[0]!) ?? data[0]) + data.slice(1);
+			}
+			stream?.write(encoder.encode(data));
+		});
 		const binary = term.onBinary((data) => stream?.write(Uint8Array.from(data, (char) => char.charCodeAt(0))));
 		const resize = term.onResize(({ cols, rows }) => stream?.resize(cols, rows));
 
@@ -114,8 +172,17 @@
 	}
 </script>
 
-<section class="terminal" aria-label="Terminal {label}">
+<section class="terminal" class:touch aria-label="Terminal {label}">
 	<div class="screen" bind:this={container}></div>
+	{#if touch}
+		<!-- A key that took the focus from the terminal would close the phone's keyboard and open it again. -->
+		<div class="keys" role="group" aria-label="Terminal keys">
+			<button aria-pressed={ctrl} onpointerdown={(event) => event.preventDefault()} onclick={() => (ctrl = !ctrl)}>Ctrl</button>
+			{#each keys as key (key.name)}
+				<button aria-label={key.name} onpointerdown={(event) => event.preventDefault()} onclick={() => press(key)}>{key.label}</button>
+			{/each}
+		</div>
+	{/if}
 	{#if phase !== 'open'}
 		<div class="overlay" role="status">
 			{#if phase === 'opening'}
@@ -145,6 +212,46 @@
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
+	}
+
+	/* The keys run the full width of the panel under the terminal, so the inset the panel gives the terminal moves onto the screen. */
+	.terminal.touch {
+		flex-direction: column;
+		padding: 0.5rem 0 0;
+	}
+
+	.touch .screen {
+		margin: 0 0 0.25rem 0.6rem;
+	}
+
+	.keys {
+		display: grid;
+		flex: none;
+		grid-template-columns: repeat(8, minmax(0, 1fr));
+		border-top: 1px solid #3e3d39;
+		background: #262523;
+	}
+
+	.keys button {
+		min-height: 2.75rem;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: #ece9e1;
+		font-size: 0.9375rem;
+		touch-action: manipulation;
+		user-select: none;
+		-webkit-tap-highlight-color: transparent;
+	}
+
+	.keys button:active {
+		background: rgb(255 255 255 / 0.1);
+	}
+
+	.keys [aria-pressed='true'] {
+		background: #d97757;
+		color: #1f1e1d;
+		font-weight: 600;
 	}
 
 	.overlay {
