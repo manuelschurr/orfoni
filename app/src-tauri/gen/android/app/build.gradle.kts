@@ -7,6 +7,11 @@ plugins {
     id("rust")
 }
 
+// The release key lives outside the repo, in a properties file that ORFONI_ANDROID_SIGNING names (tools/android/release.sh sets it), so a build without it stays unsigned.
+val signingProperties = System.getenv("ORFONI_ANDROID_SIGNING")?.let { path ->
+    Properties().apply { file(path).inputStream().use { load(it) } }
+}
+
 val tauriProperties = Properties().apply {
     val propFile = file("tauri.properties")
     if (propFile.exists()) {
@@ -25,6 +30,16 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        if (signingProperties != null) {
+            create("release") {
+                storeFile = file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("password")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("password")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
@@ -40,6 +55,7 @@ android {
             }
         }
         getByName("release") {
+            if (signingProperties != null) signingConfig = signingConfigs.getByName("release")
             optimization {
                enable = true
             }
