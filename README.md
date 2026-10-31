@@ -2,7 +2,7 @@
 
 orfoni lets you run and follow Claude Code sessions on a remote machine from Windows or Android. Each session runs as an ordinary interactive `claude` in its own tmux session on the server. orfoni shows it as a chat and as a terminal at the same time, lets you answer Claude's approvals and questions from either one, and keeps every session running when no client is connected.
 
-Status: milestone 3 of 4. The server side, `orfoni-hub`, and the Windows app work, and a command-line client covers the basics. The Android app comes later. The design is in [docs/design.md](docs/design.md).
+Status: milestone 4 of 4 under way. The server side, `orfoni-hub`, the Windows app and a first Android app work, and a command-line client covers the basics. The design is in [docs/design.md](docs/design.md).
 
 ## How it works
 
@@ -86,6 +86,14 @@ The pencil next to a session's title, or a double click on the title, renames th
 
 Sessions you started outside orfoni, in Tabby's tmux, from Termius, or as a background session, show under their folder below orfoni's own, in a quieter style with where they run. orfoni finds them in Claude Code's session registry in `~/.claude/sessions/`, an internal Claude Code file, so a Claude Code update can empty that list without breaking anything else. Opening one shows its chat read-only. Port into orfoni ends Claude Code where it runs and continues the conversation as an orfoni session with everything an orfoni session has. It refuses a session that is busy or has moved on to another conversation, and anything typed there but not sent is lost.
 
+## Android
+
+From 0.3.18 on, releases also carry an Android APK, `orfoni_<version>_android-arm64.apk`, for phones with a 64-bit ARM processor, which nearly every phone of the last years has. To get new versions without downloading each one, install [Obtainium](https://github.com/ImranR98/Obtainium) and add `https://github.com/manuelschurr/orfoni` to it. Obtainium watches the releases and installs each new APK, in the background on Android 12 and later, after Android asked once whether it may install apps. Every release is signed with the same key, which is what lets a new version install over the old one.
+
+On the first start the app asks for the connection settings as the Windows app does, with one difference: a phone has no `~/.ssh`, so orfoni keeps a key of its own in its private storage. Make a key on this phone creates one that never leaves the phone and shows its public key with a Copy button. Add that line to `~/.ssh/authorized_keys` of the user you log in as on the server, then save and connect. Import a key file takes an OpenSSH private key you already have instead, one with a passphrase too. The host key question works as on Windows.
+
+On a phone orfoni shows one screen at a time, the session list or a session with its header, chat and message box. Android's back gesture goes back to the list, and from there leaves the app. More in the session's header holds the terminal, the shells, Fork, Stop and Remove, the memory and context gauges, and the model, effort and permissions. On the phone's keyboard Enter adds a line and Send sends. For now notifications arrive only while orfoni runs, and the terminal has no row of extra keys for Esc, Ctrl and the arrows.
+
 ## Develop
 
 ```sh
@@ -108,6 +116,15 @@ npx playwright test -c app/e2e
 The checks start the bridge and Vite, run real Claude Code sessions on the `haiku` model through the installed hub, and remove the sessions they started.
 
 The bridge listens on 127.0.0.1:4790 and refuses every connection that does not carry its token, because a terminal it opens is a shell on the server. It takes the token from `ORFONI_BRIDGE_TOKEN`, or generates one at start and prints the address to open. The Playwright checks generate a token for each run. To run them against a bridge that is already running, export that bridge's token as `ORFONI_BRIDGE_TOKEN` first. To use the browser build yourself, run `node tools/dev-bridge/bridge.mjs` and `npm run dev -w app`, then open the address the bridge printed.
+
+The Android build needs the Android SDK, NDK r30 and Rust's Android targets, found through `ANDROID_HOME`, `NDK_HOME` and `JAVA_HOME` (JDK 21). `tools/android/install.sh` builds a debug APK for arm64 and installs it on the phone adb is connected to, or on `$ANDROID_SERIAL`. The device checks drive that build on the phone through its WebView. `tools/android/test-server.sh` gives the phone a throwaway sshd on the server, with its own keys, through `adb reverse`, so the checks log in without touching the server's own sshd:
+
+```sh
+tools/android/install.sh
+npx playwright test -c app/e2e-android
+```
+
+Releases are signed with one key. Make it once with `tools/android/release-key.sh` and back up `~/.config/orfoni/android` outside the server, since Android installs an update only when its signature matches. After the windows workflow published a release, `tools/android/release.sh <version>` builds the signed APK at that version and attaches it to the release.
 
 ## License
 
