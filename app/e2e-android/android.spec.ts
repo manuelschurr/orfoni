@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { _android, expect, test, type AndroidDevice, type Page } from '@playwright/test';
 import type { SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, eventually, HubClient, newProjectDir, type Started } from '../../hub/test/e2e/client';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, tmux, type Started } from '../../hub/test/e2e/client';
 
 const PACKAGE = 'com.orfoni.app.debug';
 const SERVER = '/var/tmp/claude-0/orfoni-android-sshd';
@@ -70,6 +70,8 @@ async function logIn(page: Page): Promise<string> {
 	await expect(trust).toContainText(hostKey);
 	await trust.getByRole('button', { name: 'Trust and connect' }).click();
 	await expect(page.getByRole('navigation', { name: 'Sessions' })).toBeVisible();
+	// The first connection asks once to be let off battery limits, in a dialog of Android's that pauses the page until it is answered.
+	expect(await declineBatteryExemption()).toBe(true);
 	return publicKey;
 }
 
@@ -151,15 +153,21 @@ function shownNotifications(): string {
 }
 
 // Android asks once whether orfoni may run without battery limits, which it needs for its connection while the phone sleeps.
+// The nodes of the screen Android shows now that match the pattern, filtered on the phone, so nothing else on it comes back.
+function onScreen(pattern: string): string {
+	return adb('shell', `uiautomator dump /sdcard/orfoni-check.xml > /dev/null; grep -oE '${pattern}' /sdcard/orfoni-check.xml; rm /sdcard/orfoni-check.xml`);
+}
+
+function center(bounds: string): [string, string] {
+	const [x1, y1, x2, y2] = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(bounds)!.slice(1).map(Number);
+	return [String(Math.round((x1! + x2!) / 2)), String(Math.round((y1! + y2!) / 2))];
+}
+
 async function declineBatteryExemption(): Promise<boolean> {
 	for (let i = 0; i < 20; i++) {
-		adb('shell', 'uiautomator dump /sdcard/orfoni-check.xml > /dev/null');
-		const screen = adb('exec-out', 'cat /sdcard/orfoni-check.xml');
-		adb('shell', 'rm /sdcard/orfoni-check.xml');
-		const decline = /resource-id="android:id\/button2"[^>]*package="com.android.settings"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(screen);
+		const decline = onScreen('resource-id="android:id/button2"[^>]*package="com.android.settings"[^>]*bounds="[^"]*"');
 		if (decline) {
-			const [x1, y1, x2, y2] = decline.slice(1).map(Number);
-			adb('shell', 'input', 'tap', String((x1! + x2!) / 2), String((y1! + y2!) / 2));
+			adb('shell', 'input', 'tap', ...center(decline));
 			return true;
 		}
 		await new Promise((resolve) => setTimeout(resolve, 500));
@@ -174,7 +182,6 @@ async function untilNotified(text: string, timeoutMs: number): Promise<string> {
 test('in the background, a session that needs approval shows a notification on the phone, also while Android dozes and without the battery exemption', async () => {
 	const tag = randomUUID().slice(0, 8);
 	await logIn(await freshApp());
-	expect(await declineBatteryExemption()).toBe(true);
 	expect(adb('shell', 'dumpsys', 'deviceidle', 'whitelist')).not.toContain(PACKAGE);
 	await untilNotified('orfoni is connected', 15_000);
 	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
@@ -191,4 +198,53 @@ test('in the background, a session that needs approval shows a notification on t
 		adb('shell', 'dumpsys', 'deviceidle', 'unforce');
 		adb('shell', 'dumpsys', 'battery', 'reset');
 	}
+});
+
+function keyboardShown(): boolean {
+	return adb('shell', 'dumpsys input_method | grep mInputShown').includes('mInputShown=true');
+}
+
+// A real touch on the phone at the element's place, which Android treats as a finger, unlike one sent through the WebView.
+async function touch(page: Page, element: ReturnType<Page['locator']>): Promise<void> {
+	const [left, top] = /\[(\d+),(\d+)\]/.exec(onScreen('class="android.webkit.WebView"[^>]*bounds="[^"]*"'))!.slice(1).map(Number);
+	const box = (await element.boundingBox())!;
+	const ratio = await page.evaluate(() => devicePixelRatio);
+	adb('shell', 'input', 'tap', String(Math.round(left! + (box.x + box.width / 2) * ratio)), String(Math.round(top! + (box.y + box.height / 2) * ratio)));
+}
+
+test('on the phone a terminal opens without the keyboard, a tap brings it up, and the row of keys sends Ctrl+C and Shift+Tab with the keyboard staying up', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const page = await freshApp();
+	await logIn(page);
+	const id = await startSession(`keys ${tag}`, 'Reply with exactly: ready');
+	await page.getByRole('navigation', { name: 'Sessions' }).getByText(`keys ${tag}`).click();
+	await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText('ready', { timeout: REPLY_MS });
+	const main = page.getByRole('main');
+	await main.getByRole('button', { name: 'More' }).click();
+	await main.getByRole('button', { name: 'Terminal' }).click();
+	const keys = page.getByRole('group', { name: 'Terminal keys' });
+	await expect(keys).toBeVisible();
+	const screen = () => tmux('capture-pane', '-p', '-t', pane(id));
+	await eventually(async () => screen(), (text) => text.includes('manual mode on'), 30_000);
+	await new Promise((resolve) => setTimeout(resolve, 1_000));
+	expect(keyboardShown()).toBe(false);
+
+	await touch(page, page.locator('.terminal .screen').last());
+	await eventually(async () => keyboardShown(), (shown) => shown, 10_000);
+	const fit = await page.evaluate(() => ({ bottom: document.querySelector('[aria-label="Terminal keys"]')!.getBoundingClientRect().bottom, height: innerHeight }));
+	expect(Math.abs(fit.bottom - fit.height)).toBeLessThan(2);
+	await phoneScreenshot('terminal-keys.png');
+
+	// One key at a time, as a person types: xterm reads what Android's keyboard put into its text field after each key, so keys injected in one burst would overlap. Starting with a digit keeps the keyboard from capitalizing the first letter.
+	for (const char of `42${tag}`) adb('shell', 'input', 'text', char);
+	await eventually(async () => screen(), (text) => text.includes(`42${tag}`), 10_000);
+	await touch(page, keys.getByRole('button', { name: 'Ctrl' }));
+	await expect(keys.getByRole('button', { name: 'Ctrl' })).toHaveAttribute('aria-pressed', 'true');
+	adb('shell', 'input', 'text', 'c');
+	await eventually(async () => screen(), (text) => !text.includes(`42${tag}`), 10_000);
+	await expect(keys.getByRole('button', { name: 'Ctrl' })).toHaveAttribute('aria-pressed', 'false');
+
+	await touch(page, keys.getByRole('button', { name: 'Shift+Tab' }));
+	await eventually(async () => screen(), (text) => text.includes('accept edits on'), 10_000);
+	expect(keyboardShown()).toBe(true);
 });
