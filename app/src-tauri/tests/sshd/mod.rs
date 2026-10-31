@@ -6,6 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use orfoni_lib::known_hosts::KnownHosts;
 use orfoni_lib::settings::Settings;
 use tempfile::TempDir;
 
@@ -192,6 +193,20 @@ impl PrivateSshd {
         authorized.push_str(&fs::read_to_string(key.with_extension("pub")).unwrap());
         fs::write(self.path("authorized_keys"), authorized).unwrap();
         key.to_string_lossy().into_owned()
+    }
+
+    pub fn authorize(&self, public_key: &str) {
+        let mut authorized = fs::read_to_string(self.path("authorized_keys")).unwrap();
+        authorized.push_str(&format!("{public_key}\n"));
+        fs::write(self.path("authorized_keys"), authorized).unwrap();
+    }
+
+    pub fn known_hosts(&self) -> KnownHosts {
+        let mut known_hosts = KnownHosts::load(&self.path("known-hosts.json")).unwrap();
+        known_hosts
+            .trust("127.0.0.1", self.port, &self.host_fingerprint())
+            .unwrap();
+        known_hosts
     }
 
     pub fn unknown_key(&self) -> String {

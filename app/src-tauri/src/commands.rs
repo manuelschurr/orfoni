@@ -8,6 +8,7 @@ use serde::Serialize;
 use tauri::State;
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 
+use crate::keys::{self, KeyInfo};
 use crate::known_hosts::KnownHosts;
 use crate::link::{HubLink, LinkEvent};
 use crate::settings::Settings;
@@ -15,6 +16,7 @@ use crate::ssh::SshError;
 use crate::terminal::TerminalInput;
 
 pub struct AppState {
+    data_dir: PathBuf,
     settings_path: PathBuf,
     known_hosts_path: PathBuf,
     link: Mutex<Option<HubLink>>,
@@ -25,6 +27,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(data_dir: &Path) -> AppState {
         AppState {
+            data_dir: data_dir.to_path_buf(),
             settings_path: data_dir.join("settings.json"),
             known_hosts_path: data_dir.join("known-hosts.json"),
             link: Mutex::new(None),
@@ -227,6 +230,21 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, String> {
 #[tauri::command]
 pub fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     settings.save(&state.settings_path).map_err(describe)
+}
+
+#[tauri::command]
+pub fn key_info(state: State<'_, AppState>) -> Result<Option<KeyInfo>, String> {
+    keys::info(&state.data_dir).map_err(describe)
+}
+
+#[tauri::command]
+pub fn key_create(state: State<'_, AppState>, replace: bool) -> Result<KeyInfo, String> {
+    keys::create(&state.data_dir, "orfoni-android", replace).map_err(describe)
+}
+
+#[tauri::command]
+pub fn key_import(state: State<'_, AppState>, text: String, replace: bool) -> Result<KeyInfo, String> {
+    keys::import(&state.data_dir, &text, replace).map_err(describe)
 }
 
 #[cfg(test)]

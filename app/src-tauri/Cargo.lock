@@ -3035,6 +3035,7 @@ dependencies = [
 name = "orfoni"
 version = "0.3.0"
 dependencies = [
+ "getrandom 0.3.4",
  "log",
  "russh",
  "serde",

@@ -1,5 +1,6 @@
 pub mod commands;
 mod files;
+pub mod keys;
 pub mod known_hosts;
 pub mod link;
 pub mod settings;
@@ -58,6 +59,9 @@ pub fn run() {
             commands::terminal_close,
             commands::settings_get,
             commands::settings_set,
+            commands::key_info,
+            commands::key_create,
+            commands::key_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
