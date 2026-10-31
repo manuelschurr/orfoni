@@ -124,7 +124,7 @@ tools/android/install.sh
 npx playwright test -c app/e2e-android
 ```
 
-Releases are signed with one key. Make it once with `tools/android/release-key.sh` and back up `~/.config/orfoni/android` outside the server, since Android installs an update only when its signature matches. After the windows workflow published a release, `tools/android/release.sh <version>` builds the signed APK at that version and attaches it to the release.
+Releases are signed with one key. Make it once with `tools/android/release-key.sh` and back up `~/.config/orfoni/android` outside the server, since Android installs an update only when its signature matches. After the windows workflow published a release, `tools/android/release.sh <version>` builds the signed APK at that version and attaches it to the release. `tools/release.sh` does both in one go: it starts the windows workflow, waits for its release, and attaches the APK.
 
 ## License
 
