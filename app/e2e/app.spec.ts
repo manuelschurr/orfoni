@@ -364,7 +364,7 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 		} finally {
 			screen.close();
 		}
-		await box.fill('What was the code word? Reply with only that word.');
+		await box.fill('Add 1 to the number in your last reply. Reply with only the result, in digits.');
 		await box.press('Enter');
 		await expect(claude(page).last()).toContainText(/kumquat/i, { timeout: REPLY_MS });
 	} finally {
@@ -374,7 +374,7 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 
 test('a conversation that ended outside orfoni shows among the earlier conversations of its folder, the search finds it, and Continue opens it as an orfoni session that goes on with it', async ({ page }) => {
 	const dir = newProjectDir();
-	const outside = OutsideSession.start(dir, 'Remember the code word damson. Reply with only the result of 1024 divided by 2, in digits.');
+	const outside = OutsideSession.start(dir, 'Reply with only the result of 1024 divided by 2, in digits.');
 	let pid: number;
 	try {
 		await outside.acceptTrustPrompt();
@@ -395,7 +395,7 @@ test('a conversation that ended outside orfoni shows among the earlier conversat
 	const search = earlier.getByRole('searchbox', { name: 'Search' });
 	await search.fill('kumquat');
 	await expect(earlier.getByText('No conversation matches "kumquat".')).toBeVisible();
-	await search.fill('damson');
+	await search.fill('Divided 1024');
 	await earlier.getByRole('listitem').getByRole('button').click();
 
 	const continuing = page.getByRole('dialog', { name: /^Continue ".*"$/ });
@@ -417,9 +417,9 @@ test('a conversation that ended outside orfoni shows among the earlier conversat
 	} finally {
 		screen.close();
 	}
-	await box.fill('What was the code word? Reply with only that word.');
+	await box.fill('Add 1 to the number in your last reply. Reply with only the result, in digits.');
 	await box.press('Enter');
-	await expect(claude(page).last()).toContainText(/damson/i, { timeout: REPLY_MS });
+	await expect(claude(page).last()).toContainText('513', { timeout: REPLY_MS });
 
 	await page.getByRole('button', { name: `Earlier conversations in ${basename(dir)}` }).click();
 	await expect(page.getByRole('dialog', { name: `Earlier conversations in ${basename(dir)}` })).toContainText('No earlier conversations here.');

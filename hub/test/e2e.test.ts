@@ -305,13 +305,13 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const earlier = async () => ((await client.request('listPastConversations', { projectDir: TRUSTED_DIR })) as { conversations: PastConversation[] }).conversations;
 		outside('new-session', '-d', '-s', name, '-x', '200', '-y', '50', '-c', TRUSTED_DIR, 'bash');
 		try {
-			outside('send-keys', '-t', `=${name}:`, `claude --model haiku 'Remember the code word quince. Reply with exactly: first-${tag}'`, 'Enter');
+			outside('send-keys', '-t', `=${name}:`, `claude --model haiku 'Reply with only the result of 1024 divided by 2, in digits. (${tag})'`, 'Enter');
 			const listed = await client.waitFor((m) => m.type === 'otherSessions' && m.sessions.some((s) => s.tmux === name));
 			const entry = listed.type === 'otherSessions' ? listed.sessions.find((s) => s.tmux === name) : undefined;
 			if (!entry) throw new Error('unreachable');
 			await eventually(
 				() => client.request('openOtherSession', { pid: entry.pid }) as Promise<{ session: OtherSession; chat: ChatItem[] }>,
-				({ session, chat }) => session.status === 'idle' && chat.some(replied(`first-${tag}`)),
+				({ session, chat }) => session.status === 'idle' && chat.some(replied('512')),
 			);
 			expect((await earlier()).map((c) => c.claudeSessionId)).not.toContain(entry.claudeSessionId);
 			await expect(client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, model: 'haiku' })).rejects.toThrow(/^not_ready: .*Port that session into orfoni/);
@@ -323,17 +323,18 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 				30_000,
 			);
 			const conversation = (await earlier()).find((c) => c.claudeSessionId === entry.claudeSessionId);
-			expect(conversation?.firstPrompt).toContain(`first-${tag}`);
+			expect(conversation?.firstPrompt).toContain(tag);
 
 			const continued = (await client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, model: 'haiku', permissionMode: 'default' })) as Started;
 			started.push(continued.session.id);
 			await acceptTrustPrompt(continued);
 			expect(continued.session).toMatchObject({ projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, title: conversation?.title });
 			const { chat } = (await client.request('openSession', { sessionId: continued.session.id })) as { chat: ChatItem[] };
-			expect(chat.some(replied(`first-${tag}`))).toBe(true);
+			expect(chat.some(replied('512'))).toBe(true);
 
-			await client.request('send', { sessionId: continued.session.id, text: 'What was the code word? Reply with only that word.' });
-			await client.waitForChat(continued.session.id, (item) => item.kind === 'assistant' && /quince/i.test(item.text));
+			// Only a session that carries the conversation knows its earlier reply, and the answer is new text, so an old item cannot pass for it.
+			await client.request('send', { sessionId: continued.session.id, text: 'Add 1 to the number in your last reply. Reply with only the result, in digits.' });
+			await client.waitForChat(continued.session.id, (item) => item.kind === 'assistant' && item.text.includes('513'));
 			expect((await earlier()).map((c) => c.claudeSessionId)).not.toContain(entry.claudeSessionId);
 			const again = (await client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId })) as Started;
 			expect(again.session.id).toBe(continued.session.id);
