@@ -327,7 +327,7 @@ test('reconnect after the bridge restarts without duplicated items', async ({ pa
 
 test('a session outside orfoni shows under its folder and ports into an orfoni session that goes on with its conversation', async ({ page }) => {
 	const dir = newProjectDir();
-	const outside = OutsideSession.start(dir, 'Remember the code word kumquat. Reply with only the result of 4096 divided by 2, in digits.');
+	const outside = OutsideSession.start(dir, 'Reply with only the result of 4096 divided by 2, in digits.');
 	try {
 		await outside.acceptTrustPrompt();
 		await outside.waitFor(() => outside.screen().includes('2048'), 'replied', REPLY_MS);
@@ -366,7 +366,7 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 		}
 		await box.fill('Add 1 to the number in your last reply. Reply with only the result, in digits.');
 		await box.press('Enter');
-		await expect(claude(page).last()).toContainText(/kumquat/i, { timeout: REPLY_MS });
+		await expect(claude(page).last()).toContainText('2049', { timeout: REPLY_MS });
 	} finally {
 		outside.stop();
 	}
