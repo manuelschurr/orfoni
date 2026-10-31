@@ -349,3 +349,24 @@ describe('HubClient with sessions outside orfoni', () => {
 		expect(await porting).toEqual({ session: ported, needsTrust: false });
 	});
 });
+
+describe('HubClient with earlier conversations', () => {
+	const notes = { claudeSessionId: CLAUDE_2, title: 'Notes on the uplink', firstPrompt: 'walk me through the uplink', lastModified: 900 };
+
+	test("lists a folder's earlier conversations as the hub sends them", async () => {
+		await connect();
+		const listing = client.pastConversations('/root/projects/alpha');
+		expect(transport.requests('listPastConversations')).toMatchObject([{ projectDir: '/root/projects/alpha' }]);
+		transport.respond('listPastConversations', { conversations: [notes] });
+		expect(await listing).toEqual([notes]);
+	});
+
+	test('continuing names the folder and the conversation with the model, effort, and permission mode, and answers with the new orfoni session', async () => {
+		await connect();
+		const continued = session('c1', '/root/projects/alpha', 1500, 'idle', CLAUDE_2);
+		const continuing = client.continueConversation({ projectDir: '/root/projects/alpha', claudeSessionId: CLAUDE_2, model: 'haiku', effort: 'low', permissionMode: 'plan' });
+		expect(transport.requests('continueConversation')).toMatchObject([{ projectDir: '/root/projects/alpha', claudeSessionId: CLAUDE_2, model: 'haiku', effort: 'low', permissionMode: 'plan' }]);
+		transport.respond('continueConversation', { session: continued, needsTrust: true });
+		expect(await continuing).toEqual({ session: continued, needsTrust: true });
+	});
+});

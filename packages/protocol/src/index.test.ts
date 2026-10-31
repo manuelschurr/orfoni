@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, HubStatus, MAX_IMAGE_BYTES, parseClientRequest, parseHubMessage, ProtocolError, SessionSummary, type HubMessage } from './index.js';
+import { ClaudeSessionId, HubStatus, MAX_IMAGE_BYTES, parseClientRequest, parseHubMessage, PastConversation, ProtocolError, SessionSummary, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -232,5 +232,33 @@ describe('task list, activity, and commands', () => {
 
 	test('the slash commands of a folder are a request', () => {
 		expect(parseClientRequest('{"id":12,"method":"listCommands","projectDir":"/root/projects/swarm"}')).toEqual({ id: 12, method: 'listCommands', projectDir: '/root/projects/swarm' });
+	});
+});
+
+describe('earlier conversations', () => {
+	const conversation = 'aa22984d-db9f-4280-9abf-c4ddd89105c5';
+
+	test('the hub lists the earlier conversations of a folder and continues one of them with a model, an effort and a permission mode', () => {
+		expect(parseClientRequest('{"id":13,"method":"listPastConversations","projectDir":"/root/projects/swarm"}')).toEqual({ id: 13, method: 'listPastConversations', projectDir: '/root/projects/swarm' });
+		expect(parseClientRequest(`{"id":14,"method":"continueConversation","projectDir":"/root/projects/swarm","claudeSessionId":"${conversation}","model":"haiku","effort":"low","permissionMode":"plan"}`)).toEqual({
+			id: 14,
+			method: 'continueConversation',
+			projectDir: '/root/projects/swarm',
+			claudeSessionId: conversation,
+			model: 'haiku',
+			effort: 'low',
+			permissionMode: 'plan',
+		});
+	});
+
+	test('continuing names the folder and a conversation ID Claude Code could have given', () => {
+		expectBadMessage(`{"id":15,"method":"continueConversation","claudeSessionId":"${conversation}"}`);
+		expectBadMessage('{"id":16,"method":"continueConversation","projectDir":"/root/projects/swarm","claudeSessionId":"--settings=/tmp/x"}');
+	});
+
+	test('an earlier conversation has a title, its first prompt if Claude Code found one, and when it last changed', () => {
+		const listed = { claudeSessionId: conversation, title: 'Second swarm cloud session', firstPrompt: null, lastModified: 1793467295098 };
+		expect(PastConversation.parse(listed)).toEqual(listed);
+		expect(() => PastConversation.parse({ ...listed, claudeSessionId: 'not-a-uuid' })).toThrow();
 	});
 });

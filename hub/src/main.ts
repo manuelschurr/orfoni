@@ -1,7 +1,7 @@
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk';
 import { listenClients } from './client-server.js';
 import { listCommands } from './commands.js';
 import { listenHooks } from './hook-server.js';
@@ -34,6 +34,8 @@ async function daemon(): Promise<void> {
 		claudeTasksDir: join(homedir(), '.claude/tasks'),
 		kill: (pid, signal) => process.kill(pid, signal),
 		listCommands,
+		// orfoni shows a git worktree as a folder of its own, and claude --resume leaves out the conversations the Agent SDK, claude -p or a background session ran.
+		listConversations: (projectDir) => listSessions({ dir: projectDir, includeWorktrees: false, includeProgrammatic: false }),
 		taskTools: process.env.ORFONI_TASK_TOOLS !== '0',
 		log,
 	});

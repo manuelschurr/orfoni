@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, OtherSession, SessionId, SessionSummary } from '@orfoni/protocol';
+import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, OtherSession, PastConversation, SessionId, SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
@@ -222,6 +222,7 @@ let listings: Listing[];
 let history: { claudeSessionId: ClaudeSessionId; projectDir: string }[];
 let transcript: SessionMessage[];
 let transcripts: Map<string, SessionMessage[]>;
+let conversations: Map<string, SDKSessionInfo[]>;
 let apiKey: ApiKey;
 let summaryPrompts: string[];
 let kills: [number, NodeJS.Signals][];
@@ -257,6 +258,7 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 			const ended = new Promise<void>((resolve) => (end = resolve));
 			return { commands: new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail, end })), ended };
 		},
+		listConversations: async (projectDir) => conversations.get(projectDir) ?? [],
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -282,6 +284,7 @@ beforeEach(() => {
 	history = [];
 	transcript = [];
 	transcripts = new Map();
+	conversations = new Map();
 	apiKey = { missing: 'no key in tests' };
 	summaryPrompts = [];
 	kills = [];
@@ -1925,6 +1928,131 @@ describe('portSession', () => {
 		expect(other.session(session.id)).toMatchObject({ claudeSessionId: OTHER, title: 'swarm-73', projectDir: OTHER_PROJECT });
 		expect(otherLists(other).at(-1)).toEqual([otherSession(4322, { claudeSessionId: NOTES, name: 'notes' })]);
 		expect(await other.ok('listSessions', {})).toEqual([expect.objectContaining({ id: session.id })]);
+	});
+});
+
+describe('earlier conversations', () => {
+	const NOTES = '94917ae8-57a9-4474-abc5-f812984ab86d' as ClaudeSessionId;
+	const RADIO = '6df49a0b-6de0-4a0f-83c5-8abc9595d345' as ClaudeSessionId;
+
+	// A row as the Agent SDK lists it, whose summary is the name the conversation was given, or else Claude Code's own title for it.
+	function listed(sessionId: string, lastModified: number, fields: Partial<SDKSessionInfo> = {}): SDKSessionInfo {
+		return { sessionId, summary: `Conversation ${sessionId.slice(0, 8)}`, lastModified, firstPrompt: 'walk me through the ranging code', cwd: PROJECT, ...fields };
+	}
+
+	async function past(client: TestClient, projectDir = PROJECT): Promise<PastConversation[]> {
+		return ((await client.ok('listPastConversations', { projectDir })) as { conversations: PastConversation[] }).conversations;
+	}
+
+	function continued(client: TestClient, claudeSessionId: ClaudeSessionId, params: Partial<Params<'continueConversation'>> = {}): Promise<Response> {
+		return client.request('continueConversation', { projectDir: PROJECT, claudeSessionId, ...params });
+	}
+
+	test('lists the conversations Claude Code keeps for a folder, newest first, each with its title, its first prompt if it has one, and when it last changed', async () => {
+		conversations.set(PROJECT, [
+			listed(NOTES, T0 - 3_600_000, { summary: 'Notes on the uplink', firstPrompt: undefined }),
+			listed(RADIO, T0 - 60_000, { summary: 'ranging back to 1280', customTitle: 'ranging back to 1280' }),
+		]);
+		const client = await startHub();
+		expect(await past(client, `${PROJECT}/`)).toEqual([
+			{ claudeSessionId: RADIO, title: 'ranging back to 1280', firstPrompt: 'walk me through the ranging code', lastModified: T0 - 60_000 },
+			{ claudeSessionId: NOTES, title: 'Notes on the uplink', firstPrompt: null, lastModified: T0 - 3_600_000 },
+		]);
+		expect(await past(client, OTHER_PROJECT)).toEqual([]);
+	});
+
+	test('leaves out the conversation an orfoni session holds and the one a Claude Code process outside orfoni runs now', async () => {
+		const client = await startHub();
+		const { claude } = await start(client);
+		runOther(4321, { cwd: PROJECT });
+		conversations.set(PROJECT, [listed(claude, T0), listed(OTHER, T0 - 1000), listed(NOTES, T0 - 2000)]);
+		expect((await past(client)).map(({ claudeSessionId }) => claudeSessionId)).toEqual([NOTES]);
+	});
+
+	test('lists the newest 200 conversations of a folder that has more', async () => {
+		conversations.set(PROJECT, Array.from({ length: 250 }, (_, i) => listed(randomUUID(), T0 - i * 1000)).reverse());
+		const client = await startHub();
+		expect((await past(client)).map(({ lastModified }) => lastModified)).toEqual(Array.from({ length: 200 }, (_, i) => T0 - i * 1000));
+	});
+
+	test('continues a conversation as a new orfoni session in its folder that resumes it, titled after it, on the requested model, effort and mode', async () => {
+		conversations.set(PROJECT, [listed(NOTES, T0 - 60_000, { summary: 'Notes on the uplink' })]);
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const response = await continued(client, NOTES, { model: 'haiku', effort: 'low', permissionMode: 'plan' });
+		if (!response.ok) throw new Error(`continue failed: ${response.error.message}`);
+		const { session } = response.result as Started;
+		const settings = join(dir, 'settings', `${session.id}.json`);
+		expect(fake.of('newSession')).toEqual([
+			[`orfoni-${session.id}`, PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${NOTES}`, '--settings', settings, '--model', 'haiku', '--effort', 'low', '--permission-mode', 'plan', '--name', 'Notes on the uplink']],
+		]);
+		expect(response.result).toEqual({ session: expect.objectContaining({ id: session.id, projectDir: PROJECT, title: 'Notes on the uplink', claudeSessionId: NOTES, permissionMode: 'plan' }), needsTrust: true });
+		expect(other.session(session.id)).toMatchObject({ claudeSessionId: NOTES, title: 'Notes on the uplink' });
+		expect(await past(client)).toEqual([]);
+	});
+
+	test('like a new session, a conversation continued while the VPS is low on memory says so', async () => {
+		conversations.set(PROJECT, [listed(NOTES, T0)]);
+		writeMeminfo(GB);
+		const client = await startHub();
+		expect(await continued(client, NOTES)).toMatchObject({ ok: true, result: { memoryWarning: { availableBytes: GB } } });
+	});
+
+	test('continuing a conversation an orfoni session holds answers that session and starts nothing, so a repeated Continue opens what the first one started', async () => {
+		conversations.set(PROJECT, [listed(NOTES, T0)]);
+		const client = await startHub();
+		const first = (await client.ok('continueConversation', { projectDir: PROJECT, claudeSessionId: NOTES })) as Started;
+		expect(await continued(client, NOTES, { model: 'opus' })).toEqual({ type: 'response', id: 2, ok: true, result: { session: expect.objectContaining({ id: first.session.id, claudeSessionId: NOTES }), needsTrust: false } });
+		expect(fake.of('newSession')).toHaveLength(1);
+	});
+
+	test('a conversation that a Claude Code process outside orfoni runs now is refused with not_ready, which says to port it, and nothing starts or is signalled', async () => {
+		runOther(4321, { cwd: PROJECT });
+		conversations.set(PROJECT, [listed(OTHER, T0)]);
+		const client = await startHub();
+		expect(await continued(client, OTHER)).toMatchObject({ ok: false, error: { code: 'not_ready', message: expect.stringContaining('Port that session into orfoni') } });
+		expect(fake.of('newSession')).toEqual([]);
+		expect(kills).toEqual([]);
+	});
+
+	test('a conversation Claude Code does not keep in that folder is refused with not_found, and nothing starts', async () => {
+		conversations.set(OTHER_PROJECT, [listed(NOTES, T0)]);
+		const client = await startHub();
+		expect(await continued(client, NOTES)).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(fake.of('newSession')).toEqual([]);
+		expect(await client.ok('listSessions', {})).toEqual([]);
+	});
+
+	test('a second continue of a conversation that is still starting is refused with not_ready, and one orfoni session starts', async () => {
+		let asked = 0;
+		let answer: (listed: SDKSessionInfo[]) => void = () => {};
+		const client = await startHub(fakeTmux(), {
+			listConversations: () => {
+				asked++;
+				return new Promise((resolve) => (answer = resolve));
+			},
+		});
+		const first = continued(client, NOTES);
+		await untilRealTime(() => asked === 1);
+		expect(await continued(client, NOTES)).toMatchObject({ ok: false, error: { code: 'not_ready' } });
+		answer([listed(NOTES, T0)]);
+		expect(await first).toMatchObject({ ok: true, result: { session: { claudeSessionId: NOTES } } });
+		expect(fake.of('newSession')).toHaveLength(1);
+	});
+
+	test('a launch that fails leaves no session behind, and the conversation can be continued again', async () => {
+		conversations.set(PROJECT, [listed(NOTES, T0)]);
+		const tmux = fakeTmux();
+		const client = await startHub(tmux);
+		const { newSession } = tmux.tmux;
+		tmux.tmux.newSession = async () => {
+			throw new Error('tmux: no server');
+		};
+		expect(await continued(client, NOTES)).toMatchObject({ ok: false, error: { code: 'internal', message: 'tmux: no server' } });
+		expect(await client.ok('listSessions', {})).toEqual([]);
+		expect(await past(client)).toHaveLength(1);
+		tmux.tmux.newSession = newSession;
+		expect(await continued(client, NOTES)).toMatchObject({ ok: true });
 	});
 });
 
