@@ -24,6 +24,7 @@
 	import OtherSessionView from './lib/ui/OtherSessionView.svelte';
 	import PassphraseDialog from './lib/ui/PassphraseDialog.svelte';
 	import SessionHeader from './lib/ui/SessionHeader.svelte';
+	import TaskSheet from './lib/ui/TaskSheet.svelte';
 	import TaskSidebar from './lib/ui/TaskSidebar.svelte';
 	import SettingsView from './lib/ui/SettingsView.svelte';
 	import Sidebar from './lib/ui/Sidebar.svelte';
@@ -52,10 +53,19 @@
 	const title = $derived(windowTitle(client?.sessions.values() ?? []));
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
 	const narrow = new MediaQuery(NARROW);
-	// A narrow window shows one of them at a time.
-	const screen = $derived<'list' | 'conversation'>(session || client?.other ? 'conversation' : 'list');
+	const touch = new MediaQuery('(pointer: coarse)');
+	// The open conversation, which a narrow window shows in place of the session list.
+	const conversation = $derived(session?.id ?? (client?.other ? `outside ${client.other.session.pid}` : null));
+	const screen = $derived<'list' | 'conversation'>(conversation === null ? 'list' : 'conversation');
+	// What a narrow window shows in front of the conversation it was opened over, while there is something to show.
+	let front = $state<{ layer: 'tasks' | 'terminal'; over: string } | null>(null);
+	const overlay = $derived.by(() => {
+		if (!front || front.over !== conversation) return null;
+		if (front.layer === 'tasks') return session?.taskList?.length ? 'tasks' : null;
+		return terminals.length > 0 ? 'terminal' : null;
+	});
 	// What a narrow window stacks over the session list. Each has an entry in the history, so Android's back gesture closes the front one and leaves the app at the list.
-	const depth = $derived(narrow.current && screen === 'conversation' ? 1 : 0);
+	const depth = $derived(!narrow.current || screen === 'list' ? 0 : overlay ? 2 : 1);
 	// The entries this page pushed. A reload stays on the entry it was on, so the count starts from there.
 	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
 
@@ -123,8 +133,13 @@
 		const at = (event.state as { layers?: number } | null)?.layers ?? 0;
 		if (at === pushed) return;
 		pushed = at;
+		if (at < 2) front = null;
 		if (at < 1) void client?.select(null);
 		syncHistory();
+	}
+
+	function bringToFront(layer: 'tasks' | 'terminal'): void {
+		if (conversation) front = { layer, over: conversation };
 	}
 
 	function started({ session: created, needsTrust, memoryWarning }: Result<'startSession'>): void {
@@ -136,6 +151,7 @@
 	function openTerminal(target: string, label: string): void {
 		if (!terminals.some((t) => t.target === target)) terminals = [...terminals, { target, label }];
 		shownTerminal = target;
+		bringToFront('terminal');
 		panels[target]?.focus();
 	}
 
@@ -169,7 +185,7 @@
 				{#key session.id}
 					<div class="session">
 						<div class="conversation">
-							<SessionHeader {client} {session} narrow={narrow.current} onback={() => void client?.select(null)} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<SessionHeader {client} {session} narrow={narrow.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
 							<ChatView
 								{client}
 								chat={client.chats.get(session.id)}
@@ -196,9 +212,13 @@
 									{/if}
 								{/snippet}
 							</ChatView>
-							<Composer bind:this={composer} {client} sessionId={session.id} />
+							<Composer bind:this={composer} {client} sessionId={session.id} touch={touch.current} />
 						</div>
-						{#if session.taskList?.length}<TaskSidebar tasks={session.taskList} />{/if}
+						{#if session.taskList?.length && narrow.current}
+							<TaskSheet tasks={session.taskList} open={overlay === 'tasks'} onclose={() => (front = null)} />
+						{:else if session.taskList?.length}
+							<TaskSidebar tasks={session.taskList} />
+						{/if}
 					</div>
 				{/key}
 			{:else if client.other}
@@ -213,7 +233,13 @@
 			{/if}
 		</main>
 		{#if terminals.length > 0 && terminalTransport}
-			<aside class="terminals" aria-label="Terminals">
+			<!-- A narrow window shows the terminals over the conversation, and hides them without closing them. -->
+			<aside class="terminals" aria-label="Terminals" hidden={narrow.current && overlay !== 'terminal'}>
+				{#if narrow.current}
+					<button class="btn-icon back" aria-label="Back to the conversation" onclick={() => (front = null)}>
+						<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+					</button>
+				{/if}
 				<div class="tabs" role="tablist" aria-label="Open terminals">
 					{#each terminals as terminal (terminal.target)}
 						<div class="tab" class:shown={shownTerminal === terminal.target}>
@@ -225,7 +251,7 @@
 							</button>
 						</div>
 					{/each}
-					<span class="hint">F6 switches between the terminal and the message box</span>
+					{#if !narrow.current}<span class="hint">F6 switches between the terminal and the message box</span>{/if}
 				</div>
 				{#each terminals as terminal (terminal.target)}
 					<div class="panel" role="tabpanel" hidden={shownTerminal !== terminal.target}>
@@ -234,8 +260,8 @@
 				{/each}
 			</aside>
 		{/if}
+		<NewSessionDialog {client} bind:open={creating} onstarted={started} />
 	</div>
-	<NewSessionDialog {client} bind:open={creating} onstarted={started} />
 {:else}
 	<div class="boot">
 		<h1>orfoni</h1>
@@ -434,7 +460,46 @@
 		min-height: 0;
 	}
 
-	.panel[hidden] {
+	.narrow .terminals {
+		position: fixed;
+		inset: 0;
+		z-index: 20;
+		display: grid;
+		grid-template: auto minmax(0, 1fr) / auto minmax(0, 1fr);
+		border-left: 0;
+	}
+
+	.narrow .back {
+		height: auto;
+		min-height: 2.75rem;
+		border-radius: 0;
+		background: #262523;
+		color: #b9b5aa;
+	}
+
+	.narrow .tabs {
+		padding-left: 0;
+	}
+
+	.narrow .tab {
+		max-width: none;
+	}
+
+	.narrow [role='tab'] {
+		padding-block: 0.65rem;
+	}
+
+	.narrow .close {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	.narrow .panel {
+		grid-column: 1 / -1;
+	}
+
+	.panel[hidden],
+	.terminals[hidden] {
 		display: none;
 	}
 </style>

@@ -458,3 +458,88 @@ test('on a wide screen, an open session has no back control and no history entry
 	// Widening keeps the conversation open, beside the list again.
 	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
 });
+
+const ranging = summary('w1', 'idle', {
+	title: 'Range the pairs',
+	tasks: { done: 1, total: 2 },
+	taskList: [
+		{ id: '1', subject: 'Get the laptop tunnel up', status: 'completed', activeForm: null },
+		{ id: '2', subject: 'Test 1: two pairs ranging at once', status: 'in_progress', activeForm: 'Running the two-pair test' },
+	],
+});
+
+test('on a narrow screen, the task list opens over the conversation from the header instead of beside it, and back closes it and keeps the conversation', async () => {
+	stubMedia(narrowWindow);
+	withSessions([ranging]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Range the pairs/ }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Range the pairs' })).toBeTruthy();
+	expect(screen.queryByRole('complementary', { name: 'Task list' })).toBeNull();
+	expect(screen.queryByRole('dialog', { name: /^Tasks/ })).toBeNull();
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Show the task list, 1 of 2 done' }));
+	const sheet = screen.getByRole('dialog', { name: 'Tasks 1 of 2 done' });
+	expect(within(sheet).getAllByRole('listitem').map(spoken)).toEqual(['Done: Get the laptop tunnel up', 'In progress: Test 1: two pairs ranging at once']);
+	await waitFor(() => expect(layers()).toBe(2));
+
+	history.back();
+	await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Tasks/ })).toBeNull());
+	expect(screen.getByRole('heading', { level: 1, name: 'Range the pairs' })).toBeTruthy();
+	expect(layers()).toBe(1);
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Show the task list, 1 of 2 done' }));
+	await waitFor(() => expect(layers()).toBe(2));
+	await fireEvent.click(screen.getByRole('button', { name: 'Close the task list' }));
+	expect(screen.queryByRole('dialog', { name: /^Tasks/ })).toBeNull();
+	await waitFor(() => expect(layers()).toBe(1));
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to the sessions' }));
+	await waitFor(() => expect(layers()).toBe(0));
+});
+
+test('on a narrow screen, a terminal opens over the conversation with a history entry, and back hides it without closing it', async () => {
+	stubMedia(narrowWindow);
+	vi.stubGlobal(
+		'ResizeObserver',
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	await fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+	const terminals = screen.getByRole('complementary', { name: 'Terminals' });
+	expect(within(terminals).getByRole('tab', { name: 'Fix the login page' })).toBeTruthy();
+	await waitFor(() => expect(layers()).toBe(2));
+
+	history.back();
+	await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Terminals' })).toBeNull());
+	expect(layers()).toBe(1);
+	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+	expect(within(screen.getByRole('complementary', { name: 'Terminals' })).getAllByRole('tab')).toHaveLength(1);
+	await waitFor(() => expect(layers()).toBe(2));
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to the conversation' }));
+	expect(screen.queryByRole('complementary', { name: 'Terminals' })).toBeNull();
+	await waitFor(() => expect(layers()).toBe(1));
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to the sessions' }));
+	await waitFor(() => expect(layers()).toBe(0));
+});
+
+test('on a narrow screen, a session removed while its task list is open takes both history entries along', async () => {
+	stubMedia(narrowWindow);
+	const { hub } = withSessions([ranging]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Range the pairs/ }));
+	await fireEvent.click(await screen.findByRole('button', { name: 'Show the task list, 1 of 2 done' }));
+	await waitFor(() => expect(layers()).toBe(2));
+
+	hub.line({ type: 'sessionRemoved', sessionId: 'w1' });
+	await waitFor(() => expect(layers()).toBe(0));
+	expect(screen.queryByRole('dialog', { name: /^Tasks/ })).toBeNull();
+	expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+});

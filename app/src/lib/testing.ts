@@ -64,7 +64,14 @@ export function stubMedia(matches: (query: string) => boolean = () => false): (n
 	let current = matches;
 	const lists: EventTarget[] = [];
 	window.matchMedia = (media: string) => {
-		const list = Object.defineProperties(new EventTarget(), { media: { value: media }, matches: { get: () => current(media) } }) as MediaQueryList;
+		const list = new EventTarget() as MediaQueryList;
+		// xterm listens the old way.
+		Object.defineProperties(list, {
+			media: { value: media },
+			matches: { get: () => current(media) },
+			addListener: { value: (listener: EventListener) => list.addEventListener('change', listener) },
+			removeListener: { value: (listener: EventListener) => list.removeEventListener('change', listener) },
+		});
 		lists.push(list);
 		return list;
 	};
