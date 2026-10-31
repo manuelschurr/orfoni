@@ -9,7 +9,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
-import android.webkit.WebView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
@@ -47,19 +46,6 @@ class BackgroundPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve()
   }
 
-  // The session of the notice tapped since Rust last asked, from the tap that started orfoni or one that brought it back.
-  private var opened: String? = null
-
-  // The activity keeps the intent that started it, and Android hands it back when orfoni is reopened from the recent apps, so the session is taken off it once read.
-  override fun load(webView: WebView) {
-    opened = activity.intent?.getStringExtra(SESSION)
-    activity.intent?.removeExtra(SESSION)
-  }
-
-  override fun onNewIntent(intent: Intent) {
-    intent.getStringExtra(SESSION)?.let { opened = it }
-  }
-
   // The notification plugin loses what a notification carries once it is tapped, so orfoni shows the hub's notices itself. One per session, so a newer notice replaces an older one, and a tap opens orfoni on that session.
   @Command
   fun notify(invoke: Invoke) {
@@ -90,5 +76,16 @@ class BackgroundPlugin(private val activity: Activity) : Plugin(activity) {
   companion object {
     const val NOTICES = "notices"
     const val SESSION = "orfoniSession"
+
+    // The session of the notice tapped since Rust last asked. MainActivity sets it, since a tap after Android ended orfoni restores the activity and hands it the tap before this plugin is loaded.
+    @Volatile
+    var opened: String? = null
+
+    fun take(intent: Intent?) {
+      val session = intent?.getStringExtra(SESSION) ?: return
+      opened = session
+      // An activity keeps the intent that started it, and Android hands it back when orfoni is reopened from the recent apps.
+      intent.removeExtra(SESSION)
+    }
   }
 }

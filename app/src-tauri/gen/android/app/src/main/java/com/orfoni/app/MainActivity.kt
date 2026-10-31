@@ -1,5 +1,6 @@
 package com.orfoni.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import androidx.activity.enableEdgeToEdge
@@ -16,5 +17,11 @@ class MainActivity : TauriActivity() {
       view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
       WindowInsetsCompat.CONSUMED
     }
+    BackgroundPlugin.take(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    BackgroundPlugin.take(intent)
+    super.onNewIntent(intent)
   }
 }
