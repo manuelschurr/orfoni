@@ -120,7 +120,7 @@ test('terminal output that arrives before onData is attached is not lost', async
 	expect(seen).toEqual(['repaint ', 'prompt']);
 });
 
-test('terminal writes reach Rust in order, and writes made while one is in flight go out together', async () => {
+test('terminal writes reach Rust in order as plain JSON, which Android\'s IPC carries too, and writes made while one is in flight go out together', async () => {
 	const pending: (() => void)[] = [];
 	answer = (cmd) => {
 		if (cmd === 'terminal_open') return 3;
@@ -137,8 +137,7 @@ test('terminal writes reach Rust in order, and writes made while one is in fligh
 	pending.shift()!();
 	await new Promise((resolve) => setTimeout(resolve, 0));
 
-	expect(writes().map((call) => text(call.args as Uint8Array))).toEqual(['l', 's\r']);
-	expect(writes().map((call) => call.headers)).toEqual([{ 'terminal-id': '3' }, { 'terminal-id': '3' }]);
+	expect(writes().map((call) => call.args)).toEqual([{ id: 3, data: [...bytes('l')] }, { id: 3, data: [...bytes('s\r')] }]);
 });
 
 test('resize and close name the terminal, and the end of output reports an exit', async () => {

@@ -118,7 +118,8 @@ class TauriTerminalStream implements TerminalStream {
 		while (this.#unsent.length > 0) {
 			const data = concat(this.#unsent.splice(0));
 			try {
-				await invoke('terminal_write', data, { headers: { 'terminal-id': String(this.id) } });
+				// As a plain array, since Android's IPC carries JSON only and refuses a raw body.
+				await invoke('terminal_write', { id: this.id, data: Array.from(data) });
 			} catch (error) {
 				console.warn('terminal_write', error);
 			}

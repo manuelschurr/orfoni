@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
-use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
+use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::background;
 use crate::keys::{self, KeyInfo};
@@ -223,19 +223,10 @@ pub async fn terminal_open(
 }
 
 #[tauri::command]
-pub fn terminal_write(state: State<'_, AppState>, request: Request<'_>) -> Result<(), String> {
-    let InvokeBody::Raw(data) = request.body() else {
-        return Err("terminal_write takes raw bytes".into());
-    };
-    let id: u32 = request
-        .headers()
-        .get("terminal-id")
-        .and_then(|value| value.to_str().ok()?.parse().ok())
-        .ok_or_else(|| "terminal_write needs a terminal-id header".to_string())?;
+pub fn terminal_write(state: State<'_, AppState>, id: u32, data: Vec<u8>) {
     if let Some(terminal) = state.terminal(id) {
-        terminal.write(data.clone());
+        terminal.write(data);
     }
-    Ok(())
 }
 
 #[tauri::command]
