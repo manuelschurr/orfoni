@@ -1,11 +1,10 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::AppState;
 
 /// What the hub says a person following a session would want to hear about, shown by the app itself, so it still shows while Android keeps the page paused in the background.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Notice {
     pub session_id: String,
@@ -36,15 +35,21 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, notice: Notice) {
     if app.state::<AppState>().focused() {
         return;
     }
-    if let Err(error) = app
-        .notification()
-        .builder()
-        .title(&notice.title)
-        .body(&notice.body)
-        .extra("sessionId", &notice.session_id)
-        .show()
+    #[cfg(target_os = "android")]
+    crate::background::notify(app, &notice);
+    #[cfg(not(target_os = "android"))]
     {
-        log::warn!("showing a notification failed: {error}");
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(error) = app
+            .notification()
+            .builder()
+            .title(&notice.title)
+            .body(&notice.body)
+            .extra("sessionId", &notice.session_id)
+            .show()
+        {
+            log::warn!("showing a notification failed: {error}");
+        }
     }
     #[cfg(desktop)]
     if notice.urgent() {

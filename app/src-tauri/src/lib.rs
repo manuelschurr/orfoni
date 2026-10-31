@@ -9,7 +9,7 @@ pub mod settings;
 pub mod ssh;
 pub mod terminal;
 
-use tauri::{Manager, Url};
+use tauri::{Emitter, Manager, Url};
 
 fn stays_in_app(url: &Url, dev_url: Option<&Url>) -> bool {
     match (url.scheme(), url.host_str()) {
@@ -43,6 +43,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(focused) = event {
                 window.state::<commands::AppState>().set_focused(*focused);
+                // A tap on a notice on the phone brings orfoni to the front, and the page opens the session it names.
+                if *focused && let Some(session) = background::opened(window.app_handle()) {
+                    let _ = window.app_handle().emit("notice-opened", session);
+                }
             }
         })
         .setup(|app| {
@@ -72,6 +76,7 @@ pub fn run() {
             commands::key_info,
             commands::key_create,
             commands::key_import,
+            commands::opened_notice,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

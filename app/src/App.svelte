@@ -74,6 +74,15 @@
 	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
 
 	let version = $state<string | null>(null);
+	// The session a clicked notice names. A tap on the phone that started orfoni names it before the hub has listed the sessions.
+	let opening = $state<SessionId | null>(null);
+
+	$effect(() => {
+		const id = opening;
+		if (!client || id === null || !client.sessions.has(id)) return;
+		opening = null;
+		if (client.selected !== id) void client.select(id).catch(() => {});
+	});
 
 	onMount(() => {
 		if (isTauri()) getVersion().then((installed) => (version = installed), () => {});
@@ -92,9 +101,7 @@
 			const link = transports.hub;
 			setup = new Setup({ loadSettings, saveSettings, connect: (passphrase) => link.connect(passphrase), trustHost: (fingerprint) => link.trustHost(fingerprint) });
 			void setup.start();
-			stopListening = onNoticeClick((id) => {
-				if (hub.sessions.has(id) && hub.selected !== id) void hub.select(id).catch(() => {});
-			});
+			stopListening = onNoticeClick((id) => (opening = id));
 			stopListening.catch((error: unknown) => console.warn('notification clicks', error));
 			askToNotify().catch((error: unknown) => console.warn('notification permission', error));
 		}

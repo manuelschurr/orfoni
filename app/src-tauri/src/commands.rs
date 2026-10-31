@@ -229,6 +229,12 @@ pub fn terminal_write(state: State<'_, AppState>, id: u32, data: Vec<u8>) {
     }
 }
 
+/// The session of a notice tapped on the phone, when that tap started orfoni before the page was listening.
+#[tauri::command]
+pub fn opened_notice(app: AppHandle) -> Option<String> {
+    background::opened(&app)
+}
+
 #[tauri::command]
 pub fn terminal_resize(state: State<'_, AppState>, id: u32, cols: u32, rows: u32) {
     if let Some(terminal) = state.terminal(id) {

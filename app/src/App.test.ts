@@ -208,6 +208,48 @@ test('in Tauri, the page shows no notification of its own, and a click on one th
 	await waitFor(() => expect(commands).toEqual(expect.arrayContaining(['plugin:window|unminimize', 'plugin:window|set_focus'])));
 });
 
+// On Android orfoni shows the notices itself, since the notification plugin loses what a tapped notification carries, and Rust names the session of a tapped one.
+test('in Tauri, a tapped phone notice opens its session, also when the tap started the app before the hub had listed the sessions', async () => {
+	notifications();
+	const sessions = [summary('a1', 'needs_approval', { title: 'Fix the login page' }), summary('a2', 'needs_approval', { title: 'Upgrade vite' })];
+	let hubLine: (message: unknown) => void = () => {};
+	let list: (() => void) | null = null;
+	const listeners = new Map<string, number>();
+	inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'opened_notice':
+				return 'a2';
+			case 'plugin:event|listen':
+				listeners.set(args.event as string, args.handler as number);
+				return 1;
+			case 'connect':
+				hubLine = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string };
+				if (request.method === 'listSessions') list = () => hubLine({ type: 'response', id: request.id, ok: true, result: sessions });
+				if (request.method === 'listOtherSessions') hubLine({ type: 'response', id: request.id, ok: true, result: [] });
+				const opened = sessions.find((session) => session.id === request.sessionId);
+				if (request.method === 'openSession' && opened) hubLine({ type: 'response', id: request.id, ok: true, result: { session: opened, chat: [] } });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	render(App);
+	await waitFor(() => expect(list).not.toBeNull());
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	list!();
+	expect(await screen.findByRole('heading', { level: 1, name: 'Upgrade vite' })).toBeTruthy();
+
+	globals.__TAURI_INTERNALS__.runCallback(listeners.get('notice-opened')!, { event: 'notice-opened', id: 1, payload: 'a1' });
+	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+});
+
 // Android 13 and later show an app's notifications only after asking the person once.
 test('in Tauri, the app asks for leave to notify when it does not have it, and not when it does', async () => {
 	const asked: string[] = [];
