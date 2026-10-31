@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { MAX_PAST_CONVERSATIONS, type Effort, type PastConversation, type PermissionMode } from '@orfoni/protocol';
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import type { HubClient, HubRequestError, Result } from '../hub-client.svelte';
 	import { ago, conversationPrompt, conversationTitle, folderName, relativeTime, searchConversations, type ModelAlias } from './format';
 	import ModelEffortFields from './ModelEffortFields.svelte';
@@ -36,8 +36,13 @@
 			dialog.showModal();
 			// A phone's keyboard would cover the list, so the search waits for a tap.
 			if (window.matchMedia?.('(pointer: coarse)').matches) (document.activeElement as HTMLElement | null)?.blur();
-			void load(folder);
 		} else if (folder === null && dialog.open) dialog.close();
+	});
+
+	// The list comes once the hub is reachable, as at the start or after a dropped connection, and comes again with each reconnect.
+	$effect(() => {
+		const dir = folder;
+		if (dir !== null && client.status.kind === 'connected') untrack(() => void load(dir));
 	});
 
 	async function load(dir: string): Promise<void> {
@@ -118,6 +123,8 @@
 						<p class="error" role="alert">{loadError}</p>
 						<button type="button" class="btn" onclick={() => folder !== null && void load(folder)}>Try again</button>
 					</div>
+				{:else if conversations === null && client.status.kind !== 'connected'}
+					<p class="status">Waiting for the connection to the hub</p>
 				{:else if conversations === null}
 					<p class="status">Loading the conversations Claude Code keeps for this folder</p>
 				{:else if conversations.length === 0}

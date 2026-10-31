@@ -129,3 +129,16 @@ test('a listing that fails says why and lists again on Try again', async () => {
 	await tick();
 	await vi.waitFor(() => expect(titles(dialog)).toEqual(['ranging back to 1280']));
 });
+
+test('opened while the hub is out of reach, the dialog waits for the connection and lists once it is back', async () => {
+	const { client, transport } = await connectedClient([]);
+	transport.status({ kind: 'reconnecting', attempt: 1, error: 'connection reset' });
+	render(EarlierConversationsDialog, { client, folder: FOLDER, onstarted: vi.fn() });
+	const dialog = screen.getByRole('dialog', { name: 'Earlier conversations in swarm' });
+	expect(within(dialog).getByText('Waiting for the connection to the hub')).toBeTruthy();
+	expect(within(dialog).queryByRole('alert')).toBeNull();
+	transport.status({ kind: 'connected' });
+	await vi.waitFor(() => expect(transport.requests('listPastConversations')).toMatchObject([{ projectDir: FOLDER }]));
+	transport.respond('listPastConversations', { conversations: [radio] });
+	await vi.waitFor(() => expect(titles(dialog)).toEqual(['ranging back to 1280']));
+});
