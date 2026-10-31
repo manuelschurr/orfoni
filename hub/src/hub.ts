@@ -32,6 +32,7 @@ import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history
 import { paneMemory, systemMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
+import { noticesOf, titleOf } from './session/notices.js';
 import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
@@ -1011,6 +1012,7 @@ export class Hub {
 		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
 		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item });
+		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.chat), body });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);
 		void this.tellName(session);

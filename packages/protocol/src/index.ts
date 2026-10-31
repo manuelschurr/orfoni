@@ -205,6 +205,9 @@ export const ErrorCode = z.enum([
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
+export const NoticeKind = z.enum(['approval', 'question', 'answered', 'failed', 'push']);
+export type NoticeKind = z.infer<typeof NoticeKind>;
+
 export const HubMessage = z.union([
 	z.object({ type: z.literal('response'), id, ok: z.literal(true), result: z.unknown() }),
 	z.object({ type: z.literal('response'), id, ok: z.literal(false), error: z.object({ code: ErrorCode, message: z.string() }) }),
@@ -212,6 +215,8 @@ export const HubMessage = z.union([
 	z.object({ type: z.literal('chatItem'), sessionId: SessionId, item: ChatItem }),
 	z.object({ type: z.literal('sessionRemoved'), sessionId: SessionId }),
 	z.object({ type: z.literal('otherSessions'), sessions: z.array(OtherSession) }),
+	// Something a person following the session would want to hear about, which each client shows when its window is not in front.
+	z.object({ type: z.literal('notice'), sessionId: SessionId, kind: NoticeKind, title: z.string(), body: z.string() }),
 ]);
 export type HubMessage = z.infer<typeof HubMessage>;
 

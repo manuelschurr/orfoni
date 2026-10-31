@@ -401,6 +401,44 @@ describe('startSession', () => {
 	});
 });
 
+describe('notices', () => {
+	const notices = (client: TestClient) => client.messages.flatMap((message) => (message.type === 'notice' ? [message] : []));
+
+	test('every client hears when a session comes to need an approval or an answer, has answered a turn you started, or failed, by its title and folder', async () => {
+		const client = await startHub();
+		const other = new TestClient(hub);
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'Fix the login page\nand the logout' }));
+		void hub.hook(id, body('PermissionRequest', claude));
+		const approval = client.chat(id).at(-1);
+		if (approval?.kind !== 'approval') throw new Error('expected an approval');
+		await client.ok('decide', { requestId: approval.requestId, decision: { type: 'allow' } });
+		await hub.hook(id, body('Stop', claude));
+		void hub.hook(id, body('PermissionRequest-AskUserQuestion', claude));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'try again' }));
+		await hub.hook(id, body('StopFailure-docs-example', claude));
+		expect(notices(client).map(({ kind, title, body: text }) => [kind, title, text])).toEqual([
+			['approval', 'Fix the login page', 'Claude needs your approval in proj'],
+			['answered', 'Fix the login page', 'Claude has answered in proj'],
+			['question', 'Fix the login page', 'Claude is waiting for your answer in proj'],
+			['failed', 'Fix the login page', 'Claude stopped with an error in proj'],
+		]);
+		expect(notices(other)).toEqual(notices(client));
+		expect(notices(client)[0]).toEqual({ type: 'notice', sessionId: id, kind: 'approval', title: 'Fix the login page', body: 'Claude needs your approval in proj' });
+	});
+
+	// Claude Code's own signal that you should hear about something is its PushNotification tool, so the end of a turn a background task started is not news by itself.
+	test('a turn a background task started ends without a notice, and what Claude pushes is one', async () => {
+		const client = await startHub();
+		const { id, claude } = await start(client, { title: 'Flash the boards' });
+		await hub.hook(id, body('SessionStart', claude));
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '<task-notification>\n<summary>Monitor event: "flash"</summary>\n<event>node3 ok</event>\n</task-notification>' }));
+		await hub.hook(id, body('PreToolUse', claude, { tool_name: 'PushNotification', tool_input: { message: 'Node 5 failed to flash.', status: 'proactive' }, tool_use_id: 'toolu_push' }));
+		await hub.hook(id, body('Stop', claude));
+		expect(notices(client).map(({ kind, title, body: text }) => [kind, title, text])).toEqual([['push', 'Flash the boards', 'Node 5 failed to flash.']]);
+	});
+});
+
 describe('send', () => {
 	test('pastes 2 s after SessionStart and resolves once the prompt hook confirms the text', async () => {
 		const client = await startHub();

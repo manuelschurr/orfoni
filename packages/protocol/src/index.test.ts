@@ -112,6 +112,12 @@ test('a tool item without its input round-trips', () => {
 	expect(parseHubMessage(JSON.stringify(message))).toEqual({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'Bash', status: 'done', output: { stdout: 'ok' } } });
 });
 
+test('a notice tells a client what to show about a session, and only kinds the app knows', () => {
+	const notice = { type: 'notice', sessionId: 's', kind: 'approval', title: 'Fix the login page', body: 'Claude needs your approval in proj' };
+	expect(parseHubMessage(JSON.stringify(notice))).toEqual(notice);
+	expect(() => parseHubMessage(JSON.stringify({ ...notice, kind: 'party' }))).toThrow();
+});
+
 describe('milestone 3 fields', () => {
 	const base = { id: 's', projectDir: '/p', title: null, claudeSessionId: null, state: 'idle', stateSince: 1 };
 
