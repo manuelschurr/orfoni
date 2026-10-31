@@ -152,6 +152,16 @@ textarea {
 	border-color: transparent;
 }
 
+/* A narrow window is mostly a phone, where a finger needs a target this large. */
+.narrow .btn,
+.narrow .field {
+	min-height: 2.5rem;
+}
+
+.narrow .dialog {
+	padding: 1.2rem 1rem 1rem;
+}
+
 /* A button that shows only an icon, as large as a finger needs. */
 .btn-icon {
 	display: grid;
@@ -410,6 +420,14 @@ textarea {
 	border-collapse: collapse;
 	font-family: var(--font-ui);
 	font-size: 0.9em;
+}
+
+/* A table too wide for a narrow window scrolls on its own, and its words stay whole. */
+.narrow .markdown table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	overflow-wrap: normal;
 }
 
 .markdown th,

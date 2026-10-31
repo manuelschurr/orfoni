@@ -120,4 +120,9 @@
 		margin: 0;
 		font-weight: 600;
 	}
+
+	:global(.narrow) .choice {
+		align-items: center;
+		min-height: 2.5rem;
+	}
 </style>

@@ -155,4 +155,13 @@
 	details.notice summary {
 		cursor: pointer;
 	}
+
+	:global(.narrow) .column {
+		padding: 1rem 0.75rem 1.25rem;
+	}
+
+	:global(.narrow) details.notice summary {
+		margin-block: -0.6rem;
+		padding-block: 0.6rem;
+	}
 </style>

@@ -102,4 +102,10 @@
 		gap: 0.4rem;
 		margin-top: 0.35rem;
 	}
+
+	/* A finger gets a taller line than the eye sees, so the run of lines keeps its spacing. */
+	:global(.narrow) .line {
+		min-height: 2.5rem;
+		margin-block: -0.5rem;
+	}
 </style>

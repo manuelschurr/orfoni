@@ -111,4 +111,8 @@
 		color: var(--danger);
 		font-weight: 600;
 	}
+
+	:global(.narrow) .row {
+		padding-block: 0.6rem;
+	}
 </style>

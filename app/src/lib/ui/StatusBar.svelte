@@ -184,4 +184,10 @@
 		margin: 0.35rem 0 0;
 		color: var(--danger);
 	}
+
+	:global(.narrow) .settings {
+		width: 2.5rem;
+		height: 2.5rem;
+		margin: -0.6rem -0.7rem -0.6rem 0;
+	}
 </style>

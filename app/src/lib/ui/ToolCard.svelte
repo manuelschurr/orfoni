@@ -120,4 +120,8 @@
 			transform: rotate(360deg);
 		}
 	}
+
+	:global(.narrow) .head {
+		min-height: 2.5rem;
+	}
 </style>

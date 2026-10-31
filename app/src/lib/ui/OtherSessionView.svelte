@@ -96,7 +96,7 @@
 		onretry={() => void client.openOther(session.pid).catch(() => {})}
 	/>
 	{#if !ended}
-		<div class="readonly">
+		<div class="readonly" class:narrow>
 			<p>This session runs outside orfoni, so orfoni can only show it. Port it into orfoni to send messages here.</p>
 		</div>
 	{/if}
@@ -225,5 +225,25 @@
 	.dialog p {
 		margin: 0;
 		font-size: 0.9375rem;
+	}
+
+	.header.narrow {
+		align-items: flex-start;
+		gap: 0.25rem 0.5rem;
+		padding: 0.35rem 0.75rem 0.6rem 0.25rem;
+	}
+
+	.narrow .heading {
+		flex: 1 1 0;
+		padding-top: 0.2rem;
+	}
+
+	.narrow .actions {
+		flex-basis: 100%;
+		padding-left: 2.75rem;
+	}
+
+	.readonly.narrow {
+		padding: 0 0.5rem 0.5rem;
 	}
 </style>

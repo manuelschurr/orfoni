@@ -28,4 +28,8 @@
 		grid-template-columns: 1fr 1fr;
 		gap: 0.8rem;
 	}
+
+	:global(.narrow) .pair {
+		grid-template-columns: minmax(0, 1fr);
+	}
 </style>

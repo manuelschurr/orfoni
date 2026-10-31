@@ -70,4 +70,8 @@
 	.time {
 		font-variant-numeric: tabular-nums;
 	}
+
+	:global(.narrow) .row {
+		min-height: 2.5rem;
+	}
 </style>

@@ -64,4 +64,8 @@
 		background: var(--accent);
 		animation: pulse 1s ease-in-out infinite;
 	}
+
+	:global(.narrow) .assistant .bubble {
+		padding: 0.75rem 0.9rem;
+	}
 </style>
