@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import type { SlashCommand as ClaudeCommand, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SlashCommand as ClaudeCommand, SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
 	ClaudeSessionId,
 	Effort,
+	MAX_PAST_CONVERSATIONS,
 	PermissionMode,
 	SessionId,
 	type ChatItem,
@@ -16,6 +17,7 @@ import {
 	type ImageType,
 	type MessageImage,
 	type OtherSession,
+	type PastConversation,
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
@@ -93,6 +95,8 @@ export interface HubOptions {
 	kill(pid: number, signal: NodeJS.Signals): void;
 	// commands settles once Claude Code has listed them, and ended once every process the listing started has ended.
 	listCommands(projectDir: string, signal: AbortSignal): { commands: Promise<ClaudeCommand[]>; ended: Promise<void> };
+	// The conversations in Claude Code's history of a folder, as claude --resume offers them there.
+	listConversations(projectDir: string): Promise<SDKSessionInfo[]>;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -272,6 +276,17 @@ function usable(listed: ClaudeCommand[]): SlashCommand[] {
 	return [...byName.values()].map(({ name, description, argumentHint, aliases = [] }) => ({ name, description, argumentHint, aliases }));
 }
 
+// A conversation that a session holds is reached through that session, so the list leaves it out.
+function pastConversations(listed: SDKSessionInfo[], held: Set<string>): PastConversation[] {
+	return listed
+		.flatMap(({ sessionId, summary, firstPrompt, lastModified }) => {
+			const id = ClaudeSessionId.safeParse(sessionId);
+			return id.success && !held.has(id.data) ? [{ claudeSessionId: id.data, title: summary, firstPrompt: firstPrompt ?? null, lastModified }] : [];
+		})
+		.sort((a, b) => b.lastModified - a.lastModified)
+		.slice(0, MAX_PAST_CONVERSATIONS);
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -289,7 +304,8 @@ export class Hub {
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
-	private readonly porting = new Set<ClaudeSessionId>();
+	// The conversations a port or a continue is starting an orfoni session on right now.
+	private readonly claiming = new Set<ClaudeSessionId>();
 	private readonly summarizer: Summarizer;
 	private readonly reported = new Set<string>();
 	private readonly commandLists = new Map<string, { since: number; commands: Promise<SlashCommand[]> }>();
@@ -469,6 +485,10 @@ export class Hub {
 				return this.openOther(request.pid);
 			case 'portSession':
 				return this.port(request);
+			case 'listPastConversations':
+				return { conversations: await this.pastConversations(resolve(request.projectDir)) };
+			case 'continueConversation':
+				return this.continueConversation(request);
 		}
 	}
 
@@ -530,8 +550,7 @@ export class Hub {
 
 	private async port(request: Extract<ClientRequest, { method: 'portSession' }>): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const { pid, claudeSessionId } = request;
-		if (this.porting.has(claudeSessionId)) throw new HubError('not_ready', `conversation ${claudeSessionId} is being ported already`);
-		this.porting.add(claudeSessionId);
+		this.claim(claudeSessionId);
 		try {
 			const others = await this.refreshOthers();
 			const other = others.find(({ session }) => session.pid === pid);
@@ -556,7 +575,37 @@ export class Hub {
 			await this.refreshOthers();
 			return ported;
 		} finally {
-			this.porting.delete(claudeSessionId);
+			this.claiming.delete(claudeSessionId);
+		}
+	}
+
+	private claim(claudeSessionId: ClaudeSessionId): void {
+		if (this.claiming.has(claudeSessionId)) throw new HubError('not_ready', `orfoni is starting a session on conversation ${claudeSessionId} already`);
+		this.claiming.add(claudeSessionId);
+	}
+
+	private async pastConversations(projectDir: string): Promise<PastConversation[]> {
+		const others = await this.refreshOthers();
+		const held = new Set<string>([...this.claiming, ...[...this.sessions.values()].map(({ model }) => model.claudeSessionId), ...others.map(({ session }) => session.claudeSessionId)]);
+		return pastConversations(await this.options.listConversations(projectDir), held);
+	}
+
+	// The new session resumes the conversation under its own ID, so it goes on where it ended, in orfoni and in claude --resume alike.
+	private async continueConversation(request: Extract<ClientRequest, { method: 'continueConversation' }>): Promise<{ session: SessionSummary; needsTrust: boolean; memoryWarning?: HubStatus['memory'] }> {
+		const { claudeSessionId } = request;
+		const projectDir = resolve(request.projectDir);
+		// A second Continue, as after a lost answer, opens the session the first one started.
+		const holder = [...this.sessions.values()].find(({ model }) => model.claudeSessionId === claudeSessionId);
+		if (holder) return { session: summary(holder), needsTrust: false };
+		this.claim(claudeSessionId);
+		try {
+			const other = (await this.refreshOthers()).find(({ session }) => session.claudeSessionId === claudeSessionId);
+			if (other) throw new HubError('not_ready', `Claude Code runs this conversation outside orfoni right now, as process ${other.session.pid}. Port that session into orfoni instead.`);
+			const listed = (await this.options.listConversations(projectDir)).find(({ sessionId }) => sessionId === claudeSessionId);
+			if (!listed) throw new HubError('not_found', `Claude Code has no conversation ${claudeSessionId} in ${projectDir}`);
+			return this.withMemoryWarning(await this.newSession(projectDir, listed.summary || null, claudeSessionId, [`--resume=${claudeSessionId}`], request));
+		} finally {
+			this.claiming.delete(claudeSessionId);
 		}
 	}
 

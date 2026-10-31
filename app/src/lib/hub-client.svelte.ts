@@ -3,6 +3,7 @@ import {
 	HubStatus,
 	ChatItem,
 	OtherSession,
+	PastConversation,
 	PermissionMode,
 	ProjectDir,
 	SlashCommand,
@@ -44,6 +45,8 @@ const results = {
 	listOtherSessions: z.array(OtherSession),
 	openOtherSession: z.object({ session: OtherSession, chat: z.array(ChatItem) }),
 	portSession: z.object({ session: SessionSummary, needsTrust: z.boolean() }),
+	listPastConversations: z.object({ conversations: z.array(PastConversation) }),
+	continueConversation: started,
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 
@@ -269,6 +272,14 @@ export class HubClient {
 
 	port(other: OtherSession, settings: Omit<Params<'portSession'>, 'pid' | 'claudeSessionId'>): Promise<Result<'portSession'>> {
 		return this.request('portSession', { pid: other.pid, claudeSessionId: other.claudeSessionId, ...settings });
+	}
+
+	async pastConversations(projectDir: string): Promise<PastConversation[]> {
+		return (await this.request('listPastConversations', { projectDir })).conversations;
+	}
+
+	continueConversation(params: Params<'continueConversation'>): Promise<Result<'continueConversation'>> {
+		return this.request('continueConversation', params);
 	}
 
 	async openShell(sessionId: SessionId): Promise<string> {

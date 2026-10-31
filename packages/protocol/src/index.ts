@@ -80,6 +80,12 @@ export type SlashCommand = z.infer<typeof SlashCommand>;
 export const ProjectDir = z.object({ path: z.string(), lastActive: z.number().nullable() });
 export type ProjectDir = z.infer<typeof ProjectDir>;
 
+// A conversation in Claude Code's history of a folder, one that claude --resume offers there. The title is the name it was given, or else Claude Code's own title for it.
+export const PastConversation = z.object({ claudeSessionId: ClaudeSessionId, title: z.string(), firstPrompt: z.string().nullable(), lastModified: z.number() });
+export type PastConversation = z.infer<typeof PastConversation>;
+// The hub lists the newest of a folder's earlier conversations up to this many.
+export const MAX_PAST_CONVERSATIONS = 200;
+
 export const Question = z.object({
 	question: z.string(),
 	header: z.string().optional(),
@@ -186,6 +192,16 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		id,
 		method: z.literal('portSession'),
 		pid: z.number().int(),
+		claudeSessionId: ClaudeSessionId,
+		model: z.string().min(1).optional(),
+		effort: Effort.optional(),
+		permissionMode: PermissionMode.optional(),
+	}),
+	z.object({ id, method: z.literal('listPastConversations'), projectDir: z.string().min(1) }),
+	z.object({
+		id,
+		method: z.literal('continueConversation'),
+		projectDir: z.string().min(1),
 		claudeSessionId: ClaudeSessionId,
 		model: z.string().min(1).optional(),
 		effort: Effort.optional(),

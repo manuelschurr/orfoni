@@ -9,7 +9,8 @@
 		client,
 		open = $bindable(false),
 		onstarted,
-	}: { client: HubClient; open: boolean; onstarted: (started: Result<'startSession'>) => void } = $props();
+		onearlier,
+	}: { client: HubClient; open: boolean; onstarted: (started: Result<'startSession'>) => void; onearlier?: (dir: string) => void } = $props();
 	let dialog: HTMLDialogElement | undefined = $state();
 	let dirs = $state<ProjectDir[]>([]);
 	let folder = $state('');
@@ -33,13 +34,24 @@
 		} else if (!open && dialog.open) dialog.close();
 	});
 
+	function chosenFolder(): string | null {
+		const projectDir = folder.trim().replace(/\/+$/, '');
+		if (projectDir.startsWith('/')) return projectDir;
+		error = 'Pick a folder from the list or type an absolute path, such as /root/projects/orfoni.';
+		return null;
+	}
+
+	function showEarlier(): void {
+		const projectDir = chosenFolder();
+		if (projectDir === null) return;
+		open = false;
+		onearlier?.(projectDir);
+	}
+
 	async function start(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
-		const projectDir = folder.trim().replace(/\/+$/, '');
-		if (!projectDir.startsWith('/')) {
-			error = 'Pick a folder from the list or type an absolute path, such as /root/projects/orfoni.';
-			return;
-		}
+		const projectDir = chosenFolder();
+		if (projectDir === null) return;
 		busy = true;
 		error = null;
 		try {
@@ -79,6 +91,12 @@
 				{/each}
 			</div>
 		{/if}
+		{#if onearlier}
+			<button type="button" class="earlier" onclick={showEarlier}>
+				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8a6 6 0 1 0 6-6 6.5 6.5 0 0 0-4.5 1.8L2 5.3" /><path d="M2 2v3.3h3.3" /><path d="M8 4.7V8l2.7 1.3" /></svg>
+				Continue an earlier conversation in this folder
+			</button>
+		{/if}
 		<label class="row">
 			<span>First message</span>
 			<textarea class="field" rows="4" bind:value={prompt} placeholder="What should Claude do?"></textarea>
@@ -110,6 +128,39 @@
 		padding: 0.2rem 0.65rem;
 		border-radius: 999px;
 		font-size: 0.8125rem;
+	}
+
+	.earlier {
+		display: inline-flex;
+		align-items: center;
+		justify-self: start;
+		gap: 0.4rem;
+		margin-top: -0.4rem;
+		padding: 0.15rem 0;
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font-size: 0.8125rem;
+		font-weight: 500;
+		cursor: pointer;
+	}
+
+	.earlier:hover {
+		text-decoration: underline;
+	}
+
+	.earlier svg {
+		width: 0.95rem;
+		height: 0.95rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	:global(.narrow) .earlier {
+		min-height: 2.5rem;
 	}
 
 	.chip[aria-pressed='true'] {

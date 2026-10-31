@@ -1,11 +1,11 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, Effort, HubStatus, OtherSession, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
+import type { ChatItem, Effort, HubStatus, OtherSession, PastConversation, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -292,6 +292,53 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 			expect(((await client.request('listOtherSessions', {})) as OtherSession[]).map((s) => s.claudeSessionId)).not.toContain(entry.claudeSessionId);
 		} finally {
 			outside('kill-server');
+			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
+		}
+	});
+
+	test("a conversation started outside orfoni is left out of its folder's earlier conversations while it runs, listed once it ended, and continues as an orfoni session that remembers it", async () => {
+		const tag = randomUUID().slice(0, 8);
+		const socket = `orfoni-e2e-earlier-${tag}`;
+		const name = `earlier-${tag}`;
+		const env = Object.fromEntries(Object.entries(process.env).filter(([variable]) => !/^(CLAUDE|TMUX)/.test(variable)));
+		const outside = (...args: string[]) => execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8', env });
+		const earlier = async () => ((await client.request('listPastConversations', { projectDir: TRUSTED_DIR })) as { conversations: PastConversation[] }).conversations;
+		outside('new-session', '-d', '-s', name, '-x', '200', '-y', '50', '-c', TRUSTED_DIR, 'bash');
+		try {
+			outside('send-keys', '-t', `=${name}:`, `claude --model haiku 'Remember the code word quince. Reply with exactly: first-${tag}'`, 'Enter');
+			const listed = await client.waitFor((m) => m.type === 'otherSessions' && m.sessions.some((s) => s.tmux === name));
+			const entry = listed.type === 'otherSessions' ? listed.sessions.find((s) => s.tmux === name) : undefined;
+			if (!entry) throw new Error('unreachable');
+			await eventually(
+				() => client.request('openOtherSession', { pid: entry.pid }) as Promise<{ session: OtherSession; chat: ChatItem[] }>,
+				({ session, chat }) => session.status === 'idle' && chat.some(replied(`first-${tag}`)),
+			);
+			expect((await earlier()).map((c) => c.claudeSessionId)).not.toContain(entry.claudeSessionId);
+			await expect(client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, model: 'haiku' })).rejects.toThrow(/^not_ready: .*Port that session into orfoni/);
+
+			outside('kill-server');
+			await eventually(
+				() => client.request('listOtherSessions', {}) as Promise<OtherSession[]>,
+				(others) => !others.some((s) => s.pid === entry.pid),
+				30_000,
+			);
+			const conversation = (await earlier()).find((c) => c.claudeSessionId === entry.claudeSessionId);
+			expect(conversation?.firstPrompt).toContain(`first-${tag}`);
+
+			const continued = (await client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, model: 'haiku', permissionMode: 'default' })) as Started;
+			started.push(continued.session.id);
+			await acceptTrustPrompt(continued);
+			expect(continued.session).toMatchObject({ projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId, title: conversation?.title });
+			const { chat } = (await client.request('openSession', { sessionId: continued.session.id })) as { chat: ChatItem[] };
+			expect(chat.some(replied(`first-${tag}`))).toBe(true);
+
+			await client.request('send', { sessionId: continued.session.id, text: 'What was the code word? Reply with only that word.' });
+			await client.waitForChat(continued.session.id, (item) => item.kind === 'assistant' && /quince/i.test(item.text));
+			expect((await earlier()).map((c) => c.claudeSessionId)).not.toContain(entry.claudeSessionId);
+			const again = (await client.request('continueConversation', { projectDir: TRUSTED_DIR, claudeSessionId: entry.claudeSessionId })) as Started;
+			expect(again.session.id).toBe(continued.session.id);
+		} finally {
+			spawnSync('tmux', ['-L', socket, 'kill-server'], { stdio: 'ignore', env });
 			rmSync(join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.()}`, socket), { force: true });
 		}
 	});

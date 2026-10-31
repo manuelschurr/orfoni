@@ -19,6 +19,7 @@
 	import type { TerminalTransport } from './lib/transport';
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
+	import EarlierConversationsDialog from './lib/ui/EarlierConversationsDialog.svelte';
 	import { bytes, folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
@@ -41,6 +42,8 @@
 	let setup = $state.raw<Setup | null>(null);
 	let failure = $state<string | null>(null);
 	let creating = $state(false);
+	// The folder whose earlier conversations show.
+	let earlier = $state<string | null>(null);
 	let untrusted = $state<SessionId[]>([]);
 	let lowMemory = $state<{ id: SessionId; memory: HubStatus['memory'] }[]>([]);
 	let terminals = $state<OpenTerminal[]>([]);
@@ -173,7 +176,7 @@
 
 {#if client && ready}
 	<div class="app" class:split={terminals.length > 0} class:narrow={narrow.current} data-screen={screen}>
-		<Sidebar {client} {version} findUpdate={isTauri() ? findUpdate : undefined} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
+		<Sidebar {client} {version} findUpdate={isTauri() ? findUpdate : undefined} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} onearlier={(dir) => (earlier = dir)} />
 		<main>
 			{#if session}
 				{#key session.id}
@@ -254,7 +257,8 @@
 				{/each}
 			</aside>
 		{/if}
-		<NewSessionDialog {client} bind:open={creating} onstarted={started} />
+		<NewSessionDialog {client} bind:open={creating} onstarted={started} onearlier={(dir) => (earlier = dir)} />
+		<EarlierConversationsDialog {client} bind:folder={earlier} onstarted={started} />
 	</div>
 {:else}
 	<div class="boot">
