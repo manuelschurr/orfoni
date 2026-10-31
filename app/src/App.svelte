@@ -149,7 +149,7 @@
 		if (!terminals.some((t) => t.target === target)) terminals = [...terminals, { target, label }];
 		shownTerminal = target;
 		bringToFront('terminal');
-		panels[target]?.focus();
+		if (!touch.current) panels[target]?.focus();
 	}
 
 	function closeTerminal(target: string): void {
@@ -182,7 +182,7 @@
 				{#key session.id}
 					<div class="session">
 						<div class="conversation">
-							<SessionHeader {client} {session} narrow={narrow.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<SessionHeader {client} {session} narrow={narrow.current} touch={touch.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
 							<ChatView
 								{client}
 								chat={client.chats.get(session.id)}
@@ -252,7 +252,7 @@
 				</div>
 				{#each terminals as terminal (terminal.target)}
 					<div class="panel" role="tabpanel" hidden={shownTerminal !== terminal.target}>
-						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} onleave={() => composer?.focus()} />
+						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} touch={touch.current} onleave={() => composer?.focus()} />
 					</div>
 				{/each}
 			</aside>

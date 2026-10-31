@@ -15,7 +15,7 @@ const taskList: TaskItem[] = [
 	{ id: '3', subject: 'Test 2: four pairs ranging at once', status: 'pending', activeForm: null },
 ];
 
-async function header(changes: Parameters<typeof summary>[2], props: { narrow?: boolean; onback?: () => void; ontasks?: () => void } = {}) {
+async function header(changes: Parameters<typeof summary>[2], props: { narrow?: boolean; touch?: boolean; onback?: () => void; ontasks?: () => void } = {}) {
 	const session = summary('s1', 'working', { title: 'Fix the login page', ...changes });
 	const { client, transport } = await connectedClient([session]);
 	const forked = vi.fn();
@@ -259,6 +259,16 @@ test('Enter in the message forks, as it sends in the message box, and Cancel for
 	expect(screen.queryByRole('dialog')).toBeNull();
 	expect(transport.requests('forkSession')).toEqual([]);
 	await fireEvent.keyDown(within(await forkWith('Try a passkey login instead')).getByRole('textbox'), { key: 'Enter' });
+	expect(transport.requests('forkSession')).toMatchObject([{ prompt: 'Try a passkey login instead' }]);
+});
+
+test('on a touch screen, Enter in the message adds a line, as it does in the message box, and the Fork button forks', async () => {
+	const { transport } = await header({ state: 'idle' }, { touch: true });
+	const dialog = await forkWith('Try a passkey login instead');
+	// An Enter the dialog leaves alone is one the browser turns into a new line.
+	expect(await fireEvent.keyDown(within(dialog).getByRole('textbox'), { key: 'Enter' })).toBe(true);
+	expect(transport.requests('forkSession')).toEqual([]);
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Fork' }));
 	expect(transport.requests('forkSession')).toMatchObject([{ prompt: 'Try a passkey login instead' }]);
 });
 
