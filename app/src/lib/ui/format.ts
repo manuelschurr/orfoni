@@ -1,4 +1,4 @@
-import { Effort, PermissionMode, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { Effort, PermissionMode, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 
 // The aliases claude takes with --model and /model.
 export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
@@ -127,6 +127,30 @@ export function relativeTime(since: number, now: number): string {
 	const hours = Math.round(minutes / 60);
 	if (hours < 24) return `${hours} h`;
 	return `${Math.round(hours / 24)} d`;
+}
+
+export function ago(since: number, now: number): string {
+	const time = relativeTime(since, now);
+	return time === 'now' ? 'just now' : `${time} ago`;
+}
+
+export function conversationTitle(conversation: PastConversation): string {
+	return conversation.title || 'Untitled conversation';
+}
+
+// The first prompt says something only when Claude Code did not title the conversation with it.
+export function conversationPrompt({ title, firstPrompt }: PastConversation): string | null {
+	return firstPrompt && firstPrompt !== title ? firstPrompt : null;
+}
+
+// Every word of the search shows in the title or the first prompt, in any case.
+export function searchConversations(conversations: PastConversation[], search: string): PastConversation[] {
+	const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return conversations;
+	return conversations.filter(({ title, firstPrompt }) => {
+		const text = `${title}\n${firstPrompt ?? ''}`.toLowerCase();
+		return words.every((word) => text.includes(word));
+	});
 }
 
 function fields(input: unknown): Record<string, unknown> {

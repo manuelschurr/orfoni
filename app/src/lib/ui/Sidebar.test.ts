@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { connectedClient, otherSession, summary } from '../testing';
 import Sidebar from './Sidebar.svelte';
 
@@ -118,6 +118,15 @@ test('the arrow keys move from the orfoni sessions on to the rows outside orfoni
 	expect(document.activeElement).toBe(row(/swarm-73/));
 	await fireEvent.keyDown(row(/swarm-73/), { key: 'ArrowUp' });
 	expect(document.activeElement).toBe(row(/Alpha work/));
+});
+
+test("each folder heading opens that folder's earlier conversations, including a folder of sessions outside orfoni only", async () => {
+	const { client } = await connectedClient([summary('s1', 'idle', { title: 'Alpha work' })], [otherSession(4321)]);
+	const onearlier = vi.fn();
+	render(Sidebar, { client, onnew: () => {}, onearlier });
+	await fireEvent.click(screen.getByRole('button', { name: 'Earlier conversations in alpha' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Earlier conversations in swarm' }));
+	expect(onearlier.mock.calls).toEqual([['/root/projects/alpha'], ['/root/projects/swarm']]);
 });
 
 test('an answered session reads as unread until opening it makes it idle', async () => {

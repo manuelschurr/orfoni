@@ -5,6 +5,7 @@ import type { SlashCommand as ClaudeCommand, SDKSessionInfo, SessionMessage } fr
 import {
 	ClaudeSessionId,
 	Effort,
+	MAX_PAST_CONVERSATIONS,
 	PermissionMode,
 	SessionId,
 	type ChatItem,
@@ -69,7 +70,6 @@ const DIALOG_SETTLE_MS = 300;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
 const COMMANDS_KEPT_MS = 10 * 60_000;
 const COMMANDS_TIMEOUT_MS = 20_000;
-const PAST_CONVERSATIONS_SHOWN = 200;
 // Typed into Claude Code, these also change the defaults of every new session, and the session header changes them for one session.
 const LEFT_OUT_COMMANDS = new Set(['model', 'effort', 'fast']);
 const RELAUNCHABLE = new Set<SessionStateKind>(['idle', 'answered', 'failed', 'offline']);
@@ -284,7 +284,7 @@ function pastConversations(listed: SDKSessionInfo[], held: Set<string>): PastCon
 			return id.success && !held.has(id.data) ? [{ claudeSessionId: id.data, title: summary, firstPrompt: firstPrompt ?? null, lastModified }] : [];
 		})
 		.sort((a, b) => b.lastModified - a.lastModified)
-		.slice(0, PAST_CONVERSATIONS_SHOWN);
+		.slice(0, MAX_PAST_CONVERSATIONS);
 }
 
 function delay(ms: number): Promise<void> {

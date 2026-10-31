@@ -5,7 +5,13 @@
 	import SessionRow from './SessionRow.svelte';
 	import StatusBar from './StatusBar.svelte';
 
-	let { client, version = null, onnew, onsettings }: { client: HubClient; version?: string | null; onnew: () => void; onsettings?: () => void } = $props();
+	let {
+		client,
+		version = null,
+		onnew,
+		onsettings,
+		onearlier,
+	}: { client: HubClient; version?: string | null; onnew: () => void; onsettings?: () => void; onearlier?: (dir: string) => void } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -37,7 +43,14 @@
 	<div class="groups" onkeydown={arrowKeys}>
 		{#each groups as group (group.dir)}
 			<section class="group">
-				<h2 title={group.dir}>{folderName(group.dir)}</h2>
+				<div class="heading">
+					<h2 title={group.dir}>{folderName(group.dir)}</h2>
+					{#if onearlier}
+						<button class="btn-icon earlier" title="Earlier conversations" aria-label="Earlier conversations in {folderName(group.dir)}" onclick={() => onearlier(group.dir)}>
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8a6 6 0 1 0 6-6 6.5 6.5 0 0 0-4.5 1.8L2 5.3" /><path d="M2 2v3.3h3.3" /><path d="M8 4.7V8l2.7 1.3" /></svg>
+						</button>
+					{/if}
+				</div>
 				{#if group.sessions.length > 0}
 					<ul aria-label={folderName(group.dir)}>
 						{#each group.sessions as session (session.id)}
@@ -114,7 +127,14 @@
 		margin-top: 0.9rem;
 	}
 
+	.heading {
+		display: flex;
+		align-items: center;
+	}
+
 	h2 {
+		flex: 1;
+		min-width: 0;
 		margin: 0;
 		padding: 0.35rem 0.6rem;
 		overflow: hidden;
@@ -123,6 +143,26 @@
 		font-weight: 600;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.earlier {
+		width: 1.75rem;
+		height: 1.75rem;
+		color: var(--faint);
+	}
+
+	.earlier:hover {
+		color: var(--text);
+	}
+
+	.earlier svg {
+		width: 0.95rem;
+		height: 0.95rem;
+	}
+
+	:global(.narrow) .earlier {
+		width: 2.5rem;
+		height: 2.5rem;
 	}
 
 	ul {

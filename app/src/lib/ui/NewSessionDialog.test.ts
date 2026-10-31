@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { connectedClient, stubDialogs } from '../testing';
 import NewSessionDialog from './NewSessionDialog.svelte';
 
@@ -51,4 +51,20 @@ test('a new session starts with the model and effort you pick', async () => {
 	await fireEvent.input(screen.getByLabelText('Folder', { exact: true }), { target: { value: '/root/projects/alpha' } });
 	await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 	expect(transport.requests('startSession')).toMatchObject([{ projectDir: '/root/projects/alpha', model: 'fable', effort: 'xhigh', permissionMode: 'auto' }]);
+});
+
+test('the earlier conversations of the folder open from the dialog, which asks for a folder first and starts nothing', async () => {
+	const { client, transport } = await connectedClient([]);
+	const onearlier = vi.fn();
+	render(NewSessionDialog, { client, open: true, onstarted: () => {}, onearlier });
+	const earlier = screen.getByRole('button', { name: 'Continue an earlier conversation in this folder' });
+	await fireEvent.click(earlier);
+	expect(screen.getByRole('alert').textContent).toContain('Pick a folder');
+	expect(onearlier).not.toHaveBeenCalled();
+
+	await fireEvent.input(screen.getByLabelText('Folder', { exact: true }), { target: { value: '/root/projects/alpha/' } });
+	await fireEvent.click(earlier);
+	expect(onearlier).toHaveBeenCalledWith('/root/projects/alpha');
+	expect(screen.getByRole('dialog', { hidden: true }).hasAttribute('open')).toBe(false);
+	expect(transport.requests('startSession')).toEqual([]);
 });

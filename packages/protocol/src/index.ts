@@ -83,6 +83,8 @@ export type ProjectDir = z.infer<typeof ProjectDir>;
 // A conversation in Claude Code's history of a folder, one that claude --resume offers there. The title is the name it was given, or else Claude Code's own title for it.
 export const PastConversation = z.object({ claudeSessionId: ClaudeSessionId, title: z.string(), firstPrompt: z.string().nullable(), lastModified: z.number() });
 export type PastConversation = z.infer<typeof PastConversation>;
+// The hub lists the newest of a folder's earlier conversations up to this many.
+export const MAX_PAST_CONVERSATIONS = 200;
 
 export const Question = z.object({
 	question: z.string(),

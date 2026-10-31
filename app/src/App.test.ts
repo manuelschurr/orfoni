@@ -1,3 +1,4 @@
+import { ClaudeSessionId } from '@orfoni/protocol';
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest';
@@ -305,6 +306,51 @@ test('porting a session outside orfoni opens the new orfoni session in its place
 	expect(screen.getByRole('heading', { level: 1, name: 'swarm-73' })).toBeTruthy();
 	expect(screen.getByRole('article', { name: 'Claude' }).textContent).toContain('The uplink retries now.');
 	expect(screen.getByRole('button', { name: /^swarm-73/ }).getAttribute('aria-current')).toBe('true');
+});
+
+test("on a narrow screen, a conversation continued from a folder's earlier conversations opens in place of the session list", async () => {
+	stubMedia((query) => query === NARROW);
+	const alpha = summary('a1', 'idle', { title: 'Fix the login page' });
+	const conversation = { claudeSessionId: '6df49a0b-6de0-4a0f-83c5-8abc9595d345', title: 'ranging back to 1280', firstPrompt: 'walk me through the ranging code', lastModified: Date.now() - 3600_000 };
+	const continued = summary('c1', 'idle', { title: conversation.title, claudeSessionId: ClaudeSessionId.parse(conversation.claudeSessionId) });
+	const chat = [{ kind: 'assistant', id: 'a1', text: 'Ranging runs at 1280 again.', done: true }];
+	const requests: { method: string; projectDir?: string }[] = [];
+	let hubLine: (message: unknown) => void = () => {};
+	inTauri((cmd, args, push) => {
+		switch (cmd) {
+			case 'settings_get':
+				return settings;
+			case 'connect':
+				hubLine = (message) => push({ kind: 'line', value: JSON.stringify(message) });
+				push({ kind: 'status', value: { kind: 'connected' } });
+				return { kind: 'connected' };
+			case 'hub_send': {
+				const request = JSON.parse(args.line as string) as { id: number; method: string; projectDir?: string };
+				requests.push(request);
+				if (request.method === 'continueConversation') hubLine({ type: 'sessionUpdated', session: continued });
+				const results: Record<string, unknown> = {
+					listSessions: [alpha],
+					listOtherSessions: [],
+					listPastConversations: { conversations: [conversation] },
+					continueConversation: { session: continued, needsTrust: false },
+					openSession: { session: continued, chat },
+				};
+				if (request.method in results) hubLine({ type: 'response', id: request.id, ok: true, result: results[request.method] });
+				return null;
+			}
+			default:
+				return null;
+		}
+	});
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Earlier conversations in alpha' }));
+	const dialog = screen.getByRole('dialog', { name: 'Earlier conversations in alpha' });
+	await fireEvent.click(await within(dialog).findByRole('button', { name: /^ranging back to 1280/ }));
+	await fireEvent.click(within(dialog).getByRole('button', { name: 'Continue session' }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'ranging back to 1280' })).toBeTruthy();
+	expect(screen.getByRole('article', { name: 'Claude' }).textContent).toContain('Ranging runs at 1280 again.');
+	expect(requests.find((request) => request.method === 'continueConversation')).toMatchObject({ projectDir: '/root/projects/alpha', claudeSessionId: conversation.claudeSessionId });
+	await waitFor(() => expect(layers()).toBe(1));
 });
 
 test('a working session shows the line Claude Code shows in the conversation and its task list in the sidebar beside it, and a session without one shows no sidebar', async () => {
