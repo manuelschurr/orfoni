@@ -518,6 +518,28 @@ test('on a narrow screen, a terminal opens over the conversation with a history 
 	await waitFor(() => expect(layers()).toBe(0));
 });
 
+test('on a touch screen, a terminal opens without taking the focus, so the phone keyboard stays closed', async () => {
+	stubMedia((query) => query === NARROW || query === '(pointer: coarse)');
+	vi.stubGlobal(
+		'ResizeObserver',
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	await fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+	const terminals = screen.getByRole('complementary', { name: 'Terminals' });
+	await waitFor(() => expect(within(terminals).queryByRole('status')).toBeNull());
+	expect(document.activeElement?.closest('.xterm')).toBeNull();
+
+	await fireEvent.click(within(terminals).getByRole('tab', { name: 'Fix the login page' }));
+	expect(document.activeElement?.closest('.xterm')).toBeNull();
+});
+
 test('on a narrow screen, a session removed while its task list is open takes both history entries along', async () => {
 	stubMedia(narrowWindow);
 	const { hub } = withSessions([ranging]);

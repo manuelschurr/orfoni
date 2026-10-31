@@ -145,7 +145,7 @@
 		if (!terminals.some((t) => t.target === target)) terminals = [...terminals, { target, label }];
 		shownTerminal = target;
 		bringToFront('terminal');
-		panels[target]?.focus();
+		if (!touch.current) panels[target]?.focus();
 	}
 
 	function closeTerminal(target: string): void {
@@ -248,7 +248,7 @@
 				</div>
 				{#each terminals as terminal (terminal.target)}
 					<div class="panel" role="tabpanel" hidden={shownTerminal !== terminal.target}>
-						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} onleave={() => composer?.focus()} />
+						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} touch={touch.current} onleave={() => composer?.focus()} />
 					</div>
 				{/each}
 			</aside>

@@ -11,8 +11,9 @@
 		transport,
 		target,
 		label = target,
+		touch = false,
 		onleave,
-	}: { transport: TerminalTransport; target: string; label?: string; onleave?: () => void } = $props();
+	}: { transport: TerminalTransport; target: string; label?: string; touch?: boolean; onleave?: () => void } = $props();
 	let container: HTMLDivElement;
 	let phase = $state<'opening' | 'open' | 'closed' | 'failed'>('opening');
 	let error = $state<string | null>(null);
@@ -81,7 +82,8 @@
 						if (stream === opened) stream = null;
 						phase = 'closed';
 					});
-					term.focus();
+					// On a touch screen the focus would open the phone's keyboard, which a tap on the terminal opens when wanted.
+					if (!touch) term.focus();
 				},
 				(e: unknown) => {
 					phase = 'failed';

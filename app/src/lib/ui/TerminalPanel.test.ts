@@ -70,3 +70,25 @@ test('a terminal that cannot open shows the reason even when the transport rejec
 	await waitFor(() => expect(panel.container.textContent).toContain("can't find session: =orfoni-gone"));
 	expect(panel.container.textContent).not.toContain('undefined');
 });
+
+function textarea(panel: { container: HTMLElement }): HTMLTextAreaElement {
+	return panel.container.querySelector('textarea')!;
+}
+
+async function openPanel(touch: boolean) {
+	const fake = fakeTransport();
+	const panel = render(TerminalPanel, { props: { transport: fake.transport, target: '=orfoni-a1', touch } });
+	await waitFor(() => expect(fake.opened).toHaveLength(1));
+	await waitFor(() => expect(panel.queryByRole('status')).toBeNull());
+	return { ...fake, panel };
+}
+
+test('on a touch screen the terminal opens without taking the focus, so the phone keyboard stays closed until a tap on the terminal', async () => {
+	const { panel } = await openPanel(true);
+	expect(document.activeElement).not.toBe(textarea(panel));
+});
+
+test('without a touch screen the terminal takes the focus when it opens', async () => {
+	const { panel } = await openPanel(false);
+	await waitFor(() => expect(document.activeElement).toBe(textarea(panel)));
+});
