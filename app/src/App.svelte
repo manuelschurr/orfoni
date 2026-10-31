@@ -494,8 +494,10 @@
 		height: 2.5rem;
 	}
 
+	/* The terminal's canvas would otherwise hold the panel at its width, and each fit would measure the panel wider. */
 	.narrow .panel {
 		grid-column: 1 / -1;
+		min-width: 0;
 	}
 
 	.panel[hidden],

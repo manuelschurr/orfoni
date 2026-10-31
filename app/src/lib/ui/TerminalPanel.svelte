@@ -127,10 +127,12 @@
 </section>
 
 <style>
+	/* At a fractional pixel ratio xterm rounds its canvas up to whole device pixels, which would widen the panel a little with every fit. */
 	.terminal {
 		position: relative;
 		display: flex;
 		flex: 1;
+		min-width: 0;
 		min-height: 0;
 		padding: 0.5rem 0 0.25rem 0.6rem;
 		background: #1c1b1a;
