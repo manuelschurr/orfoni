@@ -248,3 +248,27 @@ test('on the phone a terminal opens without the keyboard, a tap brings it up, an
 	await eventually(async () => screen(), (text) => text.includes('accept edits on'), 10_000);
 	expect(keyboardShown()).toBe(true);
 });
+
+test('a tap on the notification of a session that needs approval opens orfoni on that session', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const page = await freshApp();
+	await logIn(page);
+	await untilNotified('orfoni is connected', 15_000);
+	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+	await startSession(`tap ${tag}`, 'Use the Write tool to create notice.txt containing hi. Do nothing else.');
+	await untilNotified(`tap ${tag}`, 90_000);
+	adb('shell', 'cmd', 'statusbar', 'expand-notifications');
+	try {
+		// Android bundles an app's notifications under one heading, and a tap on a line of a closed bundle opens the bundle, so a second tap opens the notification, as it takes a person.
+		for (let attempt = 0; attempt < 3 && !adb('shell', 'dumpsys window | grep -m1 mCurrentFocus || true').includes(PACKAGE); attempt++) {
+			const shown = await eventually(async () => onScreen(`text="tap ${tag}"[^>]*bounds="[^"]*"`), (node) => node !== '', 10_000);
+			adb('shell', 'input', 'tap', ...center(shown));
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+		}
+	} finally {
+		adb('shell', 'cmd', 'statusbar', 'collapse');
+	}
+	const main = page.getByRole('main');
+	await expect(main.getByRole('heading', { level: 1, name: `tap ${tag}` })).toBeVisible({ timeout: 15_000 });
+	await expect(main.getByRole('button', { name: 'Allow', exact: true })).toBeVisible();
+});
