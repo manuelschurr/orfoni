@@ -25,6 +25,7 @@ pub struct AppState {
     terminals: Arc<Mutex<HashMap<u32, TerminalInput>>>,
     next_terminal: AtomicU32,
     focused: AtomicBool,
+    opened: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -37,7 +38,13 @@ impl AppState {
             terminals: Arc::default(),
             next_terminal: AtomicU32::new(1),
             focused: AtomicBool::new(true),
+            opened: Mutex::new(None),
         }
+    }
+
+    /// Keeps the session of a notice tapped on the phone until the page takes it, since the tap that starts orfoni comes before the page listens.
+    pub fn keep_opened(&self, session: String) {
+        *self.opened.lock().unwrap() = Some(session);
     }
 
     fn stays_connected(&self) -> bool {
@@ -229,10 +236,10 @@ pub fn terminal_write(state: State<'_, AppState>, id: u32, data: Vec<u8>) {
     }
 }
 
-/// The session of a notice tapped on the phone, when that tap started orfoni before the page was listening.
+/// The session of the notice last tapped on the phone, once.
 #[tauri::command]
-pub fn opened_notice(app: AppHandle) -> Option<String> {
-    background::opened(&app)
+pub fn opened_notice(app: AppHandle, state: State<'_, AppState>) -> Option<String> {
+    state.opened.lock().unwrap().take().or_else(|| background::opened(&app))
 }
 
 #[tauri::command]

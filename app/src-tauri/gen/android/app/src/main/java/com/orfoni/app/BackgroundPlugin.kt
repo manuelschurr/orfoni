@@ -50,8 +50,10 @@ class BackgroundPlugin(private val activity: Activity) : Plugin(activity) {
   // The session of the notice tapped since Rust last asked, from the tap that started orfoni or one that brought it back.
   private var opened: String? = null
 
+  // The activity keeps the intent that started it, and Android hands it back when orfoni is reopened from the recent apps, so the session is taken off it once read.
   override fun load(webView: WebView) {
     opened = activity.intent?.getStringExtra(SESSION)
+    activity.intent?.removeExtra(SESSION)
   }
 
   override fun onNewIntent(intent: Intent) {

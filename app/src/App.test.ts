@@ -208,19 +208,20 @@ test('in Tauri, the page shows no notification of its own, and a click on one th
 	await waitFor(() => expect(commands).toEqual(expect.arrayContaining(['plugin:window|unminimize', 'plugin:window|set_focus'])));
 });
 
-// On Android orfoni shows the notices itself, since the notification plugin loses what a tapped notification carries, and Rust names the session of a tapped one.
+// On Android orfoni shows the notices itself, since the notification plugin loses what a tapped notification carries. Rust keeps the session of a tapped one until the page takes it, since the tap that starts orfoni comes before the page listens.
 test('in Tauri, a tapped phone notice opens its session, also when the tap started the app before the hub had listed the sessions', async () => {
 	notifications();
 	const sessions = [summary('a1', 'needs_approval', { title: 'Fix the login page' }), summary('a2', 'needs_approval', { title: 'Upgrade vite' })];
 	let hubLine: (message: unknown) => void = () => {};
 	let list: (() => void) | null = null;
+	const opened = ['a2'];
 	const listeners = new Map<string, number>();
 	inTauri((cmd, args, push) => {
 		switch (cmd) {
 			case 'settings_get':
 				return settings;
 			case 'opened_notice':
-				return 'a2';
+				return opened.shift() ?? null;
 			case 'plugin:event|listen':
 				listeners.set(args.event as string, args.handler as number);
 				return 1;
@@ -246,7 +247,8 @@ test('in Tauri, a tapped phone notice opens its session, also when the tap start
 	list!();
 	expect(await screen.findByRole('heading', { level: 1, name: 'Upgrade vite' })).toBeTruthy();
 
-	globals.__TAURI_INTERNALS__.runCallback(listeners.get('notice-opened')!, { event: 'notice-opened', id: 1, payload: 'a1' });
+	opened.push('a1');
+	globals.__TAURI_INTERNALS__.runCallback(listeners.get('notice-opened')!, { event: 'notice-opened', id: 1, payload: null });
 	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
 });
 

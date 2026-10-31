@@ -9,7 +9,7 @@ export async function askToNotify(): Promise<void> {
 	if (!(await isPermissionGranted())) await requestPermission();
 }
 
-// Windows reports a click only for a notification shown while a listener exists, so this listens from the start. On Android orfoni shows the notices itself, since the notification plugin loses what a tapped notification carries, and Rust names the session of a tapped one: as an event when the tap brings orfoni back, and on asking when the tap started it.
+// Windows reports a click only for a notification shown while a listener exists, so this listens from the start. On Android orfoni shows the notices itself, since the notification plugin loses what a tapped notification carries, and Rust keeps the session of a tapped one until the page takes it: on a signal when the tap brings orfoni back, and at the start, since a tap that starts orfoni comes before the page listens.
 export async function onNoticeClick(open: (sessionId: SessionId) => void): Promise<() => void> {
 	const route = (id: unknown): boolean => {
 		const sessionId = SessionId.safeParse(id);
@@ -24,10 +24,11 @@ export async function onNoticeClick(open: (sessionId: SessionId) => void): Promi
 			.then(() => window.setFocus())
 			.catch((error: unknown) => console.warn('focus', error));
 	});
-	const unlisten = await listen<string>('notice-opened', ({ payload }) => route(payload));
-	route(await invoke<string | null>('opened_notice'));
+	const take = async (): Promise<void> => void route(await invoke<string | null>('opened_notice'));
+	const unlisten = await listen('notice-opened', () => void take().catch((error: unknown) => console.warn('opened notice', error)));
+	await take();
 	return () => {
 		void listener.unregister().catch(() => {});
-		unlisten();
+		void Promise.resolve(unlisten()).catch(() => {});
 	};
 }

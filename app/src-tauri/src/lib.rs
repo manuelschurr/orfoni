@@ -43,9 +43,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(focused) = event {
                 window.state::<commands::AppState>().set_focused(*focused);
-                // A tap on a notice on the phone brings orfoni to the front, and the page opens the session it names.
+                // A tap on a notice on the phone brings orfoni to the front, and the page takes the session it names.
                 if *focused && let Some(session) = background::opened(window.app_handle()) {
-                    let _ = window.app_handle().emit("notice-opened", session);
+                    window.state::<commands::AppState>().keep_opened(session);
+                    let _ = window.app_handle().emit("notice-opened", ());
                 }
             }
         })
