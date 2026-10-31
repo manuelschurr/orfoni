@@ -20,7 +20,7 @@ function adb(...args: string[]): string {
 // A fresh start of the app, with no settings, no trusted host and no key, as on the first day. OnePlus phones refuse pm clear over adb, and run-as reaches only a debug build's own files.
 async function freshApp(): Promise<Page> {
 	adb('shell', 'am', 'force-stop', PACKAGE);
-	adb('shell', `run-as ${PACKAGE} rm -rf settings.json known-hosts.json ssh`);
+	adb('shell', `run-as ${PACKAGE} rm -rf settings.json known-hosts.json ssh shared_prefs/orfoni.xml`);
 	return appPage();
 }
 
@@ -143,4 +143,52 @@ test('back from a minute in the background with its connection gone, orfoni logs
 	await startSession(`back ${tag}`, 'Reply with exactly: ok');
 	await expect(page.getByRole('navigation', { name: 'Sessions' }).getByText(`back ${tag}`)).toBeVisible({ timeout: 30_000 });
 	expect(logins(publicKey)).toBeGreaterThan(1);
+});
+
+// Only orfoni's own notifications, filtered on the phone, so nothing else on it comes back.
+function shownNotifications(): string {
+	return adb('shell', `dumpsys notification --noredact | grep -A40 'pkg=${PACKAGE}' | grep -E 'android.title=|android.text=' || true`);
+}
+
+// Android asks once whether orfoni may run without battery limits, which it needs for its connection while the phone sleeps.
+async function declineBatteryExemption(): Promise<boolean> {
+	for (let i = 0; i < 20; i++) {
+		adb('shell', 'uiautomator dump /sdcard/orfoni-check.xml > /dev/null');
+		const screen = adb('exec-out', 'cat /sdcard/orfoni-check.xml');
+		adb('shell', 'rm /sdcard/orfoni-check.xml');
+		const decline = /resource-id="android:id\/button2"[^>]*package="com.android.settings"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(screen);
+		if (decline) {
+			const [x1, y1, x2, y2] = decline.slice(1).map(Number);
+			adb('shell', 'input', 'tap', String((x1! + x2!) / 2), String((y1! + y2!) / 2));
+			return true;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+	return false;
+}
+
+async function untilNotified(text: string, timeoutMs: number): Promise<string> {
+	return eventually(async () => shownNotifications(), (shown) => shown.includes(text), timeoutMs);
+}
+
+test('in the background, a session that needs approval shows a notification on the phone, also while Android dozes and without the battery exemption', async () => {
+	const tag = randomUUID().slice(0, 8);
+	await logIn(await freshApp());
+	expect(await declineBatteryExemption()).toBe(true);
+	expect(adb('shell', 'dumpsys', 'deviceidle', 'whitelist')).not.toContain(PACKAGE);
+	await untilNotified('orfoni is connected', 15_000);
+	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+	const ask = 'Use the Write tool to create notice.txt containing hi. Do nothing else.';
+	await startSession(`notice ${tag}`, ask);
+	expect(await untilNotified(`notice ${tag}`, 90_000)).toContain('Claude needs your approval');
+
+	adb('shell', 'dumpsys', 'battery', 'unplug');
+	try {
+		expect(adb('shell', 'dumpsys', 'deviceidle', 'force-idle')).toContain('Now forced in to deep idle mode');
+		await startSession(`doze ${tag}`, ask);
+		expect(await untilNotified(`doze ${tag}`, 90_000)).toContain('Claude needs your approval');
+	} finally {
+		adb('shell', 'dumpsys', 'deviceidle', 'unforce');
+		adb('shell', 'dumpsys', 'battery', 'reset');
+	}
 });
