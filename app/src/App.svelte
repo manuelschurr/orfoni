@@ -178,7 +178,7 @@
 				{#key session.id}
 					<div class="session">
 						<div class="conversation">
-							<SessionHeader {client} {session} narrow={narrow.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<SessionHeader {client} {session} narrow={narrow.current} touch={touch.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
 							<ChatView
 								{client}
 								chat={client.chats.get(session.id)}

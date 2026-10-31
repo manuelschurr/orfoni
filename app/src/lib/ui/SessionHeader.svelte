@@ -8,6 +8,7 @@
 		client,
 		session,
 		narrow = false,
+		touch = false,
 		onback,
 		ontasks,
 		onterminal,
@@ -17,6 +18,8 @@
 		client: HubClient;
 		session: SessionSummary;
 		narrow?: boolean;
+		// On a touch screen Enter in the fork's message adds a line and the Fork button forks, as in the message box.
+		touch?: boolean;
 		onback?: () => void;
 		ontasks?: () => void;
 		onterminal: () => void;
@@ -324,7 +327,7 @@
 				bind:value={forkPrompt}
 				required
 				onkeydown={(event) => {
-					if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+					if (event.key !== 'Enter' || event.shiftKey || event.isComposing || touch) return;
 					event.preventDefault();
 					void fork();
 				}}
