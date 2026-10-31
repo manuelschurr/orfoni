@@ -3,6 +3,7 @@ mod files;
 pub mod keys;
 pub mod known_hosts;
 pub mod link;
+mod notices;
 pub mod settings;
 pub mod ssh;
 pub mod terminal;
@@ -37,6 +38,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event {
+                window.state::<commands::AppState>().set_focused(*focused);
+            }
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

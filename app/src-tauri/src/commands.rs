@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 
 use crate::keys::{self, KeyInfo};
 use crate::known_hosts::KnownHosts;
 use crate::link::{HubLink, LinkEvent};
+use crate::notices::{self, Notice};
 use crate::settings::Settings;
 use crate::ssh::SshError;
 use crate::terminal::TerminalInput;
@@ -22,6 +23,7 @@ pub struct AppState {
     link: Mutex<Option<HubLink>>,
     terminals: Arc<Mutex<HashMap<u32, TerminalInput>>>,
     next_terminal: AtomicU32,
+    focused: AtomicBool,
 }
 
 impl AppState {
@@ -33,7 +35,17 @@ impl AppState {
             link: Mutex::new(None),
             terminals: Arc::default(),
             next_terminal: AtomicU32::new(1),
+            focused: AtomicBool::new(true),
         }
+    }
+
+    /// Whether the app's window is in front, where the app itself shows what a notice would say.
+    pub fn focused(&self) -> bool {
+        self.focused.load(Ordering::Relaxed)
+    }
+
+    pub fn set_focused(&self, focused: bool) {
+        self.focused.store(focused, Ordering::Relaxed);
     }
 
     pub async fn connect<F>(
@@ -127,12 +139,18 @@ fn describe(error: impl Display) -> String {
 
 #[tauri::command]
 pub async fn connect(
+    app: AppHandle,
     state: State<'_, AppState>,
     passphrase: Option<String>,
     events: Channel<LinkEvent>,
 ) -> Result<ConnectOutcome, String> {
     state
         .connect(passphrase, move |event| {
+            if let LinkEvent::Line(line) = &event
+                && let Some(notice) = Notice::parse(line)
+            {
+                notices::show(&app, notice);
+            }
             let _ = events.send(event);
         })
         .await

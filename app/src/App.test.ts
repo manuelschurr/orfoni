@@ -189,7 +189,8 @@ function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType
 	return { hub, commands };
 }
 
-test('in Tauri, while the window is in the background, a session that needs you or has answered shows a notification, and clicking it opens that session', async () => {
+// The app shows the hub's notices natively, from Rust, while its window is not in front, so the page shows none itself and no notice comes twice.
+test('in Tauri, the page shows no notification of its own, and a click on one the app showed opens its session', async () => {
 	const shown = notifications();
 	vi.spyOn(document, 'hasFocus').mockReturnValue(false);
 	const { hub, commands } = withSessions([summary('a1', 'working', { title: 'Fix the login page' }), summary('a2', 'working', { title: 'Upgrade vite' })]);
@@ -197,45 +198,32 @@ test('in Tauri, while the window is in the background, a session that needs you 
 	expect(await screen.findByText('Upgrade vite')).toBeTruthy();
 
 	hub.line({ type: 'sessionUpdated', session: summary('a1', 'needs_approval', { title: 'Fix the login page', stateSince: 2000 }) });
-	hub.line({ type: 'sessionUpdated', session: summary('a2', 'answered', { title: 'Upgrade vite', stateSince: 2000 }) });
-	await waitFor(() =>
-		expect(shown).toEqual([
-			{ title: 'Fix the login page', body: 'Claude needs your approval in alpha', extra: { sessionId: 'a1' } },
-			{ title: 'Upgrade vite', body: 'Claude has answered in alpha', extra: { sessionId: 'a2' } },
-		]),
-	);
-	// The taskbar button flashes for a session that cannot go on without you.
-	await waitFor(() => expect(commands.filter((cmd) => cmd === 'plugin:window|request_user_attention')).toHaveLength(1));
+	hub.line({ type: 'notice', sessionId: 'a1', kind: 'approval', title: 'Fix the login page', body: 'Claude needs your approval in alpha' });
+	await waitFor(() => expect(document.title).toBe('orfoni (1)'));
+	expect(shown).toEqual([]);
 
 	hub.click({ actionId: 'tap', inputValue: null, notification: { id: 7, title: 'Upgrade vite', extra: { sessionId: 'a2' } } });
 	expect(await screen.findByRole('heading', { level: 1, name: 'Upgrade vite' })).toBeTruthy();
 	await waitFor(() => expect(commands).toEqual(expect.arrayContaining(['plugin:window|unminimize', 'plugin:window|set_focus'])));
 });
 
-test('in Tauri, what Claude pushes from a turn a background task started shows as a notification that flashes the taskbar, and the end of that turn shows none', async () => {
-	const shown = notifications();
-	vi.spyOn(document, 'hasFocus').mockReturnValue(false);
-	const { hub, commands } = withSessions([summary('a1', 'idle', { title: 'Flash the boards' })]);
+// Android 13 and later show an app's notifications only after asking the person once.
+test('in Tauri, the app asks for leave to notify when it does not have it, and not when it does', async () => {
+	const asked: string[] = [];
+	const ask = (permission: string) => {
+		vi.stubGlobal('Notification', Object.assign(function () {}, { permission, requestPermission: async () => (asked.push(permission), 'granted') }));
+	};
+	ask('denied');
+	withSessions([]);
+	const first = render(App);
+	await waitFor(() => expect(asked).toEqual(['denied']));
+	first.unmount();
+	clearMocks();
+	ask('granted');
+	withSessions([]);
 	render(App);
-	expect(await screen.findByText('Flash the boards')).toBeTruthy();
-
-	hub.line({ type: 'sessionUpdated', session: summary('a1', 'working', { title: 'Flash the boards', turnFrom: 'task', stateSince: 2000 }) });
-	hub.line({ type: 'sessionUpdated', session: summary('a1', 'working', { title: 'Flash the boards', turnFrom: 'task', stateSince: 2000, push: { message: 'Node 5 failed to flash.', at: 2500 } }) });
-	hub.line({ type: 'sessionUpdated', session: summary('a1', 'idle', { title: 'Flash the boards', turnFrom: 'task', stateSince: 3000, push: { message: 'Node 5 failed to flash.', at: 2500 } }) });
-	await waitFor(() => expect(shown).toEqual([{ title: 'Flash the boards', body: 'Node 5 failed to flash.', extra: { sessionId: 'a1' } }]));
-	await waitFor(() => expect(commands.filter((cmd) => cmd === 'plugin:window|request_user_attention')).toHaveLength(1));
-});
-
-test('in Tauri, while the window has focus, a session that needs you shows no notification', async () => {
-	const shown = notifications();
-	vi.spyOn(document, 'hasFocus').mockReturnValue(true);
-	const { hub } = withSessions([summary('a1', 'working', { title: 'Fix the login page' })]);
-	render(App);
-	expect(await screen.findByText('Fix the login page')).toBeTruthy();
-
-	hub.line({ type: 'sessionUpdated', session: summary('a1', 'needs_approval', { title: 'Fix the login page', stateSince: 2000 }) });
-	await waitFor(() => expect(document.title).toBe('orfoni (1)'));
-	expect(shown).toEqual([]);
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	expect(asked).toEqual(['denied']);
 });
 
 test('a session started while the VPS is low on memory says so until dismissed', async () => {

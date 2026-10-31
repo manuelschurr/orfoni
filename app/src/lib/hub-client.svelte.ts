@@ -444,6 +444,9 @@ export class HubClient {
 				if (this.selected === sessionId) this.selected = null;
 				return;
 			}
+			// The app shows a notice natively, from Rust, before the line reaches the page.
+			case 'notice':
+				return;
 			case 'otherSessions':
 				this.updateOthers(message.sessions);
 				return;

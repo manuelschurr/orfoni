@@ -8,11 +8,11 @@
 	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { onMount, untrack } from 'svelte';
+	import { onMount } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { createTransports } from './lib/connect';
 	import { HubClient, type Result } from './lib/hub-client.svelte';
-	import { notices, onNoticeClick, showNotice } from './lib/notices';
+	import { askToNotify, onNoticeClick } from './lib/notices';
 	import { Setup } from './lib/setup.svelte';
 	import { loadSettings, saveSettings } from './lib/tauri-transport';
 	import type { TerminalTransport } from './lib/transport';
@@ -70,8 +70,6 @@
 	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
 
 	let version = $state<string | null>(null);
-	// The sessions as the last look saw them, so a change of state can be told apart from a session that was already in it.
-	let seen = new Map<SessionId, SessionSummary>();
 
 	onMount(() => {
 		if (isTauri()) getVersion().then((installed) => (version = installed), () => {});
@@ -94,22 +92,12 @@
 				if (hub.sessions.has(id) && hub.selected !== id) void hub.select(id).catch(() => {});
 			});
 			stopListening.catch((error: unknown) => console.warn('notification clicks', error));
+			askToNotify().catch((error: unknown) => console.warn('notification permission', error));
 		}
 		return () => {
 			hub.close();
 			void stopListening?.then((stop) => stop(), () => {});
 		};
-	});
-
-	// While the window is in the background, Windows tells you about a session that waits on you or has answered.
-	$effect(() => {
-		if (!client) return;
-		const sessions = client.sessions;
-		const chats = untrack(() => client?.chats);
-		const news = notices(seen, sessions, chats);
-		seen = sessions;
-		if (news.length === 0 || !isTauri() || document.hasFocus()) return;
-		for (const notice of news) showNotice(notice).catch((error: unknown) => console.warn('notification', error));
 	});
 
 	$effect(() => {
