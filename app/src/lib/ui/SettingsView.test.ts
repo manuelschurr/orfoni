@@ -127,3 +127,12 @@ test('on a phone, replacing the key asks first and makes a new one in its place'
 	await waitFor(() => expect(((screen.getByLabelText('Public key')) as HTMLTextAreaElement).value).toBe(second.publicKey));
 	expect(calls.find((call) => call.cmd === 'key_create')?.args).toEqual({ replace: true });
 });
+
+// A phone keyboard capitalizes the first letter of a field unless told not to, which turned the user root into Root on the test phone.
+test('the address, user and hub command fields tell the keyboard not to capitalize or correct them', () => {
+	render(SettingsView, { settings: firstStart, cancellable: false, onsave: () => {}, oncancel: () => {} });
+	for (const name of ['Host', 'User', 'Hub command']) {
+		const field = screen.getByLabelText(name);
+		expect([name, field.getAttribute('autocapitalize'), field.getAttribute('autocorrect')]).toEqual([name, 'off', 'off']);
+	}
+});

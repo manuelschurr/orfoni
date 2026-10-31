@@ -101,7 +101,7 @@
 		<div class="address">
 			<label class="row">
 				<span>Host</span>
-				<input class="field" bind:value={draft.host} placeholder="vps.example.org" autocomplete="off" spellcheck="false" />
+				<input class="field" bind:value={draft.host} placeholder="vps.example.org" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
 			</label>
 			<label class="row">
 				<span>Port</span>
@@ -110,7 +110,7 @@
 		</div>
 		<label class="row">
 			<span>User</span>
-			<input class="field" bind:value={draft.user} autocomplete="off" spellcheck="false" />
+			<input class="field" bind:value={draft.user} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
 		</label>
 		{#if appKey}
 			<div class="row">
@@ -139,7 +139,7 @@
 			<div class="row">
 				<label for="settings-key">Private key file</label>
 				<div class="key">
-					<input id="settings-key" class="field mono" bind:value={draft.keyPath} autocomplete="off" spellcheck="false" aria-describedby="settings-key-hint" />
+					<input id="settings-key" class="field mono" bind:value={draft.keyPath} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="settings-key-hint" />
 					<button type="button" class="btn" onclick={browse}>Browse</button>
 				</div>
 				<span id="settings-key-hint" class="hint">An OpenSSH private key, such as id_ed25519. PuTTY .ppk files do not work.</span>
@@ -147,7 +147,7 @@
 		{/if}
 		<div class="row">
 			<label for="settings-hub">Hub command</label>
-			<input id="settings-hub" class="field mono" bind:value={draft.hubCommand} autocomplete="off" spellcheck="false" aria-describedby="settings-hub-hint" />
+			<input id="settings-hub" class="field mono" bind:value={draft.hubCommand} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="settings-hub-hint" />
 			<span id="settings-hub-hint" class="hint">Runs on the VPS for every connection.</span>
 		</div>
 		{#if problem ?? error}<p class="error" role="alert">{problem ?? error}</p>{/if}
