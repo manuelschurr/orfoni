@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import type { Effort, HubStatus, PermissionMode, SessionSummary } from '@orfoni/protocol';
+import type { Effort, HubStatus, OtherSession, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { OutsideSession } from './outside';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
@@ -370,6 +370,59 @@ test('a session outside orfoni shows under its folder and ports into an orfoni s
 	} finally {
 		outside.stop();
 	}
+});
+
+test('a conversation that ended outside orfoni shows among the earlier conversations of its folder, the search finds it, and Continue opens it as an orfoni session that goes on with it', async ({ page }) => {
+	const dir = newProjectDir();
+	const outside = OutsideSession.start(dir, 'Remember the code word damson. Reply with only the result of 1024 divided by 2, in digits.');
+	let pid: number;
+	try {
+		await outside.acceptTrustPrompt();
+		await outside.waitFor(() => outside.screen().includes('512'), 'replied', REPLY_MS);
+		pid = (await hub.waitForOther((o) => o.projectDir === dir && o.status === 'idle', REPLY_MS)).pid;
+	} finally {
+		outside.stop();
+	}
+	await expect.poll(async () => ((await hub.request('listOtherSessions', {})) as OtherSession[]).some((o) => o.pid === pid), { timeout: 30_000 }).toBe(false);
+
+	await page.goto(APP);
+	await page.getByRole('button', { name: 'New session' }).first().click();
+	const creating = page.getByRole('dialog', { name: 'New session' });
+	await creating.getByLabel('Folder', { exact: true }).fill(dir);
+	await creating.getByRole('button', { name: 'Continue an earlier conversation in this folder' }).click();
+	const earlier = page.getByRole('dialog', { name: `Earlier conversations in ${basename(dir)}` });
+	await expect(earlier.getByRole('listitem')).toHaveCount(1);
+	const search = earlier.getByRole('searchbox', { name: 'Search' });
+	await search.fill('kumquat');
+	await expect(earlier.getByText('No conversation matches "kumquat".')).toBeVisible();
+	await search.fill('damson');
+	await earlier.getByRole('listitem').getByRole('button').click();
+
+	const continuing = page.getByRole('dialog', { name: /^Continue ".*"$/ });
+	await expect(continuing.getByLabel('Permissions')).toHaveValue('auto');
+	await continuing.getByLabel('Model').selectOption('haiku');
+	await continuing.getByRole('button', { name: 'Continue session' }).click();
+	await expect(continuing).toBeHidden({ timeout: 30_000 });
+
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await expect(box).toBeVisible();
+	await expect(claude(page).first()).toContainText('512');
+	const sessionId = (await page.locator('[data-session][aria-current="true"]').getAttribute('data-session')) ?? '';
+	expect((await hub.sessions()).find((s) => s.id === sessionId)?.projectDir).toBe(dir);
+	const screen = await Screen.attach(`=orfoni-${sessionId}`);
+	try {
+		await screen.waitFor('❯', 60_000);
+		expect(screen.text()).not.toContain('Yes, I trust this folder');
+		await sleep(2500);
+	} finally {
+		screen.close();
+	}
+	await box.fill('What was the code word? Reply with only that word.');
+	await box.press('Enter');
+	await expect(claude(page).last()).toContainText(/damson/i, { timeout: REPLY_MS });
+
+	await page.getByRole('button', { name: `Earlier conversations in ${basename(dir)}` }).click();
+	await expect(page.getByRole('dialog', { name: `Earlier conversations in ${basename(dir)}` })).toContainText('No earlier conversations here.');
 });
 
 // Screen reader text is positioned absolutely, so a pane that scrolls without being its containing block lets that text stretch the page down to the pane's full content.
