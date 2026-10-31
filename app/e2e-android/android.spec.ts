@@ -249,6 +249,20 @@ test('on the phone a terminal opens without the keyboard, a tap brings it up, an
 	expect(keyboardShown()).toBe(true);
 });
 
+// Taps orfoni's notification with this title in the notification shade. Android bundles an app's notifications under one heading, and a tap on a line of a closed bundle opens the bundle, so a second tap opens the notification, as it takes a person.
+async function tapNotification(title: string): Promise<void> {
+	adb('shell', 'cmd', 'statusbar', 'expand-notifications');
+	try {
+		for (let attempt = 0; attempt < 3 && !adb('shell', 'dumpsys window | grep -m1 mCurrentFocus || true').includes(PACKAGE); attempt++) {
+			const shown = await eventually(async () => onScreen(`text="${title}"[^>]*bounds="[^"]*"`), (node) => node !== '', 10_000);
+			adb('shell', 'input', 'tap', ...center(shown));
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+		}
+	} finally {
+		adb('shell', 'cmd', 'statusbar', 'collapse');
+	}
+}
+
 test('a tap on the notification of a session that needs approval opens orfoni on that session', async () => {
 	const tag = randomUUID().slice(0, 8);
 	const page = await freshApp();
@@ -257,18 +271,25 @@ test('a tap on the notification of a session that needs approval opens orfoni on
 	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
 	await startSession(`tap ${tag}`, 'Use the Write tool to create notice.txt containing hi. Do nothing else.');
 	await untilNotified(`tap ${tag}`, 90_000);
-	adb('shell', 'cmd', 'statusbar', 'expand-notifications');
-	try {
-		// Android bundles an app's notifications under one heading, and a tap on a line of a closed bundle opens the bundle, so a second tap opens the notification, as it takes a person.
-		for (let attempt = 0; attempt < 3 && !adb('shell', 'dumpsys window | grep -m1 mCurrentFocus || true').includes(PACKAGE); attempt++) {
-			const shown = await eventually(async () => onScreen(`text="tap ${tag}"[^>]*bounds="[^"]*"`), (node) => node !== '', 10_000);
-			adb('shell', 'input', 'tap', ...center(shown));
-			await new Promise((resolve) => setTimeout(resolve, 1_500));
-		}
-	} finally {
-		adb('shell', 'cmd', 'statusbar', 'collapse');
-	}
+	await tapNotification(`tap ${tag}`);
 	const main = page.getByRole('main');
 	await expect(main.getByRole('heading', { level: 1, name: `tap ${tag}` })).toBeVisible({ timeout: 15_000 });
 	await expect(main.getByRole('button', { name: 'Allow', exact: true })).toBeVisible();
+});
+
+// Android can end orfoni's process in the background while its notification stays, and the tap then starts orfoni before its page listens.
+test('a tap on a notification after Android ended orfoni starts it on that session', async () => {
+	const tag = randomUUID().slice(0, 8);
+	await logIn(await freshApp());
+	await untilNotified('orfoni is connected', 15_000);
+	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+	await startSession(`cold ${tag}`, 'Use the Write tool to create notice.txt containing hi. Do nothing else.');
+	await untilNotified(`cold ${tag}`, 90_000);
+	const pid = adb('shell', `pidof ${PACKAGE}`).trim();
+	adb('shell', `run-as ${PACKAGE} kill ${pid}`);
+	await eventually(async () => adb('shell', `pidof ${PACKAGE} || true`).trim(), (now) => now !== pid, 10_000);
+	expect(shownNotifications()).toContain(`cold ${tag}`);
+	await tapNotification(`cold ${tag}`);
+	const page = await appPage();
+	await expect(page.getByRole('main').getByRole('heading', { level: 1, name: `cold ${tag}` })).toBeVisible({ timeout: 60_000 });
 });
