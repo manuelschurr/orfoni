@@ -117,6 +117,11 @@
 		if (isTauri()) getCurrentWindow().setTitle(title).catch((error: unknown) => console.warn('set_title', error));
 	});
 
+	// The connection dialogs render outside .app, before there is a session list, and take the narrow sizes from the root.
+	$effect(() => {
+		document.documentElement.classList.toggle('narrow', narrow.current);
+	});
+
 	// The layers lead and the history follows, so a layer closed by a button or by the hub takes its entry along.
 	$effect(() => syncHistory());
 
