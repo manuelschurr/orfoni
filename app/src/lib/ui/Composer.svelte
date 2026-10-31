@@ -10,7 +10,8 @@
 		dataUrl: string;
 	}
 
-	let { client, sessionId }: { client: HubClient; sessionId: SessionId } = $props();
+	// On a touch screen Enter adds a line, since the keyboard there has no Shift+Enter to reach for, and Send sends.
+	let { client, sessionId, touch = false }: { client: HubClient; sessionId: SessionId; touch?: boolean } = $props();
 	const id = $props.id();
 	let text = $state('');
 	let images = $state<Attachment[]>([]);
@@ -158,7 +159,7 @@
 					return;
 				case 'Tab':
 				case 'Enter':
-					if (event.shiftKey) break;
+					if (event.shiftKey || (touch && event.key === 'Enter')) break;
 					// A command typed in full, by name or alias, goes as typed, the way Claude Code runs it on the first Enter, even while a longer one ranks first.
 					if (event.key === 'Enter' && suggestions.some((command) => [command.name, ...command.aliases].some((name) => text === `/${name}`))) break;
 					event.preventDefault();
@@ -170,7 +171,7 @@
 					return;
 			}
 		}
-		if (event.key !== 'Enter' || event.shiftKey) return;
+		if (event.key !== 'Enter' || event.shiftKey || touch) return;
 		event.preventDefault();
 		void submit();
 	}
@@ -238,7 +239,7 @@
 		<button class="send btn btn-primary" type="submit" disabled={sending || (text.trim() === '' && images.length === 0)}>{sending ? 'Sending' : 'Send'}</button>
 	</div>
 	{#if error}<p class="error" id="composer-error" role="alert">{error}</p>{/if}
-	<p class="hint">Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.</p>
+	<p class="hint">{touch ? 'Enter adds a line, Send sends' : 'Enter sends, Shift+Enter adds a line'}, and a message that starts with ! runs in the shell.</p>
 </form>
 
 <style>
@@ -384,6 +385,42 @@
 
 	.send {
 		border-radius: 10px;
+	}
+
+	:global(.narrow) .composer {
+		padding: 0 0.5rem 0.5rem;
+	}
+
+	:global(.narrow) .box {
+		gap: 0.4rem;
+		padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+	}
+
+	:global(.narrow) .attach {
+		width: 2.5rem;
+		height: 2.5rem;
+		margin-left: -0.4rem;
+	}
+
+	:global(.narrow) .remove {
+		width: 1.75rem;
+		height: 1.75rem;
+	}
+
+	/* Larger to the finger than to the eye, so it does not cover the thumbnail. */
+	:global(.narrow) .remove::after {
+		position: absolute;
+		inset: -0.4rem;
+		content: '';
+	}
+
+	:global(.narrow) textarea {
+		padding-block: 0.5rem;
+	}
+
+	:global(.narrow) [role='option'] {
+		min-height: 2.75rem;
+		align-content: center;
 	}
 
 	/* Opens upward over the conversation, since the box sits at the bottom of the window. */

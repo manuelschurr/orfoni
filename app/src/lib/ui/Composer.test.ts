@@ -34,6 +34,28 @@ test('Enter sends and empties the box, Shift+Enter does not send', async () => {
 	await waitFor(() => expect(box().value).toBe(''));
 });
 
+test('on a touch screen, Enter adds a line and Send sends, and the hint under the box says so', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id, touch: true });
+	expect(screen.getByText(/^Enter adds a line, Send sends,/)).toBeTruthy();
+	await fireEvent.input(box(), { target: { value: 'first line' } });
+	// An Enter the composer leaves alone is one the browser turns into a new line.
+	expect(await fireEvent.keyDown(box(), { key: 'Enter' })).toBe(true);
+	expect(transport.requests('send')).toEqual([]);
+
+	await fireEvent.input(box(), { target: { value: 'first line\nsecond line' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: 'first line\nsecond line' }]);
+	transport.respond('send', {});
+	await waitFor(() => expect(box().value).toBe(''));
+});
+
+test('without a touch screen the hint says Enter sends', async () => {
+	const { client } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(screen.getByText('Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.')).toBeTruthy();
+});
+
 test('a message the hub could not deliver stays in the box, with the reason under it', async () => {
 	const { client, transport } = await connectedClient([summary('a1')]);
 	render(Composer, { client, sessionId: summary('a1').id });
@@ -80,9 +102,9 @@ async function typed(text: string): Promise<void> {
 	await fireEvent.input(box(), { target: { value: text } });
 }
 
-async function withCommands(sessions = [summary('a1')]) {
+async function withCommands(sessions = [summary('a1')], touch = false) {
 	const connected = await connectedClient(sessions);
-	render(Composer, { client: connected.client, sessionId: sessions[0]!.id });
+	render(Composer, { client: connected.client, sessionId: sessions[0]!.id, touch });
 	await typed('/');
 	connected.transport.respond('listCommands', { commands });
 	await screen.findByRole('listbox', { name: 'Commands' });
@@ -134,6 +156,16 @@ test('Enter takes the highlighted command instead of sending, and the next Enter
 	expect(transport.requests('send')).toEqual([]);
 	await fireEvent.keyDown(box(), { key: 'Enter' });
 	expect(transport.requests('send')).toMatchObject([{ sessionId: 'a1', text: '/clear ' }]);
+});
+
+test('on a touch screen, Enter adds a line even while a command is highlighted, and a tap takes the command', async () => {
+	const { transport } = await withCommands([summary('a1')], true);
+	await typed('/clea');
+	expect(await fireEvent.keyDown(box(), { key: 'Enter' })).toBe(true);
+	expect(box().value).toBe('/clea');
+	await fireEvent.click(screen.getByRole('option'));
+	expect(box().value).toBe('/clear ');
+	expect(transport.requests('send')).toEqual([]);
 });
 
 // Claude Code runs a fully typed command on the first Enter, so the suggestion of the same command must not ask for a second one.
