@@ -6,7 +6,7 @@
 	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
 
-	let { client, onported }: { client: HubClient; onported: (ported: Result<'portSession'>) => void } = $props();
+	let { client, narrow = false, onback, onported }: { client: HubClient; narrow?: boolean; onback?: () => void; onported: (ported: Result<'portSession'>) => void } = $props();
 	let dialog: HTMLDialogElement | undefined = $state();
 	let model = $state<ModelAlias | ''>('');
 	let effort = $state<Effort | ''>('');
@@ -56,7 +56,12 @@
 
 {#if view}
 	{@const session = view.session}
-	<header class="header">
+	<header class="header" class:narrow>
+		{#if narrow}
+			<button class="btn-icon" aria-label="Back to the sessions" onclick={onback}>
+				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+			</button>
+		{/if}
 		<div class="heading">
 			<p class="kind">Outside orfoni</p>
 			<h1>{otherName(session)}</h1>

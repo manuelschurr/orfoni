@@ -152,6 +152,36 @@ textarea {
 	border-color: transparent;
 }
 
+/* A button that shows only an icon, as large as a finger needs. */
+.btn-icon {
+	display: grid;
+	flex: none;
+	place-items: center;
+	width: 2.5rem;
+	height: 2.5rem;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-control);
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.btn-icon:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.btn-icon svg {
+	width: 1.15rem;
+	height: 1.15rem;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.6;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
 .field {
 	width: 100%;
 	padding: 0.55rem 0.7rem;

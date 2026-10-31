@@ -1,9 +1,9 @@
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { afterEach, beforeAll, expect, test, vi } from 'vitest';
-import App from './App.svelte';
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest';
+import App, { NARROW } from './App.svelte';
 import type { Settings } from './lib/tauri-transport';
-import { otherSession, spoken, stubDialogs, summary } from './lib/testing';
+import { otherSession, spoken, stubDialogs, stubMedia, summary } from './lib/testing';
 
 type Internals = {
 	invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -34,6 +34,10 @@ function inTauri(handle: Handler): string[] {
 }
 
 beforeAll(stubDialogs);
+
+beforeEach(() => {
+	stubMedia();
+});
 
 afterEach(() => {
 	cleanup();
@@ -152,7 +156,7 @@ function notifications(): { title: string; body?: string; extra?: Record<string,
 	return shown;
 }
 
-function withSessions(sessions: ReturnType<typeof summary>[]) {
+function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType<typeof otherSession>[] = []) {
 	const hub = { line: (_message: unknown) => {}, click: (_message: unknown) => {} };
 	const commands = inTauri((cmd, args, push) => {
 		switch (cmd) {
@@ -163,10 +167,13 @@ function withSessions(sessions: ReturnType<typeof summary>[]) {
 				push({ kind: 'status', value: { kind: 'connected' } });
 				return { kind: 'connected' };
 			case 'hub_send': {
-				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string };
+				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string; pid?: number };
 				if (request.method === 'listSessions') hub.line({ type: 'response', id: request.id, ok: true, result: sessions });
+				if (request.method === 'listOtherSessions') hub.line({ type: 'response', id: request.id, ok: true, result: others });
 				const opened = sessions.find((session) => session.id === request.sessionId);
 				if (request.method === 'openSession' && opened) hub.line({ type: 'response', id: request.id, ok: true, result: { session: opened, chat: [] } });
+				const other = others.find((candidate) => candidate.pid === request.pid);
+				if (request.method === 'openOtherSession' && other) hub.line({ type: 'response', id: request.id, ok: true, result: { session: other, chat: [] } });
 				return null;
 			}
 			case 'plugin:notification|register_listener': {
@@ -371,4 +378,83 @@ test('in Tauri, the sidebar shows the installed version next to the app name', a
 	render(App);
 	const sidebar = await screen.findByRole('navigation', { name: 'Sessions' });
 	expect(await within(sidebar).findByText('0.3.42')).toBeTruthy();
+});
+
+// The entries the app pushed for what a narrow window stacks over the session list.
+function layers(): number {
+	return (history.state as { layers?: number } | null)?.layers ?? 0;
+}
+
+const narrowWindow = (query: string) => query === NARROW;
+
+test('on a narrow screen, opening a session pushes a history entry, and the back control closes the conversation and takes the entry back', async () => {
+	stubMedia(narrowWindow);
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+	expect(layers()).toBe(1);
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to the sessions' }));
+	expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+	expect(screen.getByRole('button', { name: /^Fix the login page/ }).getAttribute('aria-current')).toBeNull();
+	await waitFor(() => expect(layers()).toBe(0));
+});
+
+test("on a narrow screen, going back in the history, as Android's back gesture does, closes the conversation", async () => {
+	stubMedia(narrowWindow);
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+
+	history.back();
+	await waitFor(() => expect(screen.queryByRole('heading', { level: 1 })).toBeNull());
+	expect(layers()).toBe(0);
+	expect(screen.getByRole('button', { name: /^Fix the login page/ }).getAttribute('aria-current')).toBeNull();
+});
+
+test('on a narrow screen, going back closes a session outside orfoni like one of its own', async () => {
+	stubMedia(narrowWindow);
+	withSessions([], [otherSession(1172033, { name: 'swarm-73' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^swarm-73/ }));
+	expect(await screen.findByText('Outside orfoni')).toBeTruthy();
+	expect(layers()).toBe(1);
+
+	history.back();
+	await waitFor(() => expect(screen.queryByText('Outside orfoni')).toBeNull());
+	expect(layers()).toBe(0);
+});
+
+test('on a narrow screen, a session that is removed while open takes its history entry along', async () => {
+	stubMedia(narrowWindow);
+	const { hub } = withSessions([summary('a1', 'idle', { title: 'Fix the login page' }), summary('a2', 'idle', { title: 'Upgrade vite' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+
+	hub.line({ type: 'sessionRemoved', sessionId: 'a1' });
+	await waitFor(() => expect(screen.queryByRole('heading', { level: 1 })).toBeNull());
+	await waitFor(() => expect(layers()).toBe(0));
+	expect(screen.getByRole('button', { name: /^Upgrade vite/ })).toBeTruthy();
+});
+
+test('on a wide screen, an open session has no back control and no history entry, and a window that narrows and widens again adds the entry and takes it back', async () => {
+	const resize = stubMedia();
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+	expect(screen.queryByRole('button', { name: 'Back to the sessions' })).toBeNull();
+	expect(layers()).toBe(0);
+
+	resize(narrowWindow);
+	await waitFor(() => expect(layers()).toBe(1));
+	expect(screen.getByRole('button', { name: 'Back to the sessions' })).toBeTruthy();
+
+	resize(() => false);
+	await waitFor(() => expect(layers()).toBe(0));
+	// Widening keeps the conversation open, beside the list again.
+	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
 });

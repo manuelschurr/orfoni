@@ -59,6 +59,21 @@ export function spoken(element: Element): string {
 	return copy.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
+// jsdom has no media queries, so a test says which queries match, and the function it gets back changes that and tells every list it handed out, like a window that is resized.
+export function stubMedia(matches: (query: string) => boolean = () => false): (next: (query: string) => boolean) => void {
+	let current = matches;
+	const lists: EventTarget[] = [];
+	window.matchMedia = (media: string) => {
+		const list = Object.defineProperties(new EventTarget(), { media: { value: media }, matches: { get: () => current(media) } }) as MediaQueryList;
+		lists.push(list);
+		return list;
+	};
+	return (next) => {
+		current = next;
+		for (const list of lists) list.dispatchEvent(new Event('change'));
+	};
+}
+
 // jsdom has no modal dialogs, and the dialogs open themselves with showModal.
 export function stubDialogs(): void {
 	HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {

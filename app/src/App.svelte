@@ -1,9 +1,15 @@
+<script lang="ts" module>
+	// Too narrow for the session list beside the conversation, or a phone on its side, which is too short for it.
+	export const NARROW = '(max-width: 700px), (pointer: coarse) and (max-height: 500px)';
+</script>
+
 <script lang="ts">
 	import type { HubStatus, SessionId, SessionSummary } from '@orfoni/protocol';
 	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { onMount, untrack } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { createTransports } from './lib/connect';
 	import { HubClient, type Result } from './lib/hub-client.svelte';
 	import { notices, onNoticeClick, showNotice } from './lib/notices';
@@ -45,6 +51,13 @@
 	const step = $derived(setup?.step);
 	const title = $derived(windowTitle(client?.sessions.values() ?? []));
 	const ready = $derived(client !== null && (step === undefined || step.kind === 'connected' || (step.kind === 'settings' && step.cancellable)));
+	const narrow = new MediaQuery(NARROW);
+	// A narrow window shows one of them at a time.
+	const screen = $derived<'list' | 'conversation'>(session || client?.other ? 'conversation' : 'list');
+	// What a narrow window stacks over the session list. Each has an entry in the history, so Android's back gesture closes the front one and leaves the app at the list.
+	const depth = $derived(narrow.current && screen === 'conversation' ? 1 : 0);
+	// The entries this page pushed. A reload stays on the entry it was on, so the count starts from there.
+	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
 
 	let version = $state<string | null>(null);
 	// The sessions as the last look saw them, so a change of state can be told apart from a session that was already in it.
@@ -94,6 +107,26 @@
 		if (isTauri()) getCurrentWindow().setTitle(title).catch((error: unknown) => console.warn('set_title', error));
 	});
 
+	// The layers lead and the history follows, so a layer closed by a button or by the hub takes its entry along.
+	$effect(() => syncHistory());
+
+	function syncHistory(): void {
+		while (pushed < depth) history.pushState({ layers: ++pushed }, '');
+		if (pushed > depth) {
+			history.go(depth - pushed);
+			pushed = depth;
+		}
+	}
+
+	// Going back from Android's gesture or the browser closes what the entries left behind stood for. Going back from syncHistory arrives here with nothing left to close.
+	function popped(event: PopStateEvent): void {
+		const at = (event.state as { layers?: number } | null)?.layers ?? 0;
+		if (at === pushed) return;
+		pushed = at;
+		if (at < 1) void client?.select(null);
+		syncHistory();
+	}
+
 	function started({ session: created, needsTrust, memoryWarning }: Result<'startSession'>): void {
 		if (needsTrust) untrusted = [...untrusted, created.id];
 		if (memoryWarning) lowMemory = [...lowMemory, { id: created.id, memory: memoryWarning }];
@@ -126,17 +159,17 @@
 	}
 </script>
 
-<svelte:window onkeydown={switchPane} />
+<svelte:window onkeydown={switchPane} onpopstate={popped} />
 
 {#if client && ready}
-	<div class="app" class:split={terminals.length > 0}>
+	<div class="app" class:split={terminals.length > 0} class:narrow={narrow.current} data-screen={screen}>
 		<Sidebar {client} {version} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
 		<main>
 			{#if session}
 				{#key session.id}
 					<div class="session">
 						<div class="conversation">
-							<SessionHeader {client} {session} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<SessionHeader {client} {session} narrow={narrow.current} onback={() => void client?.select(null)} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
 							<ChatView
 								{client}
 								chat={client.chats.get(session.id)}
@@ -170,7 +203,7 @@
 				{/key}
 			{:else if client.other}
 				{#key client.other.session.pid}
-					<OtherSessionView {client} onported={started} />
+					<OtherSessionView {client} narrow={narrow.current} onback={() => void client?.select(null)} onported={started} />
 				{/key}
 			{:else}
 				<div class="welcome">
@@ -236,6 +269,15 @@
 
 	.app.split {
 		grid-template-columns: 18.75rem minmax(26rem, 1fr) minmax(30rem, 1fr);
+	}
+
+	.app.narrow {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.app.narrow[data-screen='conversation'] > :global(nav),
+	.app.narrow[data-screen='list'] > main {
+		display: none;
 	}
 
 	main {

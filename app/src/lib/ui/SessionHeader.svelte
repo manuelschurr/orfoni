@@ -7,10 +7,20 @@
 	let {
 		client,
 		session,
+		narrow = false,
+		onback,
 		onterminal,
 		onshell,
 		onforked,
-	}: { client: HubClient; session: SessionSummary; onterminal: () => void; onshell: (target: string) => void; onforked: (forked: Result<'forkSession'>) => void } = $props();
+	}: {
+		client: HubClient;
+		session: SessionSummary;
+		narrow?: boolean;
+		onback?: () => void;
+		onterminal: () => void;
+		onshell: (target: string) => void;
+		onforked: (forked: Result<'forkSession'>) => void;
+	} = $props();
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let confirm: HTMLDialogElement | undefined = $state();
@@ -117,7 +127,12 @@
 	}
 </script>
 
-<header class="header">
+<header class="header" class:narrow>
+	{#if narrow}
+		<button class="btn-icon" aria-label="Back to the sessions" onclick={onback}>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg>
+		</button>
+	{/if}
 	<div class="heading">
 		{#if renaming !== null}
 			<input
