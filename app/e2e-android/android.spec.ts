@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { _android, expect, test, type AndroidDevice, type Page } from '@playwright/test';
 import type { SessionId } from '@orfoni/protocol';
@@ -73,6 +73,17 @@ async function logIn(page: Page): Promise<string> {
 	return publicKey;
 }
 
+// The page fits the phone's width, unzoomed, without scrolling sideways.
+async function expectNoSidewaysScroll(page: Page): Promise<void> {
+	const fit = await page.evaluate(() => ({ width: innerWidth, scroll: document.scrollingElement!.scrollWidth, scale: visualViewport?.scale ?? 1 }));
+	expect(fit).toEqual({ width: 384, scroll: 384, scale: 1 });
+}
+
+// The phone's own screenshot, since one taken through the WebView can come out tiled. It stays in the git-ignored test results.
+async function phoneScreenshot(name: string): Promise<void> {
+	writeFileSync(test.info().outputPath(name), execFileSync('adb', ['exec-out', 'screencap', '-p'], { env: { ...process.env, PATH: `/opt/android-sdk/platform-tools:${process.env.PATH}` }, maxBuffer: 64 * 1024 * 1024 }));
+}
+
 async function startSession(title: string, prompt: string): Promise<SessionId> {
 	const result = (await hub.request('startSession', { projectDir: newProjectDir(), model: 'haiku', permissionMode: 'default', title, prompt })) as Started;
 	started.push(result.session.id);
@@ -93,7 +104,22 @@ test('on the phone, orfoni makes its own key, logs in with it, and gets Claude t
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByRole('article', { name: 'You' }).last()).toContainText(`second-${tag}`);
 	await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText(`second-${tag}`, { timeout: REPLY_MS });
-	await page.screenshot({ path: test.info().outputPath('answered.png') });
+	await phoneScreenshot('conversation.png');
+	await expectNoSidewaysScroll(page);
+
+	const main = page.getByRole('main');
+	await main.getByRole('button', { name: 'More' }).click();
+	await expect(main.getByRole('button', { name: 'Terminal' })).toBeVisible();
+	await expect(main.getByRole('combobox', { name: 'Model' })).toBeVisible();
+	await expectNoSidewaysScroll(page);
+	await phoneScreenshot('more.png');
+
+	// Android's back gesture closes the conversation and shows the session list again.
+	adb('shell', 'input', 'keyevent', 'KEYCODE_BACK');
+	await expect(page.getByRole('navigation', { name: 'Sessions' })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Message' })).toBeHidden();
+	await expectNoSidewaysScroll(page);
+	await phoneScreenshot('list.png');
 	const fingerprint = execFileSync('ssh-keygen', ['-lf', '-'], { input: publicKey, encoding: 'utf8' }).split(' ')[1]!;
 	expect(readFileSync(`${SERVER}/sshd.log`, 'utf8')).toContain(`ED25519 ${fingerprint}`);
 });
