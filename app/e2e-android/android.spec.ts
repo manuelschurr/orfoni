@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { _android, expect, test, type AndroidDevice, type Page } from '@playwright/test';
 import type { SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, HubClient, newProjectDir, type Started } from '../../hub/test/e2e/client';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, type Started } from '../../hub/test/e2e/client';
 
 const PACKAGE = 'com.orfoni.app.debug';
 const SERVER = '/var/tmp/claude-0/orfoni-android-sshd';
@@ -21,8 +21,21 @@ function adb(...args: string[]): string {
 async function freshApp(): Promise<Page> {
 	adb('shell', 'am', 'force-stop', PACKAGE);
 	adb('shell', `run-as ${PACKAGE} rm -rf settings.json known-hosts.json ssh`);
-	adb('shell', 'am', 'start', '-n', `${PACKAGE}/com.orfoni.app.MainActivity`);
-	const webview = await device.webView({ pkg: PACKAGE }, { timeout: 30_000 });
+	return appPage();
+}
+
+// Starts the app or brings it to the front, and connects to the WebView of the process running now, since the socket of one that was just stopped can linger.
+async function appPage(): Promise<Page> {
+	adb('shell', 'am', 'start', '-W', '-n', `${PACKAGE}/com.orfoni.app.MainActivity`);
+	const socketName = await eventually(
+		async () => {
+			const pid = adb('shell', `pidof ${PACKAGE} || true`).trim();
+			return pid !== '' && adb('shell', `grep -a webview_devtools_remote_${pid} /proc/net/unix || true`).includes(pid) ? `webview_devtools_remote_${pid}` : null;
+		},
+		(name) => name !== null,
+		30_000,
+	);
+	const webview = await device.webView({ socketName: socketName! }, { timeout: 30_000 });
 	return webview.page();
 }
 
@@ -41,9 +54,8 @@ test.afterAll(async () => {
 	await device.close();
 });
 
-test('on the phone, orfoni makes its own key, logs in with it, and gets Claude to answer a message sent from the phone', async () => {
-	const tag = randomUUID().slice(0, 8);
-	const page = await freshApp();
+// From a fresh start: make a key on the phone, authorize it on the throwaway sshd, log in, and trust the host key, checked against the server's.
+async function logIn(page: Page): Promise<string> {
 	const settings = page.getByRole('dialog', { name: 'Connect to the VPS' });
 	await settings.getByRole('button', { name: 'Make a key on this phone' }).click();
 	const publicKey = await settings.getByLabel('Public key').inputValue();
@@ -53,16 +65,27 @@ test('on the phone, orfoni makes its own key, logs in with it, and gets Claude t
 	await settings.getByLabel('Port').fill('2422');
 	await settings.getByLabel('User').fill('root');
 	await settings.getByRole('button', { name: 'Save and connect' }).click();
-
 	const hostKey = execFileSync('ssh-keygen', ['-lf', `${SERVER}/host_key.pub`, '-E', 'sha256'], { encoding: 'utf8' }).split(' ')[1]!;
 	const trust = page.getByRole('dialog', { name: 'Trust this host?' });
 	await expect(trust).toContainText(hostKey);
 	await trust.getByRole('button', { name: 'Trust and connect' }).click();
 	await expect(page.getByRole('navigation', { name: 'Sessions' })).toBeVisible();
+	return publicKey;
+}
 
-	const result = (await hub.request('startSession', { projectDir: newProjectDir(), model: 'haiku', permissionMode: 'default', title: `phone ${tag}`, prompt: `Reply with exactly: first-${tag}` })) as Started;
+async function startSession(title: string, prompt: string): Promise<SessionId> {
+	const result = (await hub.request('startSession', { projectDir: newProjectDir(), model: 'haiku', permissionMode: 'default', title, prompt })) as Started;
 	started.push(result.session.id);
 	await acceptTrustPrompt(result);
+	return result.session.id;
+}
+
+test('on the phone, orfoni makes its own key, logs in with it, and gets Claude to answer a message sent from the phone', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const page = await freshApp();
+	const publicKey = await logIn(page);
+
+	await startSession(`phone ${tag}`, `Reply with exactly: first-${tag}`);
 	await page.getByRole('navigation', { name: 'Sessions' }).getByText(`phone ${tag}`).click();
 	await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText(`first-${tag}`, { timeout: REPLY_MS });
 
@@ -72,6 +95,26 @@ test('on the phone, orfoni makes its own key, logs in with it, and gets Claude t
 	await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText(`second-${tag}`, { timeout: REPLY_MS });
 	await page.screenshot({ path: test.info().outputPath('answered.png') });
 	const fingerprint = execFileSync('ssh-keygen', ['-lf', '-'], { input: publicKey, encoding: 'utf8' }).split(' ')[1]!;
-	expect(readFileSync(`${SERVER}/sshd.log`, 'utf8')).toContain(`Accepted publickey for root from 127.0.0.1`);
 	expect(readFileSync(`${SERVER}/sshd.log`, 'utf8')).toContain(`ED25519 ${fingerprint}`);
+});
+
+function logins(publicKey: string): number {
+	const fingerprint = execFileSync('ssh-keygen', ['-lf', '-'], { input: publicKey, encoding: 'utf8' }).split(' ')[1]!;
+	return readFileSync(`${SERVER}/sshd.log`, 'utf8').split('\n').filter((line) => line.includes('Accepted publickey') && line.includes(fingerprint)).length;
+}
+
+// Android can freeze or cut off an app in the background; the check drops the connection on the server's side meanwhile, so the app has to log in again when it comes back.
+test('back from a minute in the background with its connection gone, orfoni logs in again and shows what the hub reports', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const publicKey = await logIn(await freshApp());
+	expect(logins(publicKey)).toBe(1);
+	adb('shell', 'input', 'keyevent', 'KEYCODE_HOME');
+	await new Promise((resolve) => setTimeout(resolve, 5_000));
+	execFileSync('pkill', ['-P', readFileSync(`${SERVER}/sshd.pid`, 'utf8').trim()]);
+	await new Promise((resolve) => setTimeout(resolve, 55_000));
+	const page = await appPage();
+	await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 60_000 });
+	await startSession(`back ${tag}`, 'Reply with exactly: ok');
+	await expect(page.getByRole('navigation', { name: 'Sessions' }).getByText(`back ${tag}`)).toBeVisible({ timeout: 30_000 });
+	expect(logins(publicKey)).toBeGreaterThan(1);
 });
