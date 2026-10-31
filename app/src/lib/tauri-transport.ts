@@ -26,6 +26,29 @@ export function saveSettings(settings: Settings): Promise<void> {
 	return invoke('settings_set', { settings });
 }
 
+export interface KeyInfo {
+	path: string;
+	publicKey: string;
+	fingerprint: string;
+}
+
+// A phone has no ~/.ssh to point at, so orfoni keeps a key of its own there, in its app data.
+export function usesAppKey(): boolean {
+	return /Android/.test(navigator.userAgent);
+}
+
+export function keyInfo(): Promise<KeyInfo | null> {
+	return invoke('key_info');
+}
+
+export function createKey(replace: boolean): Promise<KeyInfo> {
+	return invoke('key_create', { replace });
+}
+
+export function importKey(text: string, replace: boolean): Promise<KeyInfo> {
+	return invoke('key_import', { text, replace });
+}
+
 export class TauriHubTransport implements HubTransport {
 	#lineListeners: ((line: string) => void)[] = [];
 	#statusListeners: ((status: ConnectionStatus) => void)[] = [];
