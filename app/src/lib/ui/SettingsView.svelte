@@ -117,7 +117,7 @@
 				{#if key}
 					<label for="settings-public">Public key</label>
 					<textarea id="settings-public" bind:this={publicKeyBox} class="field mono public" readonly rows="3" value={key.publicKey} aria-describedby="settings-public-hint"></textarea>
-					<span id="settings-public-hint" class="hint">Add this line to ~/.ssh/authorized_keys of the user above on the VPS. Fingerprint {key.fingerprint}.</span>
+					<span id="settings-public-hint" class="hint unbroken">Add this line to ~/.ssh/authorized_keys of the user above on the VPS. Fingerprint {key.fingerprint}.</span>
 					<div class="key">
 						<button type="button" class="btn" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
 						{#if !replacing}<button type="button" class="btn btn-quiet" onclick={() => (replacing = true)}>Replace the key</button>{/if}
@@ -181,6 +181,11 @@
 		font-size: 0.8125rem;
 		resize: none;
 		word-break: break-all;
+	}
+
+	/* A fingerprint is one long word, which would stretch the dialog past a phone's width. */
+	.unbroken {
+		overflow-wrap: anywhere;
 	}
 
 	.label {
