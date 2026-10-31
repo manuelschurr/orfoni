@@ -53,6 +53,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app.manage(commands::AppState::new(&app.path().app_data_dir()?));
             Ok(())
         })

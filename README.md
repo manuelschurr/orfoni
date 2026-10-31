@@ -51,7 +51,9 @@ To open a session's terminal on the server, run `tmux -L orfoni attach -t =orfon
 
 ## Windows
 
-The Windows installer comes from the `windows` GitHub Actions workflow. Open the repository's Actions tab, pick the latest successful `windows` run (or start one with Run workflow), and download the `orfoni-windows-installer` artifact. It is a zip that holds the NSIS setup file. The installer is not signed, so Windows SmartScreen warns about it, and More info, then Run anyway, installs it. The app needs Microsoft Edge WebView2, which Windows 10 and 11 normally have already.
+Each release on the repository's Releases page carries the Windows installer, `orfoni_<version>_x64-setup.exe`, which the `windows` GitHub Actions workflow builds. The installer is not signed, so Windows SmartScreen warns about it, and More info, then Run anyway, installs it. The app needs Microsoft Edge WebView2, which Windows 10 and 11 normally have already.
+
+From 0.3.19 on, orfoni updates itself. When a newer release is out, the session list shows Update to <version> under the orfoni name. A click downloads it, checks that it carries the release key's signature, installs it without further questions, and starts orfoni again. orfoni looks for one when it starts and every six hours. Earlier versions have no updater, so 0.3.19 is installed by hand once.
 
 On the first start the app asks for the connection settings:
 
@@ -127,6 +129,8 @@ npx playwright test -c app/e2e-android
 ```
 
 Releases are signed with one key. Make it once with `tools/android/release-key.sh` and back up `~/.config/orfoni/android` outside the server, since Android installs an update only when its signature matches. After the windows workflow published a release, `tools/android/release.sh <version>` builds the signed APK at that version and attaches it to the release. `tools/release.sh` does both in one go: it starts the windows workflow, waits for its release, and attaches the APK.
+
+The Windows app installs only updates signed with the updater key. `npx tauri signer generate` made it once, without a passphrase, in `~/.config/orfoni/updater`. Its public half sits in `tauri.conf.json` and the private key in the repository secret `TAURI_SIGNING_PRIVATE_KEY`, and the workflow fails without it. Back it up with the Android key: without it, installed apps can no longer update, and a build with a new key has to be installed by hand. The workflow signs the installer and writes `latest.json` next to it, and `tools/check-update.mjs` checks the signature against the public key before the release goes out. Run without arguments, it checks the live release.
 
 ## License
 

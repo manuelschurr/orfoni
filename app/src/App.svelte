@@ -15,6 +15,7 @@
 	import { askToNotify, onNoticeClick } from './lib/notices';
 	import { Setup } from './lib/setup.svelte';
 	import { loadSettings, saveSettings } from './lib/tauri-transport';
+	import { findUpdate } from './lib/updates';
 	import type { TerminalTransport } from './lib/transport';
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
@@ -172,7 +173,7 @@
 
 {#if client && ready}
 	<div class="app" class:split={terminals.length > 0} class:narrow={narrow.current} data-screen={screen}>
-		<Sidebar {client} {version} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
+		<Sidebar {client} {version} findUpdate={isTauri() ? findUpdate : undefined} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} />
 		<main>
 			{#if session}
 				{#key session.id}

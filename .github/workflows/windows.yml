@@ -48,11 +48,17 @@ jobs:
           "
       - run: cargo test --manifest-path app/src-tauri/Cargo.toml
       - run: npm ci
+      # The updater installs only what this key signed. Without the secret the build fails, rather than ship an installer the app cannot update from.
       - run: npm run tauri -w app -- build --bundles nsis
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
       - uses: actions/upload-artifact@v7
         with:
           name: orfoni-windows-installer
-          path: app/src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
 
   release:
@@ -61,11 +67,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: orfoni-windows-installer
           path: installer
+      # The installed app reads latest.json from the newest release to find its update.
+      - env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          exe=$(ls installer/*.exe)
+          jq -n --arg version "$VERSION" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg signature "$(cat "$exe.sig")" --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/$(basename "$exe")" \
+            '{version: $version, pub_date: $date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > installer/latest.json
+          node tools/check-update.mjs installer/latest.json installer
       - env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
-        run: gh release create "v$VERSION" installer/*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "orfoni $VERSION" --notes "Windows installer built from $GITHUB_SHA. It is not signed, so SmartScreen asks first; choose More info, then Run anyway." --generate-notes
+        run: gh release create "v$VERSION" installer/*.exe installer/latest.json --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "orfoni $VERSION" --notes "Windows installer built from $GITHUB_SHA. It is not signed, so SmartScreen asks first; choose More info, then Run anyway. Once installed, orfoni offers its next versions itself." --generate-notes

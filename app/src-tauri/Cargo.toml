@@ -32,3 +32,6 @@ getrandom = "0.3.4"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2.14.0"

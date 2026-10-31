@@ -4,8 +4,10 @@
 	import OtherSessionRow from './OtherSessionRow.svelte';
 	import SessionRow from './SessionRow.svelte';
 	import StatusBar from './StatusBar.svelte';
+	import UpdateButton from './UpdateButton.svelte';
+	import type { Update } from '../updates';
 
-	let { client, version = null, onnew, onsettings }: { client: HubClient; version?: string | null; onnew: () => void; onsettings?: () => void } = $props();
+	let { client, version = null, findUpdate, onnew, onsettings }: { client: HubClient; version?: string | null; findUpdate?: () => Promise<Update | null>; onnew: () => void; onsettings?: () => void } = $props();
 	let now = $state(Date.now());
 
 	$effect(() => {
@@ -33,6 +35,7 @@
 		<span class="brand">orfoni{#if version}<span class="version" title="Installed version">{version}</span>{/if}</span>
 		<button class="btn" onclick={onnew}>New session</button>
 	</div>
+	{#if findUpdate}<UpdateButton find={findUpdate} />{/if}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="groups" onkeydown={arrowKeys}>
 		{#each groups as group (group.dir)}
