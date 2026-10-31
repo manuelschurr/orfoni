@@ -212,8 +212,21 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		await client.waitForChat(id, (item) => item.kind === 'assistant');
 		execFileSync('systemctl', ['--user', 'restart', 'orfoni-hub']);
 		client.close();
-		await sleep(1500);
-		client = HubClient.connect();
+		// The hub restores its sessions before it listens, which takes longer the more sessions it keeps.
+		client = await eventually(
+			async () => {
+				const fresh = HubClient.connect();
+				try {
+					await fresh.request('listSessions', {});
+					return fresh;
+				} catch {
+					fresh.close();
+					return null;
+				}
+			},
+			(connected) => connected !== null,
+			30_000,
+		).then((connected) => connected!);
 		let state = '';
 		for (let i = 0; i < 120 && state !== 'answered'; i++) {
 			const sessions = (await client.request('listSessions', {})) as { id: string; state: string }[];
