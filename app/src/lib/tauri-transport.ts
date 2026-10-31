@@ -7,6 +7,8 @@ export interface Settings {
 	user: string;
 	keyPath: string;
 	hubCommand: string;
+	// On Android, whether orfoni stays connected in the background, so approvals and answers arrive while it is closed.
+	background: boolean;
 }
 
 export type ConnectOutcome =

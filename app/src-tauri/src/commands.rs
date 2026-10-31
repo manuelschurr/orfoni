@@ -8,6 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 
+use crate::background;
 use crate::keys::{self, KeyInfo};
 use crate::known_hosts::KnownHosts;
 use crate::link::{HubLink, LinkEvent};
@@ -37,6 +38,10 @@ impl AppState {
             next_terminal: AtomicU32::new(1),
             focused: AtomicBool::new(true),
         }
+    }
+
+    fn stays_connected(&self) -> bool {
+        Settings::load(&self.settings_path).is_ok_and(|settings| settings.background)
     }
 
     /// Whether the app's window is in front, where the app itself shows what a notice would say.
@@ -144,21 +149,28 @@ pub async fn connect(
     passphrase: Option<String>,
     events: Channel<LinkEvent>,
 ) -> Result<ConnectOutcome, String> {
+    let notify = app.clone();
     state
         .connect(passphrase, move |event| {
             if let LinkEvent::Line(line) = &event
                 && let Some(notice) = Notice::parse(line)
             {
-                notices::show(&app, notice);
+                notices::show(&notify, notice);
             }
             let _ = events.send(event);
         })
         .await
+        .inspect(|outcome| {
+            if matches!(outcome, ConnectOutcome::Connected) {
+                background::stay_connected(&app, state.stays_connected());
+            }
+        })
 }
 
 #[tauri::command]
-pub fn disconnect(state: State<'_, AppState>) {
+pub fn disconnect(app: AppHandle, state: State<'_, AppState>) {
     state.disconnect();
+    background::stay_connected(&app, false);
 }
 
 #[tauri::command]

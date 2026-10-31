@@ -183,6 +183,7 @@ impl PrivateSshd {
             user: run("id", &["-un"]).trim().to_string(),
             key_path: self.path("client_key").to_string_lossy().into_owned(),
             hub_command: hub_command.into(),
+            background: true,
         }
     }
 

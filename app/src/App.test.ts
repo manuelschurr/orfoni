@@ -12,7 +12,7 @@ type Internals = {
 type Handler = (cmd: string, args: Record<string, unknown>, push: (message: unknown) => void) => unknown;
 
 const GB = 1024 ** 3;
-const settings: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect' };
+const settings: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect', background: true };
 const globals = window as unknown as { __TAURI_INTERNALS__: Internals; isTauri?: boolean };
 
 function inTauri(handle: Handler): string[] {

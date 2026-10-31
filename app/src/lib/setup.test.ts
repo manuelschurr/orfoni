@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { Setup, type SetupPort } from './setup.svelte';
 import type { ConnectOutcome, Settings } from './tauri-transport';
 
-const saved: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect' };
+const saved: Settings = { host: 'vps.example.org', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect', background: true };
 
 function fakePort(outcomes: ConnectOutcome[], settings: Settings = saved) {
 	const calls = { connect: [] as (string | undefined)[], trusted: [] as string[], saved: [] as Settings[] };

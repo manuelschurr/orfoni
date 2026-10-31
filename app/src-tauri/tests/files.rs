@@ -18,8 +18,19 @@ fn settings_start_with_the_defaults_and_no_host() {
             "user": "root",
             "keyPath": "~/.ssh/id_ed25519",
             "hubCommand": "\"$HOME/.local/bin/orfoni-hub\" connect",
+            "background": true,
         })
     );
+}
+
+// Settings saved before the app could stay connected in the background start with it on.
+#[test]
+fn older_settings_stay_connected_in_the_background() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, r#"{"version":1,"host":"vps","port":22,"user":"root","keyPath":"/k","hubCommand":"hub"}"#).unwrap();
+
+    assert!(Settings::load(&path).unwrap().background);
 }
 
 #[test]
@@ -32,6 +43,7 @@ fn saved_settings_load_back() {
         user: "manuel".into(),
         key_path: "C:\\Users\\manuel\\.ssh\\id_ed25519".into(),
         hub_command: "orfoni-hub connect".into(),
+        background: true,
     };
 
     settings.save(&path).unwrap();

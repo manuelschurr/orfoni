@@ -74,7 +74,7 @@
 	function save(event: SubmitEvent): void {
 		event.preventDefault();
 		const keyPath = appKey ? (key?.path ?? '') : draft.keyPath.trim();
-		const next: Settings = { host: draft.host.trim(), port: Number(draft.port), user: draft.user.trim(), keyPath, hubCommand: draft.hubCommand.trim() };
+		const next: Settings = { host: draft.host.trim(), port: Number(draft.port), user: draft.user.trim(), keyPath, hubCommand: draft.hubCommand.trim(), background: draft.background };
 		problem = check(next);
 		if (problem === null) onsave(next);
 	}
@@ -150,6 +150,13 @@
 			<input id="settings-hub" class="field mono" bind:value={draft.hubCommand} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="settings-hub-hint" />
 			<span id="settings-hub-hint" class="hint">Runs on the VPS for every connection.</span>
 		</div>
+		{#if appKey}
+			<label class="check">
+				<input type="checkbox" bind:checked={draft.background} aria-describedby="settings-background-hint" />
+				<span>Stay connected in the background</span>
+			</label>
+			<span id="settings-background-hint" class="hint">Approvals and answers then arrive as notifications while orfoni is closed. Android shows that orfoni is connected as a notification of its own.</span>
+		{/if}
 		{#if problem ?? error}<p class="error" role="alert">{problem ?? error}</p>{/if}
 		<div class="buttons">
 			{#if cancellable}<button type="button" class="btn" onclick={oncancel}>Cancel</button>{/if}
@@ -190,6 +197,20 @@
 
 	.label {
 		font-weight: 600;
+	}
+
+	.check {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		margin-bottom: -0.6rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+
+	.check input {
+		width: 1.1rem;
+		height: 1.1rem;
 	}
 
 	/* The file input stays focusable for the keyboard inside the label that looks like a button. */

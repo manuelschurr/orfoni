@@ -13,6 +13,13 @@ pub struct Settings {
     pub user: String,
     pub key_path: String,
     pub hub_command: String,
+    /// On Android, whether the app stays connected while in the background, so the hub's notices still arrive.
+    #[serde(default = "stays_connected")]
+    pub background: bool,
+}
+
+fn stays_connected() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -24,6 +31,7 @@ impl Default for Settings {
             key_path: "~/.ssh/id_ed25519".into(),
             // A non-interactive SSH command does not have ~/.local/bin on its PATH.
             hub_command: "\"$HOME/.local/bin/orfoni-hub\" connect".into(),
+            background: true,
         }
     }
 }

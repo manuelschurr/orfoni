@@ -6,7 +6,7 @@ import { stubDialogs } from '../testing';
 import HostKeyDialog from './HostKeyDialog.svelte';
 import SettingsView from './SettingsView.svelte';
 
-const firstStart: Settings = { host: '', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect' };
+const firstStart: Settings = { host: '', port: 22, user: 'root', keyPath: '~/.ssh/id_ed25519', hubCommand: '"$HOME/.local/bin/orfoni-hub" connect', background: true };
 
 beforeAll(stubDialogs);
 
@@ -135,4 +135,24 @@ test('the address, user and hub command fields tell the keyboard not to capitali
 		const field = screen.getByLabelText(name);
 		expect([name, field.getAttribute('autocapitalize'), field.getAttribute('autocorrect')]).toEqual([name, 'off', 'off']);
 	}
+});
+
+// Android pauses an app in the background, so staying connected there is what lets approvals and answers arrive while orfoni is closed.
+test('on a phone, the settings say whether orfoni stays connected in the background, and on a desktop they leave it as it is', async () => {
+	onPhone((cmd) => (cmd === 'key_info' ? phoneKey : null));
+	const onsave = vi.fn();
+	const phone = render(SettingsView, { settings: { ...firstStart, host: 'vps.example.org', keyPath: phoneKey.path }, cancellable: true, onsave, oncancel: () => {} });
+	const box = (await screen.findByRole('checkbox', { name: 'Stay connected in the background' })) as HTMLInputElement;
+	expect(box.checked).toBe(true);
+	await fireEvent.click(box);
+	await fireEvent.click(screen.getByRole('button', { name: 'Save and connect' }));
+	expect(onsave).toHaveBeenLastCalledWith(expect.objectContaining({ background: false }));
+	phone.unmount();
+	vi.restoreAllMocks();
+
+	const desktop = vi.fn();
+	render(SettingsView, { settings: { ...firstStart, host: 'vps.example.org', background: false }, cancellable: true, onsave: desktop, oncancel: () => {} });
+	expect(screen.queryByRole('checkbox', { name: 'Stay connected in the background' })).toBeNull();
+	await fireEvent.click(screen.getByRole('button', { name: 'Save and connect' }));
+	expect(desktop).toHaveBeenLastCalledWith(expect.objectContaining({ background: false }));
 });
