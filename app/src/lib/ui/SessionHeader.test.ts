@@ -15,11 +15,11 @@ const taskList: TaskItem[] = [
 	{ id: '3', subject: 'Test 2: four pairs ranging at once', status: 'pending', activeForm: null },
 ];
 
-async function header(changes: Parameters<typeof summary>[2]) {
+async function header(changes: Parameters<typeof summary>[2], props: { narrow?: boolean; onback?: () => void; ontasks?: () => void } = {}) {
 	const session = summary('s1', 'working', { title: 'Fix the login page', ...changes });
 	const { client, transport } = await connectedClient([session]);
 	const forked = vi.fn();
-	const rendered = render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {}, onforked: forked });
+	const rendered = render(SessionHeader, { client, session, onterminal: () => {}, onshell: () => {}, onforked: forked, ...props });
 	// What the hub broadcasts when Claude Code reports, and the header the app then shows.
 	const report = (reported: Partial<SessionSummary>) => {
 		const next = { ...session, ...reported };
@@ -369,4 +369,57 @@ test('a session that has not reported its context shows none, and one that works
 	expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull();
 	report({ state: 'offline', context: 90 });
 	expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull();
+});
+
+test('a narrow header shows the back control, the title and the state, and keeps the actions, gauges and settings behind More', async () => {
+	const onback = vi.fn();
+	await header(
+		{ summary: { about: 'Moves the login form.', status: 'Tests pass, waiting on review.', at: 900 }, memory: { currentBytes: 2 * GB, maxBytes: 8 * GB, oomKills: 0 }, context: 40, model: opus, effort: 'high', permissionMode: 'default' },
+		{ narrow: true, onback },
+	);
+	expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Fix the login page');
+	expect(screen.getByText('Working')).toBeTruthy();
+	expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull();
+	expect(screen.queryByRole('meter', { name: 'Memory' })).toBeNull();
+	expect(screen.queryByText('Tests pass, waiting on review.')).toBeNull();
+
+	const more = screen.getByRole('button', { name: 'More' });
+	expect(more.getAttribute('aria-expanded')).toBe('false');
+	await fireEvent.click(more);
+	expect(more.getAttribute('aria-expanded')).toBe('true');
+	for (const name of ['Terminal', 'New shell', 'Fork', 'Interrupt', 'Stop', 'Remove']) expect(screen.getByRole('button', { name })).toBeTruthy();
+	for (const name of ['Model', 'Effort', 'Permissions']) expect(screen.getByRole('combobox', { name })).toBeTruthy();
+	for (const name of ['Memory', 'Context']) expect(screen.getByRole('meter', { name })).toBeTruthy();
+	expect(screen.getByText('Tests pass, waiting on review.')).toBeTruthy();
+	await fireEvent.click(more);
+	expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull();
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to the sessions' }));
+	expect(onback).toHaveBeenCalledOnce();
+});
+
+test('a narrow header has a control with the count of done tasks that opens the task list, and none without a task list', async () => {
+	const ontasks = vi.fn();
+	const { report } = await header({ taskList }, { narrow: true, ontasks });
+	const tasks = screen.getByRole('button', { name: 'Show the task list, 1 of 3 done' });
+	expect(tasks.textContent?.trim()).toBe('1/3');
+	await fireEvent.click(tasks);
+	expect(ontasks).toHaveBeenCalledOnce();
+	report({ taskList: null });
+	expect(screen.queryByRole('button', { name: /^Show the task list/ })).toBeNull();
+});
+
+test('a narrow header still renames the session', async () => {
+	const { transport, session } = await header({ state: 'idle' }, { narrow: true });
+	await fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+	await fireEvent.input(nameField(), { target: { value: 'Login redesign' } });
+	await fireEvent.keyDown(nameField(), { key: 'Enter' });
+	expect(transport.requests('renameSession')).toMatchObject([{ sessionId: session.id, title: 'Login redesign' }]);
+});
+
+test('a wide header shows its actions and gauges at once, with no back, task or More control', async () => {
+	await header({ taskList, memory: { currentBytes: 2 * GB, maxBytes: 8 * GB, oomKills: 0 } });
+	expect(screen.getByRole('button', { name: 'Terminal' })).toBeTruthy();
+	expect(screen.getByRole('meter', { name: 'Memory' })).toBeTruthy();
+	for (const name of ['Back to the sessions', 'More', /^Show the task list/]) expect(screen.queryByRole('button', { name })).toBeNull();
 });

@@ -9,6 +9,7 @@
 		session,
 		narrow = false,
 		onback,
+		ontasks,
 		onterminal,
 		onshell,
 		onforked,
@@ -17,6 +18,7 @@
 		session: SessionSummary;
 		narrow?: boolean;
 		onback?: () => void;
+		ontasks?: () => void;
 		onterminal: () => void;
 		onshell: (target: string) => void;
 		onforked: (forked: Result<'forkSession'>) => void;
@@ -31,6 +33,8 @@
 	// The name being typed while the title is a field, and null otherwise.
 	let renaming = $state<string | null>(null);
 	let nameField: HTMLInputElement | undefined = $state();
+	// Whether a narrow header shows its actions, gauges and settings.
+	let more = $state(false);
 	const id = $props.id();
 	const title = $derived(sessionTitle(session, client.chats.get(session.id)));
 	const memory = $derived(session.memory);
@@ -166,9 +170,29 @@
 			<span class="state"><span class="dot" data-state={session.state} aria-hidden="true"></span>{stateLabel[session.state]}</span>
 			<span class="folder" title={session.projectDir}>{session.projectDir}</span>
 		</p>
-		{#if session.summary}<p class="where" title={session.summary.status}>{session.summary.status}</p>{/if}
+		{#if session.summary && (!narrow || more)}<p class="where" title={session.summary.status}>{session.summary.status}</p>{/if}
 	</div>
-	<div class="actions">
+	{#if narrow && session.taskList?.length}
+		{@const done = session.taskList.filter((task) => task.status === 'completed').length}
+		<button class="tasks" aria-label="Show the task list, {done} of {session.taskList.length} done" onclick={ontasks}>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5l1.2 1.2 2-2.2M2.5 10.5l1.2 1.2 2-2.2M8 4.5h5.5M8 10.5h5.5" /></svg>
+			<span>{done}/{session.taskList.length}</span>
+		</button>
+	{/if}
+	{#if narrow}
+		<button class="btn-icon" aria-label="More" aria-expanded={more} aria-controls="{id}-actions {id}-gauges" onclick={() => (more = !more)}>
+			<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" /></svg>
+		</button>
+	{/if}
+	{#if !narrow || more}
+		{@render controls()}
+	{/if}
+	{#if error}<p class="error" role="alert">{error}</p>{/if}
+</header>
+
+<!-- The actions, gauges and settings, which a narrow header shows on request. -->
+{#snippet controls()}
+	<div class="actions" id="{id}-actions">
 		<button class="btn" onclick={onterminal}>Terminal</button>
 		<button
 			class="btn"
@@ -196,7 +220,7 @@
 		<button class="btn btn-danger" disabled={busy} onclick={() => confirm?.showModal()}>Remove</button>
 	</div>
 	{#if session.tasks || memory || session.context !== null || session.model || session.permissionMode || takesChanges}
-		<div class="gauges">
+		<div class="gauges" id="{id}-gauges">
 			{#if session.tasks}
 				{@const tasks = session.tasks}
 				<div class="gauge">
@@ -270,8 +294,7 @@
 			{/if}
 		</div>
 	{/if}
-	{#if error}<p class="error" role="alert">{error}</p>{/if}
-</header>
+{/snippet}
 
 {#snippet setting(name: Setting, label: string, choices: Choices)}
 	<label class="pick">
@@ -584,6 +607,90 @@
 		flex-basis: 100%;
 	}
 
+	/* One row with the back control, the title and the state, and the rest under it on request. */
+	.header.narrow {
+		gap: 0.25rem;
+		padding: 0.35rem 0.5rem 0.35rem 0.25rem;
+	}
+
+	.narrow .heading {
+		flex: 1 1 0;
+	}
+
+	.narrow h1 {
+		font-size: 1.05rem;
+	}
+
+	.narrow .title {
+		gap: 0;
+	}
+
+	.narrow .rename {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	.narrow .meta {
+		gap: 0.75rem;
+		margin: 0;
+	}
+
+	.narrow .where {
+		margin: 0.3rem 0 0.1rem;
+		white-space: normal;
+	}
+
+	.narrow .actions,
+	.narrow .gauges,
+	.narrow .error {
+		padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+	}
+
+	.narrow .actions {
+		display: grid;
+		flex-basis: 100%;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.narrow .actions .btn {
+		justify-content: center;
+	}
+
+	.narrow .gauges {
+		gap: 0.5rem 1.25rem;
+		padding-bottom: 0.6rem;
+	}
+
+	.narrow select {
+		min-height: 2.5rem;
+	}
+
+	.tasks {
+		display: flex;
+		flex: none;
+		align-items: center;
+		gap: 0.35rem;
+		height: 2.5rem;
+		padding: 0 0.65rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: none;
+		color: var(--muted);
+		font-size: 0.875rem;
+		font-variant-numeric: tabular-nums;
+		cursor: pointer;
+	}
+
+	.tasks svg {
+		width: 1rem;
+		height: 1rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
 	.confirm {
 		max-width: 30rem;
 		padding: 1.4rem 1.5rem 1.2rem;
@@ -629,5 +736,14 @@
 	.confirm .fork-error {
 		margin: -0.6rem 0 1rem;
 		color: var(--danger);
+	}
+
+	.narrow .dismiss {
+		min-height: 2.5rem;
+	}
+
+	:global(.narrow) .confirm {
+		max-width: calc(100vw - 2rem);
+		padding: 1.2rem 1rem 1rem;
 	}
 </style>
