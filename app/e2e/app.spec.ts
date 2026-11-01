@@ -34,6 +34,28 @@ async function openSession(page: Page, session: SessionSummary, url = APP): Prom
 	await page.locator(`[data-session="${session.id}"]`).click();
 }
 
+// A PDF of one page that says the text, which Claude reads.
+function onePagePdf(text: string): Buffer {
+	const content = `BT /F1 24 Tf 72 700 Td (${text}) Tj ET`;
+	const objects = [
+		'<< /Type /Catalog /Pages 2 0 R >>',
+		'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+		'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+		`<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+	];
+	let pdf = '%PDF-1.4\n';
+	const offsets = objects.map((object, index) => {
+		const offset = pdf.length;
+		pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+		return offset;
+	});
+	const xref = pdf.length;
+	pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
+	pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+	return Buffer.from(pdf, 'latin1');
+}
+
 function you(page: Page) {
 	return page.getByRole('article', { name: 'You' });
 }
@@ -527,6 +549,21 @@ test('the header shows how full the context is once Claude has answered, and the
 	// The status bar asks the hub every 30 s, and at once when the page loads.
 	await page.reload();
 	await expect(page.getByText(/^5-hour limit \d+% used, resets /)).toBeVisible({ timeout: 60_000 });
+});
+
+// The session starts in Manual mode, where Read asks first for a file outside the session's folder, as the uploads are.
+test('a PDF picked with the paperclip goes to Claude with the message, and the chat shows it by its name', async ({ page }) => {
+	const session = await startReady({ title: 'pdf check' });
+	await openSession(page, session);
+	await page.getByLabel('Attach images or PDFs').setInputFiles({ name: 'code word.pdf', mimeType: 'application/pdf', buffer: onePagePdf('The code word is OSPREY.') });
+	await expect(page.getByTitle('code word.pdf', { exact: true })).toBeVisible();
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await box.fill('What is the code word in this PDF? Reply with just the code word.');
+	await box.press('Enter');
+	await expect(you(page).last()).toHaveText('code_word.pdf What is the code word in this PDF? Reply with just the code word.', { timeout: 60_000 });
+	await expect(claude(page).last()).toContainText(/OSPREY/i, { timeout: REPLY_MS });
+	await expect(page.getByRole('list', { name: 'Attachments' })).toHaveCount(0);
+	await expect(page.getByRole('main').getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0);
 });
 
 test('an image pasted into the message box goes to Claude with the message', async ({ page }) => {
