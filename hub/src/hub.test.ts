@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, OtherSession, PastConversation, SessionId, SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Hub, type HubOptions } from './hub.js';
+import { documentName, Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
 import type { ApiKey, SummaryClient } from './summaries.js';
 import { AttachError, type Tmux } from './tmux.js';
@@ -317,7 +317,7 @@ describe('startSession', () => {
 				['claude', `--session-id=${claude}`, '--settings', settings, '--model', 'haiku', '--effort', 'low', '--permission-mode', 'plan', '--name', 'Notes', '--', '-x write a.txt'],
 			],
 		]);
-		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(started).toEqual({
 			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null },
 			needsTrust: true,
@@ -428,6 +428,14 @@ describe('notices', () => {
 		]);
 		expect(notices(other)).toEqual(notices(client));
 		expect(notices(client)[0]).toEqual({ type: 'notice', sessionId: id, kind: 'approval', title: 'Fix the login page', body: 'Claude needs your approval in proj' });
+	});
+
+	test('a session whose first message carries a PDF is named in its notices by the name of the PDF', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: `@${join(dir, 'uploads', randomUUID(), 'Q3_report.pdf')} Summarize it` }));
+		await hub.hook(id, body('Stop', claude));
+		expect(notices(client).map(({ title }) => title)).toEqual(['Q3_report.pdf Summarize it']);
 	});
 
 	// Claude Code's own signal that you should hear about something is its PushNotification tool, so the end of a turn a background task started is not news by itself.
@@ -567,7 +575,7 @@ describe('send', () => {
 		expect(sent).toMatchObject({ ok: false, error: { code: 'not_delivered', message: 'Claude Code did not attach the images within 30 s' } });
 	});
 
-	test('uploads older than a day are removed when the next images arrive', async () => {
+	test('uploads older than a day, PDFs in their folders too, are removed when the next upload arrives', async () => {
 		const client = await startHub();
 		const { id, claude } = await ready(client);
 		mkdirSync(join(dir, 'uploads'), { recursive: true });
@@ -575,11 +583,75 @@ describe('send', () => {
 		utimesSync(join(dir, 'uploads', 'old.png'), new Date(T0 - 25 * 3600_000), new Date(T0 - 25 * 3600_000));
 		writeFileSync(join(dir, 'uploads', 'recent.png'), 'recent');
 		utimesSync(join(dir, 'uploads', 'recent.png'), new Date(T0 - 23 * 3600_000), new Date(T0 - 23 * 3600_000));
+		mkdirSync(join(dir, 'uploads', 'old-pdf'));
+		writeFileSync(join(dir, 'uploads', 'old-pdf', 'a.pdf'), 'old');
+		utimesSync(join(dir, 'uploads', 'old-pdf'), new Date(T0 - 25 * 3600_000), new Date(T0 - 25 * 3600_000));
 		const sent = client.request('send', { sessionId: id, text: 'hi', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }] });
 		await untilRealTime(() => fake.of('submit').length === 1);
 		expect(readdirSync(join(dir, 'uploads'))).not.toContain('old.png');
+		expect(readdirSync(join(dir, 'uploads'))).not.toContain('old-pdf');
 		expect(readdirSync(join(dir, 'uploads'))).toContain('recent.png');
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: '[Image #1] hi' }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('saves each PDF of a message under its name in a folder of its own, mentions it ahead of the text, and resolves once the prompt hook shows the message', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const pdf = Buffer.from('%PDF-1.4 a report');
+		const sent = client.request('send', { sessionId: id, text: 'What does it say?', images: [], documents: [{ type: 'application/pdf', name: 'Report (final) März.pdf', data: pdf.toString('base64') }] });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		const [target, text] = fake.of('submit')[0] as [string, string];
+		expect(fake.of('submit')[0]).toHaveLength(2);
+		expect(target).toBe(`orfoni-${id}`);
+		const path = /^@(\S+) What does it say\?$/.exec(text)![1]!;
+		expect(path).toMatch(new RegExp(`^${join(dir, 'uploads')}/[0-9a-f-]{36}/Report_\\(final\\)_März\\.pdf$`));
+		expect(readFileSync(path)).toEqual(pdf);
+		expect(statSync(path).mode & 0o777).toBe(0o600);
+		expect(statSync(join(path, '..')).mode & 0o777).toBe(0o700);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: text }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('a PDF alone goes with a space after its mention, behind the images of the message', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		const pdf = { type: 'application/pdf' as const, name: 'a.pdf', data: Buffer.from('%PDF').toString('base64') };
+		const sent = client.request('send', { sessionId: id, text: '', images: [{ type: 'image/png', data: Buffer.from('x').toString('base64') }], documents: [pdf, { ...pdf, name: 'b.pdf' }] });
+		await untilRealTime(() => fake.of('submit').length === 1);
+		const [, text, paths] = fake.of('submit')[0] as [string, string, string[]];
+		expect(paths).toEqual([expect.stringMatching(/\/uploads\/[^/]+\.png$/)]);
+		expect(text).toMatch(/^@\S+\/a\.pdf @\S+\/b\.pdf $/);
+		// Claude Code trims the space off the end of the message.
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: `[Image #1] ${text.trimEnd()}` }));
+		expect(await sent).toMatchObject({ ok: true });
+	});
+
+	test('a PDF keeps the letters, digits and punctuation an @ mention takes, and ends in .pdf', () => {
+		expect(documentName('Rechnung März (2).pdf')).toBe('Rechnung_März_(2).pdf');
+		expect(documentName('q3+q4,final.PDF')).toBe('q3+q4,final.pdf');
+		expect(documentName('scan')).toBe('scan.pdf');
+		expect(documentName('a "quoted" \\ name\t.pdf')).toBe('a_quoted_name_.pdf');
+		expect(documentName('../../etc/passwd.pdf')).toBe('etc_passwd.pdf');
+		expect(documentName('.pdf')).toBe('document.pdf');
+		expect(documentName(`${'x'.repeat(300)}.pdf`)).toBe(`${'x'.repeat(100)}.pdf`);
+	});
+
+	test('a message with a PDF to an offline session resumes claude without a prompt and types the message once it has started', async () => {
+		transcript = recordedConversation();
+		const client = await startHub();
+		const { id, claude, settings } = await ready(client);
+		await hub.hook(id, body('SessionEnd', claude, { reason: 'prompt_input_exit' }));
+		fake.live.delete(`orfoni-${id}`);
+		const sent = client.request('send', { sessionId: id, text: 'read this', images: [], documents: [{ type: 'application/pdf', name: 'a.pdf', data: Buffer.from('%PDF').toString('base64') }] });
+		await untilRealTime(() => fake.of('newSession').length === 2);
+		expect(fake.of('newSession')[1]![3]).toEqual(['claude', `--resume=${claude}`, '--settings', settings]);
+		await hub.hook(id, body('SessionStart', claude, { source: 'resume' }));
+		await vi.advanceTimersByTimeAsync(2000);
+		await untilRealTime(() => fake.of('submit').length === 1);
+		const text = fake.of('submit')[0]![1] as string;
+		expect(text).toMatch(/^@\S+\/a\.pdf read this$/);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: text }));
 		expect(await sent).toMatchObject({ ok: true });
 	});
 
@@ -1791,7 +1863,7 @@ describe('portSession', () => {
 		expect(fake.of('newSession')).toEqual([
 			[`orfoni-${session.id}`, OTHER_PROJECT, { ORFONI_SESSION: session.id, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, ['claude', `--resume=${OTHER}`, '--settings', settings, '--model', 'sonnet', '--effort', 'high', '--permission-mode', 'auto', '--name', 'swarm-73']],
 		]);
-		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null));
+		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(response.result).toEqual({
 			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null },
 			needsTrust: true,

@@ -13,7 +13,8 @@ interface HookEntry {
 }
 
 const SOCKET = '/run/user/0/orfoni/hooks.sock';
-const settings = hookSettings(SOCKET, null) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
+const UPLOADS = '/root/.local/state/orfoni/uploads';
+const settings = hookSettings(SOCKET, null, UPLOADS) as { hooks: Record<string, { hooks: HookEntry[] }[]> };
 
 function entry(hook: string): HookEntry {
 	const groups = settings.hooks[hook];
@@ -50,7 +51,7 @@ describe('hookSettings', () => {
 	});
 
 	it('quotes a socket path that contains a quote or a space for the shell', () => {
-		const command = (hookSettings("/run/it's here/hooks.sock", null) as typeof settings).hooks.Stop![0]!.hooks[0]!.command;
+		const command = (hookSettings("/run/it's here/hooks.sock", null, UPLOADS) as typeof settings).hooks.Stop![0]!.hooks[0]!.command;
 		expect(command).toContain(`--unix-socket '/run/it'\\''s here/hooks.sock'`);
 	});
 
@@ -63,14 +64,19 @@ describe('hookSettings', () => {
 		}
 	});
 
+	// An absolute path in a permission rule starts with two slashes.
+	it('lets Claude read what you send, which the hub saves outside the session folder, without asking', () => {
+		expect((hookSettings(SOCKET, null, UPLOADS) as { permissions: unknown }).permissions).toEqual({ allow: ['Read(//root/.local/state/orfoni/uploads/**)'] });
+	});
+
 	it('keeps $ORFONI_SESSION literal in the serialized JSON', () => {
-		expect(JSON.stringify(hookSettings(SOCKET, null))).toContain('X-Orfoni-Session: $ORFONI_SESSION');
+		expect(JSON.stringify(hookSettings(SOCKET, null, UPLOADS))).toContain('X-Orfoni-Session: $ORFONI_SESSION');
 	});
 });
 
 describe('the status line in hookSettings', () => {
 	const copy = `input=$(cat); printf '%s\\n' "$input" | curl -sS -m 1 --unix-socket '${SOCKET}' -H 'Content-Type: application/json' -H "X-Orfoni-Session: $ORFONI_SESSION" --data-binary @- http://localhost/status >/dev/null 2>&1 &`;
-	const statusLine = (original: Parameters<typeof hookSettings>[1]) => (hookSettings(SOCKET, original) as { statusLine: { type: string; command: string; refreshInterval: number; padding?: number } }).statusLine;
+	const statusLine = (original: Parameters<typeof hookSettings>[1]) => (hookSettings(SOCKET, original, UPLOADS) as { statusLine: { type: string; command: string; refreshInterval: number; padding?: number } }).statusLine;
 
 	// Claude Code runs the command with sh and writes the JSON and a newline to its stdin.
 	function run(command: string, input = '{"model":{"id":"claude-opus-5-5"}}\n'): { stdout: string; ms: number } {
@@ -108,7 +114,7 @@ describe('the status line in hookSettings', () => {
 		const server: Server = createServer(() => {});
 		await new Promise<void>((resolve) => server.listen(socket, resolve));
 		try {
-			const command = (hookSettings(socket, { command: 'echo shown' }) as { statusLine: { command: string } }).statusLine.command;
+			const command = (hookSettings(socket, { command: 'echo shown' }, UPLOADS) as { statusLine: { command: string } }).statusLine.command;
 			const { stdout, ms } = run(command);
 			expect(stdout).toBe('shown\n');
 			expect(ms).toBeLessThan(500);

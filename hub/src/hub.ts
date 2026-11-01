@@ -15,6 +15,7 @@ import {
 	type HubMessage,
 	type HubStatus,
 	type ImageType,
+	type MessageDocument,
 	type MessageImage,
 	type OtherSession,
 	type PastConversation,
@@ -49,6 +50,16 @@ const INPUT_READY_DELAY_MS = 2_000;
 const DELIVERY_TIMEOUT_MS = 5_000;
 const UPLOAD_LIFETIME_MS = 24 * 3600_000;
 const IMAGE_EXTENSION: Record<ImageType, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+
+// Claude Code ends an @ mention at whitespace and takes letters of any script, digits, and punctuation such as ()+, in it.
+export function documentName(name: string): string {
+	const stem = name
+		.replace(/\.pdf$/i, '')
+		.replace(/[^\p{L}\p{N}._()+,-]+/gu, '_')
+		.replace(/^[._]+/, '')
+		.slice(0, 100);
+	return `${stem || 'document'}.pdf`;
+}
 
 // Claude Code reports a message with its trailing whitespace trimmed and each pasted image ahead of it as [Image #N], numbered on from the images the session took before.
 function sentPrompt(text: string, images: number): (prompt: string) => boolean {
@@ -444,7 +455,7 @@ export class Hub {
 			case 'openSession':
 				return this.openSession(client, this.session(request.sessionId));
 			case 'send':
-				await this.send(this.session(request.sessionId), request.text, request.images);
+				await this.send(this.session(request.sessionId), request.text, request.images, request.documents);
 				return {};
 			case 'decide':
 				return { outcome: this.decide(request.requestId, request.decision) };
@@ -678,7 +689,7 @@ export class Hub {
 	private async launch(session: Session, identity: string[], settings: ClaudeSettings, prompt?: string): Promise<void> {
 		const file = this.settingsPath(session.id);
 		const statusLine = await originalStatusLine(session.projectDir, this.options.home);
-		await writePrivate(file, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine), null, '\t')}\n`);
+		await writePrivate(file, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine, this.uploadsDir()), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
 		// Every start of Claude Code carries the title as its name, so a rename also reaches a Claude Code that was not running.
 		const name = session.title ? ['--name', session.title] : [];
@@ -773,21 +784,24 @@ export class Hub {
 		}
 	}
 
-	private async send(session: Session, text: string, images: MessageImage[] = []): Promise<void> {
-		// Slash commands and bash mode do not always fire UserPromptSubmit, so only plain text waits for it. Behind an image, a slash is plain text.
-		const confirmable = images.length > 0 || (!text.startsWith('/') && !text.startsWith('!'));
-		const sent = sentPrompt(text, images.length);
-		const delivery = (timeoutMs: number, typing?: Promise<void>) => (confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && sent(event.text), timeoutMs, typing) : Promise.resolve(true));
+	private async send(session: Session, text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): Promise<void> {
+		// Slash commands and bash mode do not always fire UserPromptSubmit, so only plain text waits for it. Behind an image or a PDF, a slash is plain text.
+		const attached = images.length > 0 || documents.length > 0;
+		const confirmable = attached || (!text.startsWith('/') && !text.startsWith('!'));
 		this.assertTakesInput(session);
-		const paths = await this.saveImages(images);
-		if (session.claude.kind === 'exited' && paths.length === 0) {
+		const uploads = await this.saveUploads(images, documents);
+		// Claude Code reads a PDF that the message mentions with @. A space after each mention closes the file suggestions that the mention opens, which an Enter would otherwise pick from, and Claude Code trims it off the end of the message.
+		const typed = `${uploads.documents.map((path) => `@${path} `).join('')}${text}`;
+		const sent = sentPrompt(typed, images.length);
+		const delivery = (timeoutMs: number, typing?: Promise<void>) => (confirmable ? this.waitForHook(session, (event) => event.type === 'prompt' && sent(event.text), timeoutMs, typing) : Promise.resolve(true));
+		if (session.claude.kind === 'exited' && !attached) {
 			const delivered = delivery(STARTUP_TIMEOUT_MS);
 			await this.killTmux((name) => name === tmuxName(session.id));
 			await this.launch(session, await this.resumeIdentity(session), reportedSettings(session), text);
 			if (!(await delivered)) throw new HubError('not_delivered', `claude did not confirm the message within ${STARTUP_TIMEOUT_MS / 1000} s`);
 			return;
 		}
-		// Claude Code attaches an image only from a paste, which a prompt on its command line is not, so it starts first and takes the message like a running session.
+		// Claude Code attaches an image only from a paste, which a prompt on its command line is not, so it starts first and takes the message like a running session. A PDF goes the same way, so that a message reaches Claude Code one way whatever it carries.
 		if (session.claude.kind === 'exited') {
 			await this.killTmux((name) => name === tmuxName(session.id));
 			await this.launch(session, await this.resumeIdentity(session), reportedSettings(session));
@@ -800,7 +814,7 @@ export class Hub {
 		const untilInputReady = claude.inputReadyAt - Date.now();
 		if (untilInputReady > 0) await delay(untilInputReady);
 		this.assertTakesInput(session);
-		const typing = this.options.tmux.submit(tmuxName(session.id), text, paths);
+		const typing = this.options.tmux.submit(tmuxName(session.id), typed, uploads.images);
 		const delivered = delivery(DELIVERY_TIMEOUT_MS, typing);
 		await typing.catch((error: unknown) => {
 			throw error instanceof AttachError ? new HubError('not_delivered', error.message) : error;
@@ -808,23 +822,34 @@ export class Hub {
 		if (!(await delivered)) throw new HubError('not_delivered', `Claude Code did not confirm the message within ${DELIVERY_TIMEOUT_MS / 1000} s`);
 	}
 
-	// Claude Code reads an image when its path is pasted and keeps it in the transcript, so a file needs to outlast only the paste, and a day is plenty.
-	private async saveImages(images: MessageImage[]): Promise<string[]> {
-		if (images.length === 0) return [];
-		const dir = join(this.options.stateDir, 'uploads');
+	private uploadsDir(): string {
+		return join(this.options.stateDir, 'uploads');
+	}
+
+	// Claude Code keeps an image in the transcript once its path is pasted, and a PDF once Claude has read it, which it does in the turn the message starts, so a file needs to outlast only that turn, and a day is plenty. A PDF keeps its name in a folder of its own, so that Claude and the chat see the name.
+	private async saveUploads(images: MessageImage[], documents: MessageDocument[]): Promise<{ images: string[]; documents: string[] }> {
+		if (images.length === 0 && documents.length === 0) return { images: [], documents: [] };
+		const dir = this.uploadsDir();
 		await privateDir(dir);
 		for (const name of await readdir(dir)) {
 			const path = join(dir, name);
 			const { mtimeMs } = await stat(path).catch(() => ({ mtimeMs: Infinity }));
-			if (mtimeMs < Date.now() - UPLOAD_LIFETIME_MS) await rm(path, { force: true });
+			if (mtimeMs < Date.now() - UPLOAD_LIFETIME_MS) await rm(path, { recursive: true, force: true });
 		}
-		return Promise.all(
-			images.map(async (image) => {
-				const path = join(dir, `${randomUUID()}.${IMAGE_EXTENSION[image.type]}`);
-				await writeFile(path, Buffer.from(image.data, 'base64'), { mode: 0o600 });
-				return path;
-			}),
-		);
+		const save = async (path: string, data: string) => {
+			await writeFile(path, Buffer.from(data, 'base64'), { mode: 0o600 });
+			return path;
+		};
+		return {
+			images: await Promise.all(images.map((image) => save(join(dir, `${randomUUID()}.${IMAGE_EXTENSION[image.type]}`), image.data))),
+			documents: await Promise.all(
+				documents.map(async (document) => {
+					const folder = join(dir, randomUUID());
+					await privateDir(folder);
+					return save(join(folder, documentName(document.name)), document.data);
+				}),
+			),
+		};
 	}
 
 	private assertTakesInput(session: Session): void {

@@ -160,6 +160,44 @@ export function base64Bytes(data: string): number {
 export const MessageImage = z.object({ type: ImageType, data: z.base64().refine((data) => base64Bytes(data) <= MAX_IMAGE_BYTES, { message: 'an image is at most 10 MB' }) });
 export type MessageImage = z.infer<typeof MessageImage>;
 
+// Claude Code's Read tool takes a PDF of up to 20 MB.
+export const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_DOCUMENTS = 5;
+export const DocumentType = z.enum(['application/pdf']);
+export type DocumentType = z.infer<typeof DocumentType>;
+
+// The name is the file's own, which the hub keeps so that Claude and the chat see it.
+export const MessageDocument = z.object({
+	type: DocumentType,
+	name: z.string().min(1).max(255),
+	data: z.base64().refine((data) => base64Bytes(data) <= MAX_DOCUMENT_BYTES, { message: 'a PDF is at most 20 MB' }),
+});
+export type MessageDocument = z.infer<typeof MessageDocument>;
+
+// The hub hands Claude Code a PDF as an @ mention of the file it saved, in a folder of its own under uploads named by a UUID, so the file keeps its name.
+const UPLOAD_MENTION = /@\/\S*\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(\S+)/g;
+
+export type MessagePart = { kind: 'text'; text: string } | { kind: 'upload'; name: string };
+
+// A message as you sent it, with each PDF the hub mentioned for you as its name.
+export function messageParts(text: string): MessagePart[] {
+	const parts: MessagePart[] = [];
+	let at = 0;
+	for (const mention of text.matchAll(UPLOAD_MENTION)) {
+		if (mention.index > at) parts.push({ kind: 'text', text: text.slice(at, mention.index) });
+		parts.push({ kind: 'upload', name: mention[1]! });
+		at = mention.index + mention[0].length;
+	}
+	if (at < text.length) parts.push({ kind: 'text', text: text.slice(at) });
+	return parts;
+}
+
+export function withUploadNames(text: string): string {
+	return messageParts(text)
+		.map((part) => (part.kind === 'text' ? part.text : part.name))
+		.join('');
+}
+
 export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('listSessions') }),
 	z.object({
@@ -173,7 +211,9 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		permissionMode: PermissionMode.optional(),
 	}),
 	z.object({ id, method: z.literal('openSession'), sessionId: SessionId }),
-	z.object({ id, method: z.literal('send'), sessionId: SessionId, text: z.string(), images: z.array(MessageImage).max(MAX_IMAGES).default([]) }).refine((request) => request.text !== '' || request.images.length > 0, { message: 'a message needs text or an image' }),
+	z
+		.object({ id, method: z.literal('send'), sessionId: SessionId, text: z.string(), images: z.array(MessageImage).max(MAX_IMAGES).default([]), documents: z.array(MessageDocument).max(MAX_DOCUMENTS).default([]) })
+		.refine((request) => request.text !== '' || request.images.length > 0 || request.documents.length > 0, { message: 'a message needs text, an image or a PDF' }),
 	z.object({ id, method: z.literal('decide'), requestId: RequestId, decision: Decision }),
 	z.object({ id, method: z.literal('interrupt'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('stopSession'), sessionId: SessionId }),

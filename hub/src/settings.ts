@@ -40,7 +40,12 @@ function statusLine(socket: string, original: OriginalStatusLine | null): object
 	return { type: 'command', command: `${copy} printf '%s\\n' "$input" | eval ${shellQuote(command)}`, ...display, refreshInterval: Math.min(refreshInterval ?? REFRESH_SECONDS, REFRESH_SECONDS) };
 }
 
-export function hookSettings(socket: string, originalStatusLine: OriginalStatusLine | null): object {
+// Claude Code reads a PDF that a message mentions with its Read tool, which asks first for a file outside the session's folder, where the hub saves what you send.
+function uploadReads(uploads: string): object {
+	return { allow: [`Read(/${uploads}/**)`] };
+}
+
+export function hookSettings(socket: string, originalStatusLine: OriginalStatusLine | null, uploads: string): object {
 	const hooks = Object.fromEntries(
 		Object.entries(HOOK_TIMEOUTS).map(([hook, timeout]) => [
 			hook,
@@ -57,7 +62,7 @@ export function hookSettings(socket: string, originalStatusLine: OriginalStatusL
 			],
 		]),
 	);
-	return { hooks, statusLine: statusLine(socket, originalStatusLine) };
+	return { hooks, statusLine: statusLine(socket, originalStatusLine), permissions: uploadReads(uploads) };
 }
 
 const StatusLineSettings = z.object({

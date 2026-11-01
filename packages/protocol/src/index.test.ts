@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, HubStatus, MAX_IMAGE_BYTES, parseClientRequest, parseHubMessage, PastConversation, ProtocolError, SessionSummary, type HubMessage } from './index.js';
+import { ClaudeSessionId, HubStatus, MAX_DOCUMENT_BYTES, MAX_IMAGE_BYTES, messageParts, parseClientRequest, parseHubMessage, PastConversation, ProtocolError, SessionSummary, withUploadNames, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -15,7 +15,7 @@ function expectBadMessage(line: string) {
 describe('parseClientRequest', () => {
 	test('accepts a send request and returns it typed', () => {
 		const request = parseClientRequest('{"id":1,"method":"send","sessionId":"s","text":"hi"}');
-		expect(request).toEqual({ id: 1, method: 'send', sessionId: 's', text: 'hi', images: [] });
+		expect(request).toEqual({ id: 1, method: 'send', sessionId: 's', text: 'hi', images: [], documents: [] });
 	});
 
 	test('accepts startSession with a model and a permission mode', () => {
@@ -47,13 +47,29 @@ describe('parseClientRequest', () => {
 
 	test('a message carries up to 5 images of the kinds Claude Code reads, and needs text or an image', () => {
 		const png = { type: 'image/png', data: 'iVBORw0KGgo=' };
-		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png] }))).toEqual({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png] });
+		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png] }))).toEqual({ id: 6, method: 'send', sessionId: 's', text: 'What is wrong here?', images: [png], documents: [] });
 		expect(parseClientRequest(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: '', images: [png, { type: 'image/jpeg', data: '/9j/4AAQ' }] }))).toMatchObject({ text: '' });
 		expect(parseClientRequest('{"id":6,"method":"send","sessionId":"s","text":"hi"}')).toMatchObject({ images: [] });
 		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: '' }));
 		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: Array(6).fill(png) }));
 		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/svg+xml', data: 'PHN2Zz4=' }] }));
 		expectBadMessage(JSON.stringify({ id: 6, method: 'send', sessionId: 's', text: 'hi', images: [{ type: 'image/png', data: 'not base64!' }] }));
+	});
+
+	test('a message carries up to 5 PDFs with their names, and a PDF alone is a message', () => {
+		const pdf = { type: 'application/pdf', name: 'Report (final).pdf', data: 'JVBERi0xLjQ=' };
+		expect(parseClientRequest(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: '', documents: [pdf] }))).toEqual({ id: 7, method: 'send', sessionId: 's', text: '', images: [], documents: [pdf] });
+		expectBadMessage(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: Array(6).fill(pdf) }));
+		expectBadMessage(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: [{ ...pdf, type: 'text/plain' }] }));
+		expectBadMessage(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: [{ ...pdf, name: '' }] }));
+		expectBadMessage(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: [{ type: 'application/pdf', data: 'JVBERi0xLjQ=' }] }));
+	});
+
+	test('a PDF is at most 20 MB, the most Claude Code reads', () => {
+		const data = (bytes: number) => Buffer.alloc(bytes).toString('base64');
+		expect(MAX_DOCUMENT_BYTES).toBe(20 * 1024 * 1024);
+		expect(parseClientRequest(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: [{ type: 'application/pdf', name: 'a.pdf', data: data(MAX_DOCUMENT_BYTES) }] }))).toMatchObject({ text: 'hi' });
+		expectBadMessage(JSON.stringify({ id: 7, method: 'send', sessionId: 's', text: 'hi', documents: [{ type: 'application/pdf', name: 'a.pdf', data: data(MAX_DOCUMENT_BYTES + 1) }] }));
 	});
 
 	test('an image is at most 10 MB', () => {
@@ -260,5 +276,26 @@ describe('earlier conversations', () => {
 		const listed = { claudeSessionId: conversation, title: 'Second swarm cloud session', firstPrompt: null, lastModified: 1793467295098 };
 		expect(PastConversation.parse(listed)).toEqual(listed);
 		expect(() => PastConversation.parse({ ...listed, claudeSessionId: 'not-a-uuid' })).toThrow();
+	});
+});
+
+describe('messageParts', () => {
+	const upload = '@/home/me/.local/state/orfoni/uploads/0b6c2e1a-1111-4222-8333-944455556666/Report_(final).pdf';
+
+	test('shows each PDF the hub mentioned as its name, and leaves the rest of the message as typed', () => {
+		expect(messageParts(`[Image #1] ${upload} ${upload.replace('Report_(final)', 'März')} What do they say?`)).toEqual([
+			{ kind: 'text', text: '[Image #1] ' },
+			{ kind: 'upload', name: 'Report_(final).pdf' },
+			{ kind: 'text', text: ' ' },
+			{ kind: 'upload', name: 'März.pdf' },
+			{ kind: 'text', text: ' What do they say?' },
+		]);
+		expect(messageParts(upload)).toEqual([{ kind: 'upload', name: 'Report_(final).pdf' }]);
+		expect(withUploadNames(`${upload} Summarize it`)).toBe('Report_(final).pdf Summarize it');
+	});
+
+	test('leaves an @ mention of any other file alone', () => {
+		for (const text of ['@src/main.ts what is this?', '@/home/me/uploads/notes.pdf', '@/tmp/uploads/not-a-uuid/a.pdf', 'mail me@example.com']) expect(messageParts(text)).toEqual([{ kind: 'text', text }]);
+		expect(messageParts('')).toEqual([]);
 	});
 });

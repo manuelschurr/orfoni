@@ -40,7 +40,7 @@ async function serve(answer: () => Promise<HookResponse>, path = socketPath(), s
 }
 
 function runStatusLine(path: string, original: string | null, input: string): Promise<{ stdout: string; ms: number }> {
-	const { command } = (hookSettings(path, original === null ? null : { command: original }) as { statusLine: { command: string } }).statusLine;
+	const { command } = (hookSettings(path, original === null ? null : { command: original }, '/uploads') as { statusLine: { command: string } }).statusLine;
 	const startedAt = performance.now();
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
@@ -51,7 +51,7 @@ function runStatusLine(path: string, original: string | null, input: string): Pr
 }
 
 function runHookCommand(path: string, hook: 'Stop' | 'PermissionRequest', body: object): Promise<string> {
-	const entry = (hookSettings(path, null) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
+	const entry = (hookSettings(path, null, '/uploads') as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', entry.command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
 			error ? reject(error) : resolve(stdout),
@@ -111,7 +111,7 @@ describe('hook server', () => {
 
 	test('killing the curl of a held PermissionRequest, as Claude Code does on a terminal No or Escape, tells the hub the connection closed', async () => {
 		const path = await serve(never);
-		const entry = (hookSettings(path, null) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.PermissionRequest![0]!.hooks[0]!;
+		const entry = (hookSettings(path, null, '/uploads') as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.PermissionRequest![0]!.hooks[0]!;
 		const child = spawn('/bin/sh', ['-c', entry.command], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ORFONI_SESSION: 'session-1' } });
 		child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: 'c1', tool_name: 'Write', tool_input: {} }));
 		await until(() => calls.length === 1);
