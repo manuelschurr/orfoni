@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { _android, expect, test, type AndroidDevice, type Page } from '@playwright/test';
 import type { SessionId } from '@orfoni/protocol';
-import { acceptTrustPrompt, eventually, HubClient, newProjectDir, pane, tmux, type Started } from '../../hub/test/e2e/client';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, onePagePdf, pane, tmux, type Started } from '../../hub/test/e2e/client';
 
 const PACKAGE = 'com.orfoni.app.debug';
 const SERVER = '/var/tmp/claude-0/orfoni-android-sshd';
@@ -154,8 +154,9 @@ function shownNotifications(): string {
 
 // Android asks once whether orfoni may run without battery limits, which it needs for its connection while the phone sleeps.
 // The nodes of the screen Android shows now that match the pattern, filtered on the phone, so nothing else on it comes back.
+// A dump taken while a window animates in fails, and then nothing counts as on screen yet.
 function onScreen(pattern: string): string {
-	return adb('shell', `uiautomator dump /sdcard/orfoni-check.xml > /dev/null; grep -oE '${pattern}' /sdcard/orfoni-check.xml; rm /sdcard/orfoni-check.xml`);
+	return adb('shell', `uiautomator dump /sdcard/orfoni-check.xml > /dev/null 2>&1; grep -oE '${pattern}' /sdcard/orfoni-check.xml 2>/dev/null; rm -f /sdcard/orfoni-check.xml`);
 }
 
 function center(bounds: string): [string, string] {
@@ -292,4 +293,53 @@ test('a tap on a notification after Android ended orfoni starts it on that sessi
 	await tapNotification(`cold ${tag}`);
 	const page = await appPage();
 	await expect(page.getByRole('main').getByRole('heading', { level: 1, name: `cold ${tag}` })).toBeVisible({ timeout: 60_000 });
+});
+
+// Android's picker opens on recent files, or on a folder it remembers, so the file may need the Downloads folder first.
+async function pickInAndroid(name: string): Promise<void> {
+	const file = `text="${name}"[^>]*bounds="[^"]*"`;
+	for (let i = 0; i < 20; i++) {
+		const shown = onScreen(file);
+		if (shown) {
+			adb('shell', 'input', 'tap', ...center(shown));
+			return;
+		}
+		const roots = onScreen('content-desc="Show roots"[^>]*bounds="[^"]*"');
+		const downloads = onScreen('text="Downloads?"[^>]*bounds="[^"]*"');
+		if (downloads) adb('shell', 'input', 'tap', ...center(downloads.split('\n')[0]!));
+		else if (roots) adb('shell', 'input', 'tap', ...center(roots));
+		await new Promise((resolve) => setTimeout(resolve, 1_000));
+	}
+	await phoneScreenshot('picker.png');
+	writeFileSync(test.info().outputPath('picker.xml'), adb('shell', 'uiautomator dump /sdcard/orfoni-check.xml > /dev/null 2>&1; cat /sdcard/orfoni-check.xml; rm -f /sdcard/orfoni-check.xml'));
+	throw new Error(`Android's picker did not offer ${name}`);
+}
+
+// The paperclip opens Android's own document picker with the types the message box takes, which has to offer a PDF next to images.
+test('a PDF picked in Android\'s picker with the paperclip goes to Claude with the message', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const name = `orfoni-${tag}.pdf`;
+	const local = test.info().outputPath(name);
+	writeFileSync(local, onePagePdf('The code word is KESTREL.'));
+	adb('push', local, `/sdcard/Download/${name}`);
+	adb('shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file:///sdcard/Download/${name}`);
+	try {
+		const page = await freshApp();
+		await logIn(page);
+		await startSession(`pdf ${tag}`, 'Reply with exactly: ready');
+		await page.getByRole('navigation', { name: 'Sessions' }).getByText(`pdf ${tag}`).click();
+		await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText('ready', { timeout: REPLY_MS });
+		await page.getByTitle('Attach images or PDFs, or paste or drop them into the message').click();
+		await pickInAndroid(name);
+		await expect(page.getByTitle(name, { exact: true })).toBeVisible();
+		await phoneScreenshot('attached.png');
+		await page.getByRole('textbox', { name: 'Message' }).fill('What is the code word in this PDF? Reply with just the code word.');
+		await page.getByRole('button', { name: 'Send' }).click();
+		await expect(page.getByRole('article', { name: 'You' }).last()).toHaveText(`${name} What is the code word in this PDF? Reply with just the code word.`, { timeout: 60_000 });
+		await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText(/KESTREL/i, { timeout: REPLY_MS });
+		await expect(page.getByRole('main').getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0);
+		await phoneScreenshot('answered.png');
+	} finally {
+		adb('shell', 'rm', '-f', `/sdcard/Download/${name}`);
+	}
 });
