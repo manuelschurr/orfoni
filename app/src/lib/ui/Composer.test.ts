@@ -305,7 +305,7 @@ test('images go without text, dropped or picked, and a removed one stays behind'
 	const { client, transport } = await connectedClient([summary('a1')]);
 	render(Composer, { client, sessionId: summary('a1').id });
 	await fireEvent.drop(box(), { dataTransfer: { files: [image('first.png'), image('second.jpg', 'jpeg bytes', 'image/jpeg')], types: ['Files'] } });
-	await fireEvent.change(screen.getByLabelText('Attach images'), { target: { files: [image('third.webp', 'webp bytes', 'image/webp')] } });
+	await fireEvent.change(screen.getByLabelText('Attach images or PDFs'), { target: { files: [image('third.webp', 'webp bytes', 'image/webp')] } });
 	await screen.findByRole('img', { name: 'third.webp' });
 	expect(shown()).toEqual(['first.png', 'second.jpg', 'third.webp']);
 	await fireEvent.click(screen.getByRole('button', { name: 'Remove first.png' }));
@@ -318,13 +318,49 @@ test('a file Claude Code cannot take as an image, one over 10 MB, and a sixth im
 	const { client } = await connectedClient([summary('a1')]);
 	render(Composer, { client, sessionId: summary('a1').id });
 	await fireEvent.paste(box(), { clipboardData: { files: [image('notes.txt', 'text', 'text/plain'), image('drawing.svg', '<svg/>', 'image/svg+xml')], types: ['Files'] } });
-	expect((await screen.findByRole('alert')).textContent).toBe('orfoni sends PNG, JPEG, GIF and WebP images, which notes.txt and drawing.svg are not.');
+	expect((await screen.findByRole('alert')).textContent).toBe('orfoni sends PNG, JPEG, GIF and WebP images and PDFs, which notes.txt and drawing.svg are not.');
 	await fireEvent.paste(box(), { clipboardData: { files: [new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' })], types: ['Files'] } });
 	expect(screen.getByRole('alert').textContent).toBe('An image can be at most 10 MB, which huge.png is not.');
 	await fireEvent.paste(box(), { clipboardData: { files: ['1', '2', '3', '4', '5', '6'].map((n) => image(`${n}.png`)), types: ['Files'] } });
 	await screen.findByRole('img', { name: '5.png' });
 	expect(shown()).toEqual(['1.png', '2.png', '3.png', '4.png', '5.png']);
 	expect(screen.getByRole('alert').textContent).toBe('A message takes at most 5 images, so 6.png stays out.');
+});
+
+const pdf = (name: string, content = name) => new File([content], name, { type: 'application/pdf' });
+const documents = () => screen.queryAllByRole('listitem').flatMap((item) => (item.querySelector('img') ? [] : [item.querySelector('[title]')?.getAttribute('title')]));
+
+test('a PDF shows by its name next to the images and goes with its name, picked, dropped or pasted', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.change(screen.getByLabelText('Attach images or PDFs'), { target: { files: [pdf('Q3 report.pdf', '%PDF q3')] } });
+	await fireEvent.drop(box(), { dataTransfer: { files: [image('shot.png', 'png bytes'), pdf('notes.pdf', '%PDF notes')], types: ['Files'] } });
+	await screen.findByRole('img', { name: 'shot.png' });
+	expect(documents()).toEqual(['Q3 report.pdf', 'notes.pdf']);
+	await fireEvent.click(screen.getByRole('button', { name: 'Remove notes.pdf' }));
+	expect(documents()).toEqual(['Q3 report.pdf']);
+	await type('Compare these');
+	expect(transport.requests('send')).toMatchObject([
+		{ sessionId: 'a1', text: 'Compare these', images: [{ type: 'image/png', data: base64('png bytes') }], documents: [{ type: 'application/pdf', name: 'Q3 report.pdf', data: base64('%PDF q3') }] },
+	]);
+	transport.respond('send', {});
+	await waitFor(() => expect(documents()).toEqual([]));
+	expect(shown()).toEqual([]);
+});
+
+test('a PDF goes without text, one over 20 MB and a sixth stay out with the reason, and images keep their own count', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [new File([new Uint8Array(20 * 1024 * 1024 + 1)], 'scan.pdf', { type: 'application/pdf' })], types: ['Files'] } });
+	expect((await screen.findByRole('alert')).textContent).toBe('A PDF can be at most 20 MB, which scan.pdf is not.');
+	await fireEvent.paste(box(), { clipboardData: { files: [...['1', '2', '3', '4', '5', '6'].map((n) => pdf(`${n}.pdf`)), ...['1', '2', '3', '4', '5'].map((n) => image(`${n}.png`))], types: ['Files'] } });
+	await screen.findByRole('img', { name: '5.png' });
+	expect(documents()).toEqual(['1.pdf', '2.pdf', '3.pdf', '4.pdf', '5.pdf']);
+	expect(shown()).toEqual(['1.png', '2.png', '3.png', '4.png', '5.png']);
+	expect(screen.getByRole('alert').textContent).toBe('A message takes at most 5 PDFs, so 6.pdf stays out.');
+	await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+	expect(transport.requests('send')).toMatchObject([{ text: '' }]);
+	expect(transport.requests('send')[0]!.documents).toHaveLength(5);
 });
 
 test('a message the hub could not deliver keeps its images', async () => {

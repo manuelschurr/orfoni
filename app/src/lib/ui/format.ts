@@ -1,4 +1,4 @@
-import { Effort, PermissionMode, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { Effort, PermissionMode, withUploadNames, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 
 // The aliases claude takes with --model and /model.
 export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
@@ -77,7 +77,7 @@ export function titleFrom(text: string): string | undefined {
 export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string {
 	if (session.title) return session.title;
 	const prompt = chat?.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
-	return prompt?.kind === 'user' ? firstLine(prompt.text) : 'Untitled session';
+	return prompt?.kind === 'user' ? withUploadNames(firstLine(prompt.text)) : 'Untitled session';
 }
 
 export const otherStatus: Record<OtherSession['status'], string> = { idle: 'Idle', busy: 'Working', waiting: 'Waiting for you', shell: 'Shell running' };
@@ -135,12 +135,12 @@ export function ago(since: number, now: number): string {
 }
 
 export function conversationTitle(conversation: PastConversation): string {
-	return conversation.title || 'Untitled conversation';
+	return withUploadNames(conversation.title) || 'Untitled conversation';
 }
 
 // The first prompt says something only when Claude Code did not title the conversation with it.
 export function conversationPrompt({ title, firstPrompt }: PastConversation): string | null {
-	return firstPrompt && firstPrompt !== title ? firstPrompt : null;
+	return firstPrompt && firstPrompt !== title ? withUploadNames(firstPrompt) : null;
 }
 
 // Every word of the search shows in the title or the first prompt, in any case.

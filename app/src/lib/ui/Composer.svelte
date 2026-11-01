@@ -1,20 +1,25 @@
 <script lang="ts">
-	import { ImageType, MAX_IMAGE_BYTES, MAX_IMAGES, type SessionId, type SlashCommand } from '@orfoni/protocol';
+	import { DocumentType, ImageType, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_IMAGE_BYTES, MAX_IMAGES, type SessionId, type SlashCommand } from '@orfoni/protocol';
 	import type { HubClient } from '../hub-client.svelte';
 	import { needsYou } from './format';
 
-	interface Attachment {
+	type Attachment = { kind: 'image'; type: ImageType } | { kind: 'document'; type: DocumentType };
+	type Attached = Attachment & {
 		name: string;
-		type: ImageType;
 		// Read once, for the thumbnail and for sending.
 		dataUrl: string;
-	}
+	};
+
+	const KINDS = {
+		image: { most: MAX_IMAGES, bytes: MAX_IMAGE_BYTES, one: 'An image', many: 'images' },
+		document: { most: MAX_DOCUMENTS, bytes: MAX_DOCUMENT_BYTES, one: 'A PDF', many: 'PDFs' },
+	} as const;
 
 	// On a touch screen Enter adds a line, since the keyboard there has no Shift+Enter to reach for, and Send sends.
 	let { client, sessionId, touch = false }: { client: HubClient; sessionId: SessionId; touch?: boolean } = $props();
 	const id = $props.id();
 	let text = $state('');
-	let images = $state<Attachment[]>([]);
+	let attachments = $state<Attached[]>([]);
 	let dragging = $state(false);
 	let sending = $state(false);
 	let error = $state<string | null>(null);
@@ -74,22 +79,38 @@
 		return list.length === 1 ? list[0]! : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`;
 	}
 
+	function kindOf(file: File): Attachment | null {
+		const image = ImageType.safeParse(file.type);
+		if (image.success) return { kind: 'image', type: image.data };
+		const document = DocumentType.safeParse(file.type);
+		return document.success ? { kind: 'document', type: document.data } : null;
+	}
+
+	const are = (files: File[]) => (files.length === 1 ? 'is' : 'are');
+
 	// What does not fit stays out with its reason, and what fits goes in.
 	async function attach(files: File[]): Promise<void> {
-		const unreadable = files.filter((file) => !ImageType.safeParse(file.type).success);
-		const large = files.filter((file) => !unreadable.includes(file) && file.size > MAX_IMAGE_BYTES);
-		const fitting = files.filter((file) => !unreadable.includes(file) && !large.includes(file));
-		const room = Math.max(0, MAX_IMAGES - images.length);
-		const left = fitting.slice(room);
-		const reasons = [
-			unreadable.length > 0 && `orfoni sends PNG, JPEG, GIF and WebP images, which ${names(unreadable)} ${unreadable.length === 1 ? 'is' : 'are'} not.`,
-			large.length > 0 && `An image can be at most ${MAX_IMAGE_BYTES / 1024 / 1024} MB, which ${names(large)} ${large.length === 1 ? 'is' : 'are'} not.`,
-			left.length > 0 && `A message takes at most ${MAX_IMAGES} images, so ${names(left)} ${left.length === 1 ? 'stays' : 'stay'} out.`,
-		].filter((reason) => reason !== false);
+		const unreadable = files.filter((file) => kindOf(file) === null);
+		const reasons: string[] = unreadable.length > 0 ? [`orfoni sends PNG, JPEG, GIF and WebP images and PDFs, which ${names(unreadable)} ${are(unreadable)} not.`] : [];
+		const fitting: { file: File; attachment: Attachment }[] = [];
+		for (const kind of ['image', 'document'] as const) {
+			const { most, bytes, one, many } = KINDS[kind];
+			const ofKind = files.flatMap((file) => {
+				const attachment = kindOf(file);
+				return attachment?.kind === kind ? [{ file, attachment }] : [];
+			});
+			const large = ofKind.filter(({ file }) => file.size > bytes).map(({ file }) => file);
+			const small = ofKind.filter(({ file }) => file.size <= bytes);
+			const room = Math.max(0, most - attachments.filter((attached) => attached.kind === kind).length);
+			const left = small.slice(room).map(({ file }) => file);
+			if (large.length > 0) reasons.push(`${one} can be at most ${bytes / 1024 / 1024} MB, which ${names(large)} ${are(large)} not.`);
+			if (left.length > 0) reasons.push(`A message takes at most ${most} ${many}, so ${names(left)} ${left.length === 1 ? 'stays' : 'stay'} out.`);
+			fitting.push(...small.slice(0, room));
+		}
 		error = reasons.length > 0 ? reasons.join(' ') : null;
 		try {
-			const added = await Promise.all(fitting.slice(0, room).map(async (file) => ({ name: file.name, type: ImageType.parse(file.type), dataUrl: await read(file) })));
-			images = [...images, ...added].slice(0, MAX_IMAGES);
+			const added = await Promise.all(fitting.map(async ({ file, attachment }) => ({ ...attachment, name: file.name, dataUrl: await read(file) })));
+			attachments = [...attachments, ...added];
 		} catch (e) {
 			error = (e as Error).message;
 		}
@@ -122,13 +143,15 @@
 		input.value = '';
 	}
 
-	function remove(attachment: Attachment): void {
-		images = images.filter((image) => image !== attachment);
+	function remove(attachment: Attached): void {
+		attachments = attachments.filter((attached) => attached !== attachment);
 	}
+
+	const data = (attached: Attached) => attached.dataUrl.slice(attached.dataUrl.indexOf(',') + 1);
 
 	async function submit(): Promise<void> {
 		const message = text;
-		const attached = images;
+		const attached = attachments;
 		if ((message.trim() === '' && attached.length === 0) || sending) return;
 		sending = true;
 		error = null;
@@ -136,10 +159,11 @@
 			await client.send(
 				sessionId,
 				message.trim() === '' ? '' : message,
-				attached.map((image) => ({ type: image.type, data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1) })),
+				attached.flatMap((image) => (image.kind === 'image' ? [{ type: image.type, data: data(image) }] : [])),
+				attached.flatMap((document) => (document.kind === 'document' ? [{ type: document.type, name: document.name, data: data(document) }] : [])),
 			);
 			if (text === message) text = '';
-			if (images === attached) images = [];
+			if (attachments === attached) attachments = [];
 		} catch (e) {
 			error = `${(e as Error).message} Your message is still here.`;
 		} finally {
@@ -185,12 +209,20 @@
 	}}
 >
 	<div class="box" class:sending class:dragging ondragover={draggedOver} ondragleave={() => (dragging = false)} ondrop={dropped} role="group" aria-label="Message">
-		{#if images.length > 0}
-			<ul class="images" aria-label="Images">
-				{#each images as image (image)}
+		{#if attachments.length > 0}
+			<ul class="attachments" aria-label="Attachments">
+				{#each attachments as attachment (attachment)}
 					<li>
-						<img src={image.dataUrl} alt={image.name} />
-						<button type="button" class="remove" aria-label="Remove {image.name}" title="Remove {image.name}" onclick={() => remove(image)}>
+						{#if attachment.kind === 'image'}
+							<img src={attachment.dataUrl} alt={attachment.name} />
+						{:else}
+							<span class="document" title={attachment.name}>
+								<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 2.5h6l4 4v10a1 1 0 01-1 1h-9a1 1 0 01-1-1v-13a1 1 0 011-1z" /><path d="M11.5 2.5v4h4" /></svg>
+								<span class="document-name">{attachment.name}</span>
+								<span class="document-kind" aria-hidden="true">PDF</span>
+							</span>
+						{/if}
+						<button type="button" class="remove" aria-label="Remove {attachment.name}" title="Remove {attachment.name}" onclick={() => remove(attachment)}>
 							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
 						</button>
 					</li>
@@ -217,8 +249,8 @@
 				{/each}
 			</ul>
 		{/if}
-		<label class="attach" title="Attach images, or paste or drop them into the message">
-			<input type="file" accept={ImageType.options.join(',')} multiple aria-label="Attach images" onchange={picked} />
+		<label class="attach" title="Attach images or PDFs, or paste or drop them into the message">
+			<input type="file" accept={[...ImageType.options, ...DocumentType.options].join(',')} multiple aria-label="Attach images or PDFs" onchange={picked} />
 			<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5l-5.3 5.3a3.2 3.2 0 01-4.5-4.5l6-6a2.1 2.1 0 013 3l-6 6a1 1 0 01-1.5-1.5l5.3-5.3" /></svg>
 		</label>
 		<textarea
@@ -236,7 +268,7 @@
 			onfocus={() => (focused = true)}
 			onblur={() => (focused = false)}
 		></textarea>
-		<button class="send btn btn-primary" type="submit" disabled={sending || (text.trim() === '' && images.length === 0)}>{sending ? 'Sending' : 'Send'}</button>
+		<button class="send btn btn-primary" type="submit" disabled={sending || (text.trim() === '' && attachments.length === 0)}>{sending ? 'Sending' : 'Send'}</button>
 	</div>
 	{#if error}<p class="error" id="composer-error" role="alert">{error}</p>{/if}
 	<p class="hint">{touch ? 'Enter adds a line, Send sends' : 'Enter sends, Shift+Enter adds a line'}, and a message that starts with ! runs in the shell.</p>
@@ -277,7 +309,7 @@
 	}
 
 	/* The thumbnails take a row of their own above the message. */
-	.images {
+	.attachments {
 		display: flex;
 		flex-basis: 100%;
 		flex-wrap: wrap;
@@ -287,17 +319,59 @@
 		list-style: none;
 	}
 
-	.images li {
+	.attachments li {
 		position: relative;
 	}
 
-	.images img {
+	.attachments img {
 		display: block;
 		width: 4.5rem;
 		height: 4.5rem;
 		border: 1px solid var(--border);
 		border-radius: var(--radius-control);
 		object-fit: cover;
+	}
+
+	/* As tall as a thumbnail, with room for the name. */
+	.document {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		grid-template-rows: 1fr auto;
+		column-gap: 0.5rem;
+		align-items: center;
+		width: 11rem;
+		height: 4.5rem;
+		padding: 0.5rem 0.7rem 0.5rem 0.55rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-control);
+		background: var(--surface);
+	}
+
+	.document svg {
+		grid-row: 1 / -1;
+		width: 1.6rem;
+		height: 1.6rem;
+		fill: none;
+		stroke: var(--muted);
+		stroke-width: 1.3;
+		stroke-linejoin: round;
+	}
+
+	.document-name {
+		display: -webkit-box;
+		overflow: hidden;
+		font-size: 0.8125rem;
+		line-height: 1.3;
+		overflow-wrap: anywhere;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+	}
+
+	.document-kind {
+		color: var(--muted);
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
 	}
 
 	.remove {
