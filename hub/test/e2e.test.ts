@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ChatItem, Effort, HubStatus, OtherSession, PastConversation, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
-import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, pane, sleep, tmux, until, type Started } from './e2e/client.js';
+import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, onePagePdf, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
 const started: SessionId[] = [];
@@ -50,28 +50,6 @@ function square([red, green, blue]: [number, number, number]): string {
 	header.set([8, 2, 0, 0, 0], 8);
 	const rows = Buffer.concat(Array.from({ length: 64 }, () => Buffer.from([0, ...Array.from({ length: 64 }, () => [red, green, blue]).flat()])));
 	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
-}
-
-// A PDF of one page that says the text, as base64, which Claude reads.
-function onePagePdf(text: string): string {
-	const content = `BT /F1 24 Tf 72 700 Td (${text}) Tj ET`;
-	const objects = [
-		'<< /Type /Catalog /Pages 2 0 R >>',
-		'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-		'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-		`<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-	];
-	let pdf = '%PDF-1.4\n';
-	const offsets = objects.map((object, index) => {
-		const offset = pdf.length;
-		pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-		return offset;
-	});
-	const xref = pdf.length;
-	pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
-	pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-	return Buffer.from(pdf, 'latin1').toString('base64');
 }
 
 function transcriptOf(dir: string, claudeSessionId: string | null): string {
@@ -473,14 +451,14 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const { id } = await start({ prompt: 'Reply with exactly: ok', dir: TRUSTED_DIR });
 		await client.waitForSession(id, (s) => s.state === 'answered');
 		const since = client.mark();
-		await client.request('send', { sessionId: id, text: 'What is the code word in this PDF? Reply with just the code word.', documents: [{ type: 'application/pdf', name: 'code word.pdf', data: onePagePdf('The code word is PELICAN.') }] });
+		await client.request('send', { sessionId: id, text: 'What is the code word in this PDF? Reply with just the code word.', documents: [{ type: 'application/pdf', name: 'code word.pdf', data: onePagePdf('The code word is PELICAN.').toString('base64') }] });
 		await client.waitForChat(id, (item) => item.kind === 'user' && /^@\S+\/uploads\/[0-9a-f-]{36}\/code_word\.pdf What is the code word in this PDF\?/.test(item.text), since);
 		await client.waitForChat(id, (item) => item.kind === 'assistant' && /PELICAN/i.test(item.text), since);
 
 		await client.request('stopSession', { sessionId: id });
 		await client.waitForSession(id, (s) => s.state === 'offline');
 		const resumed = client.mark();
-		await client.request('send', { sessionId: id, text: 'And the code word in this one? Reply with just the code word.', documents: [{ type: 'application/pdf', name: 'second.pdf', data: onePagePdf('The code word is HERON.') }] });
+		await client.request('send', { sessionId: id, text: 'And the code word in this one? Reply with just the code word.', documents: [{ type: 'application/pdf', name: 'second.pdf', data: onePagePdf('The code word is HERON.').toString('base64') }] });
 		await client.waitForChat(id, (item) => item.kind === 'assistant' && /HERON/i.test(item.text), resumed);
 		const { chat } = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
 		expect(chat.filter((item) => item.kind === 'approval')).toEqual([]);

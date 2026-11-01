@@ -7,6 +7,7 @@ import { expect, test, type Page } from '@playwright/test';
 import type { Effort, HubStatus, OtherSession, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { OutsideSession } from './outside';
+import { onePagePdf } from '../../hub/test/e2e/client';
 import { acceptTrustPrompt, Screen, sleep } from './terminal';
 
 const REPLY_MS = 120_000;
@@ -32,28 +33,6 @@ async function startReady(params: { prompt?: string; title?: string; effort?: Ef
 async function openSession(page: Page, session: SessionSummary, url = APP): Promise<void> {
 	await page.goto(url);
 	await page.locator(`[data-session="${session.id}"]`).click();
-}
-
-// A PDF of one page that says the text, which Claude reads.
-function onePagePdf(text: string): Buffer {
-	const content = `BT /F1 24 Tf 72 700 Td (${text}) Tj ET`;
-	const objects = [
-		'<< /Type /Catalog /Pages 2 0 R >>',
-		'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-		'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-		`<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-	];
-	let pdf = '%PDF-1.4\n';
-	const offsets = objects.map((object, index) => {
-		const offset = pdf.length;
-		pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-		return offset;
-	});
-	const xref = pdf.length;
-	pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`;
-	pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-	return Buffer.from(pdf, 'latin1');
 }
 
 function you(page: Page) {
