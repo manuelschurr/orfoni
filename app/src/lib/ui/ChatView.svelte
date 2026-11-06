@@ -4,6 +4,7 @@
 	import { itemKey, type HubClient } from '../hub-client.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
 	import Bubble from './Bubble.svelte';
+	import PeerMessage from './PeerMessage.svelte';
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
 	import ToolGroup from './ToolGroup.svelte';
@@ -91,6 +92,8 @@
 							<QuestionCard {client} {item} />
 						{:else if item.kind === 'plan'}
 							<PlanCard {client} {item} />
+						{:else if item.kind === 'peer'}
+							<PeerMessage {item} {chat} />
 						{:else if item.kind === 'notice' && item.text.includes('\n')}
 							<details class="notice">
 								<summary>{item.text.trim().split('\n', 1)[0]}</summary>

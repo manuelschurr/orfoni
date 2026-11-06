@@ -347,3 +347,17 @@ export function firstLines(value: string, maxLines: number, maxChars: number): {
 	for (let at = all.indexOf('\n', end + 1); at !== -1; at = all.indexOf('\n', at + 1)) hidden++;
 	return { shown: all.slice(0, end), note: notShown(hidden, 'line') };
 }
+
+type PeerItem = Extract<ChatItem, { kind: 'peer' }>;
+
+// The Agent call that started a subagent returns its agent ID, as a field live and inside its text in history, and Claude named the subagent's task in the call.
+function subagentTask(chat: ChatItem[], agentId: string): string | null {
+	const call = chat.find((item) => item.kind === 'tool' && (item.name === 'Agent' || item.name === 'Task') && JSON.stringify(item.output ?? null).includes(agentId));
+	return call?.kind === 'tool' ? firstLine(text(fields(call.input).description)) || null : null;
+}
+
+export function peerLabel(item: PeerItem, chat: ChatItem[]): string {
+	if (item.from.kind === 'session') return item.from.name ? `Message from ${item.from.name}` : 'Message from another session';
+	const task = subagentTask(chat, item.from.agentId);
+	return task ? `Report from the agent: ${task}` : 'Report from an agent';
+}
