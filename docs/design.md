@@ -158,7 +158,7 @@ Sessions started outside orfoni, such as panes in an existing multi-pane tmux se
 
 The app is Tauri 2 with a Svelte 5 UI, built for Windows and Android from one codebase. The Rust side opens one SSH connection with `russh`, a pure-Rust SSH library. On that connection it runs `orfoni-hub connect` for the control channel and opens a terminal channel whenever you open a terminal.
 
-The session list shows each project folder as a group. Each session row shows its state, title, summary, and how long ago it changed. On the desktop the list stays on the left. On the phone it is the start screen, and tapping a session opens its chat.
+The session list shows each project folder as a group. Each session row shows its state, title, summary, and how long ago a message last passed between you and Claude. The hub stores that time with the session and, after a restart, takes the transcript's last entry when that is newer, because a restart starts every session in a new state and the time of the state change then says nothing. On the desktop the list stays on the left. On the phone it is the start screen, and tapping a session opens its chat.
 
 The chat view follows claude.ai. Your messages and Claude's replies are bubbles, and Claude's reply appears line by line as it is written. Markdown renders, including code blocks. Tool calls show as compact cards that expand to show a command and its output or a file diff. An approval request shows as a card with Allow, Always allow, and Deny, or, when Claude Code takes the answer only in its terminal, with a button that opens the terminal, like the note about trusting a folder. A question shows as a card with its options. Claude's task list shows as a progress bar. The message box completes slash commands, sends `!` commands as shell commands inside the session, and stops a running turn.
 
@@ -173,6 +173,8 @@ The app and the hub exchange newline-delimited JSON over the control channel. Th
 tmux puts every pane into its own systemd scope, and a drop-in applies `MemoryMax=8G`, `MemorySwapMax=6G`, and `OOMPolicy=continue` to all of them. orfoni sessions and shells are tmux panes, so they get the same limits with no extra work. Tools that Claude runs, such as a test suite, inherit the pane's scope, so an out-of-memory kill stays inside that one session. `earlyoom` keeps running as before and kills the biggest memory user, preferring test and build processes, before the VPS stalls.
 
 The hub reads `memory.current` and the `oom_kill` count in `memory.events` from each pane's scope. The session row shows the memory use, and a kill appears in the chat as a notice. Starting a new session warns when the VPS has little memory available.
+
+The Memory screen answers which sessions to stop. On request the hub reads `memory.current` and `memory.swap.current` from the scope of each orfoni session's pane and of its shells, and of each session outside orfoni whose process runs in a scope named `tmux-spawn-*.scope`, since any other cgroup, such as an SSH login's, holds more than that session. Swap counts because idle sessions get swapped out: on 2026-11-06 one session held 352 MB of RAM and 2.7 GB of swap, and 13 sessions held 6.7 GB of the 12 GB of swap. The app lists them by RAM and swap together, with when a message last passed, and offers Stop for orfoni's own sessions.
 
 ## Summaries
 
