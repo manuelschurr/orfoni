@@ -53,7 +53,7 @@ To open a session's terminal on the server, run `tmux -L orfoni attach -t =orfon
 
 Each release on the repository's Releases page carries the Windows installer, `orfoni_<version>_x64-setup.exe`, which the `windows` GitHub Actions workflow builds. The installer is not signed, so Windows SmartScreen warns about it, and More info, then Run anyway, installs it. The app needs Microsoft Edge WebView2, which Windows 10 and 11 normally have already.
 
-From 0.3.19 on, orfoni updates itself. When a newer release is out, the session list shows Update to <version> under the orfoni name. A click downloads it, checks that it carries the release key's signature, installs it without further questions, and starts orfoni again. orfoni looks for one when it starts and every six hours. Earlier versions have no updater, so 0.3.19 is installed by hand once.
+From 0.3.19 on, orfoni updates itself. When a newer release is out, the session list shows Update to <version> under the orfoni name. A click downloads it, checks that it carries the release key's signature, installs it without further questions, and starts orfoni again. orfoni looks for one when it starts, each time it connects to the hub, and as soon as the hub says a release is out, which `tools/release.sh` tells the hub with `orfoni announce-release` once the release is published. Versions up to 0.3.21 look every six hours instead. Earlier versions have no updater, so 0.3.19 is installed by hand once.
 
 On the first start the app asks for the connection settings:
 
