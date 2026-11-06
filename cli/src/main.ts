@@ -139,6 +139,11 @@ async function run(hub: Connection, command: Command): Promise<void> {
 		case 'shell':
 			console.log(JSON.stringify(await hub.request('openShell', { sessionId: await findSession(hub, command.session) })));
 			return;
+		case 'announce-release': {
+			const { told } = z.object({ told: z.number() }).parse(await hub.request('announceRelease', { version: command.version }));
+			console.log(`told ${told} connected app${told === 1 ? '' : 's'} about ${command.version}`);
+			return;
+		}
 	}
 }
 

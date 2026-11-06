@@ -305,6 +305,8 @@ function delay(ms: number): Promise<void> {
 export class Hub {
 	private readonly sessions = new Map<SessionId, Session>();
 	private readonly clients = new Set<Send>();
+	// The clients that asked to hear of releases, since older apps refuse a message they do not know.
+	private readonly releaseWatchers = new Set<Send>();
 	private readonly views = new Map<Send, SessionId>();
 	private readonly requests = new PendingRequests();
 	private readonly waiters = new Set<Waiter>();
@@ -371,6 +373,7 @@ export class Hub {
 			request: (request) => void this.respond(send, request),
 			close: () => {
 				this.clients.delete(send);
+				this.releaseWatchers.delete(send);
 				this.view(send, null);
 			},
 		};
@@ -498,6 +501,12 @@ export class Hub {
 				return this.port(request);
 			case 'listPastConversations':
 				return { conversations: await this.pastConversations(resolve(request.projectDir)) };
+			case 'watchReleases':
+				this.releaseWatchers.add(client);
+				return {};
+			case 'announceRelease':
+				for (const send of this.releaseWatchers) send({ type: 'released', version: request.version });
+				return { told: this.releaseWatchers.size };
 			case 'continueConversation':
 				return this.continueConversation(request);
 		}

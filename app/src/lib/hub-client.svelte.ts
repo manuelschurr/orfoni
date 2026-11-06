@@ -48,6 +48,8 @@ const results = {
 	portSession: z.object({ session: SessionSummary, needsTrust: z.boolean() }),
 	listPastConversations: z.object({ conversations: z.array(PastConversation) }),
 	continueConversation: started,
+	watchReleases: done,
+	announceRelease: z.object({ told: z.number() }),
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 
@@ -175,6 +177,8 @@ export class HubClient {
 	changes = $state.raw<Change[]>([]);
 	// The slash commands of each folder, listed once per connection. A folder whose listing is under way or failed has none.
 	commands = $state.raw(new Map<string, SlashCommand[]>());
+	// Counts the moments a new release may be out, each connection to the hub and each release the hub announces, so the app looks for its update then.
+	releaseHints = $state(0);
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
@@ -310,6 +314,9 @@ export class HubClient {
 		if (status.kind === 'connected') {
 			this.listedCommands.clear();
 			this.commands = new Map();
+			this.releaseHints++;
+			// A hub from before 0.3.22 knows no such request, and that hub announces no releases anyway.
+			this.request('watchReleases', {}).catch(() => {});
 			this.refresh().catch((error: Error) => {
 				// A lost link loads again when it comes back, so only a failure while still connected would leave the list empty for good.
 				if (this.status.kind === 'connected') this.problem = `Loading the sessions failed: ${error.message}`;
@@ -459,6 +466,9 @@ export class HubClient {
 			}
 			// The app shows a notice natively, from Rust, before the line reaches the page.
 			case 'notice':
+				return;
+			case 'released':
+				this.releaseHints++;
 				return;
 			case 'otherSessions':
 				this.updateOthers(message.sessions);

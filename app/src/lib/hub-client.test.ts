@@ -370,3 +370,27 @@ describe('HubClient with earlier conversations', () => {
 		expect(await continuing).toEqual({ session: continued, needsTrust: true });
 	});
 });
+
+describe('releases', () => {
+	test('the client asks the hub to hear of releases on each connection, and counts each connection and each announced release as a hint to look for an update', async () => {
+		expect(client.releaseHints).toBe(0);
+		await connect();
+		expect(transport.requests('watchReleases')).toHaveLength(1);
+		expect(client.releaseHints).toBe(1);
+		transport.push({ type: 'released', version: '0.3.22' });
+		expect(client.releaseHints).toBe(2);
+		transport.status({ kind: 'failed', error: 'link lost' });
+		await connect();
+		expect(transport.requests('watchReleases')).toHaveLength(2);
+		expect(client.releaseHints).toBe(3);
+		expect(client.problem).toBeNull();
+	});
+
+	test('a hub that does not know the request is no problem', async () => {
+		await connect();
+		transport.fail('watchReleases', 'bad_message', 'unknown method');
+		await settle();
+		expect(client.problem).toBeNull();
+	});
+});
+

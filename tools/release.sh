@@ -18,3 +18,5 @@ echo "windows run $id builds v$version"
 gh run watch "$id" --repo "$repo" --exit-status --interval 30 > /dev/null
 "$root/tools/android/release.sh" "$version"
 echo "released v$version: https://github.com/$repo/releases/tag/v$version"
+# The apps connected to the hub look for the update now instead of at their next start. The release is out either way, so a hub that is down only means they find it when they next connect.
+node "$root/cli/bin/orfoni.js" --via "$HOME/.local/bin/orfoni-hub connect" announce-release "$version" || echo "the hub was not told about v$version; apps find it when they next connect"

@@ -246,6 +246,9 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		permissionMode: PermissionMode.optional(),
 	}),
 	z.object({ id, method: z.literal('listPastConversations'), projectDir: z.string().min(1) }),
+	// An app asks to hear of releases, because an app from before 0.3.22 refuses the released message. tools/release.sh announces each release once it is published.
+	z.object({ id, method: z.literal('watchReleases') }),
+	z.object({ id, method: z.literal('announceRelease'), version: z.string().regex(/^\d+\.\d+\.\d+$/) }),
 	z.object({
 		id,
 		method: z.literal('continueConversation'),
@@ -281,6 +284,8 @@ export const HubMessage = z.union([
 	z.object({ type: z.literal('otherSessions'), sessions: z.array(OtherSession) }),
 	// Something a person following the session would want to hear about, which each client shows when its window is not in front.
 	z.object({ type: z.literal('notice'), sessionId: SessionId, kind: NoticeKind, title: z.string(), body: z.string() }),
+	// A release is out, so the app looks for its update now; the version only says which, and the app still checks the release itself.
+	z.object({ type: z.literal('released'), version: z.string() }),
 ]);
 export type HubMessage = z.infer<typeof HubMessage>;
 

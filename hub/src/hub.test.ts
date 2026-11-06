@@ -1314,6 +1314,20 @@ describe('memory', () => {
 		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null }, plan: null });
 	});
 
+	test('a release announced to the hub reaches the clients that asked to hear of releases while they are connected, and no others', async () => {
+		const watching = await startHub();
+		const other = new TestClient(hub);
+		const gone = new TestClient(hub);
+		await watching.ok('watchReleases', {});
+		await gone.ok('watchReleases', {});
+		gone.close();
+		expect(await other.ok('announceRelease', { version: '0.3.22' })).toEqual({ told: 1 });
+		const released = (client: TestClient) => client.messages.filter((message) => message.type === 'released');
+		expect(released(watching)).toEqual([{ type: 'released', version: '0.3.22' }]);
+		expect(released(other)).toEqual([]);
+		expect(released(gone)).toEqual([]);
+	});
+
 	test('startSession warns when less than 1.5 GB of memory is available', async () => {
 		writeMeminfo(1500 * MB, 12 * GB);
 		const client = await startHub();

@@ -39,6 +39,11 @@ describe('parseArgs', () => {
 		expect(parseArgs(['approve-plan', 'r1'], cwd)).toEqual({ ok: true, via: null, command: { name: 'approve-plan', requestId: 'r1' } });
 	});
 
+	test('parses announce-release with its version', () => {
+		expect(parseArgs(['announce-release', '0.3.22'], cwd)).toEqual({ ok: true, via: null, command: { name: 'announce-release', version: '0.3.22' } });
+		expect(parseArgs(['announce-release'], cwd)).toMatchObject({ ok: false });
+	});
+
 	test('parses answers as question=label pairs, splitting at the first =', () => {
 		expect(parseArgs(['answer', 'r1', 'Which database?=Postgres', 'Flags?=a=b'], cwd)).toEqual({
 			ok: true,

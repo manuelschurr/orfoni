@@ -8,7 +8,8 @@ export type Command =
 	| { name: SessionCommand; session: string }
 	| { name: 'allow' | 'approve-plan'; requestId: RequestId }
 	| { name: 'deny'; requestId: RequestId; message?: string }
-	| { name: 'answer'; requestId: RequestId; answers: Record<string, string> };
+	| { name: 'answer'; requestId: RequestId; answers: Record<string, string> }
+	| { name: 'announce-release'; version: string };
 
 type SessionCommand = 'watch' | 'interrupt' | 'stop' | 'rm' | 'shell';
 
@@ -74,6 +75,8 @@ const subcommands: Record<Command['name'], Subcommand> = {
 		max: 2,
 		build: ([r, message]) => ok({ name: 'deny', requestId: RequestId.parse(r), ...(message ? { message } : {}) }),
 	},
+	// tools/release.sh runs it once a release is published, so the apps connected to the hub look for the update.
+	'announce-release': { usage: '<version>', min: 1, max: 1, build: ([version]) => ok({ name: 'announce-release', version: version! }) },
 	answer: {
 		usage: '<request> <question>=<label>...',
 		min: 2,

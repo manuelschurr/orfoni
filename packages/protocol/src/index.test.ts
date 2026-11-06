@@ -83,6 +83,12 @@ describe('parseClientRequest', () => {
 		expectBadMessage('not json');
 	});
 
+	test('an announced release names a version of three numbers', () => {
+		expect(parseClientRequest('{"id":8,"method":"announceRelease","version":"0.3.22"}')).toEqual({ id: 8, method: 'announceRelease', version: '0.3.22' });
+		expectBadMessage('{"id":8,"method":"announceRelease","version":"latest"}');
+		expectBadMessage('{"id":8,"method":"announceRelease","version":"v0.3.22"}');
+	});
+
 	test('rejects an unknown method', () => {
 		expectBadMessage('{"id":1,"method":"selfDestruct"}');
 	});
