@@ -207,6 +207,22 @@ test('task progress and memory show on the row, in the header, and in the status
 	await expect(page.getByRole('navigation').getByText(/^[\d.]+ (MB|GB) of [\d.]+ GB free on the VPS$/)).toBeVisible();
 });
 
+test('the memory screen opens from the status bar, lists a running session with its RAM and swap, and Stop there ends it', async ({ page }) => {
+	const session = await startReady({ title: 'memory check' });
+	await page.goto(APP);
+	await page.getByRole('navigation').getByRole('button', { name: /free on the VPS$/ }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Memory', exact: true })).toBeVisible();
+	await expect(page.getByText(/^RAM [\d.]+ (MB|GB) of [\d.]+ GB free$/)).toBeVisible();
+	const row = page.getByRole('row', { name: /memory check/ });
+	await expect(row.getByRole('cell').nth(1)).toContainText(/\d (MB|GB)$/);
+	await expect(row.getByRole('cell').nth(0)).toContainText(/(ago|just now)$/);
+	await row.getByRole('button', { name: 'Stop memory check' }).click();
+	await expect(row).toHaveCount(0);
+	await expect.poll(async () => (await hub.sessions()).find((s) => s.id === session.id)?.state).toBe('offline');
+	await page.getByRole('button', { name: /^memory check/ }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Memory', exact: true })).toHaveCount(0);
+});
+
 test('a summary shows on the row and in the header when the hub has an API key', async ({ page }) => {
 	const status = (await hub.request('hubStatus', {})) as HubStatus;
 	test.skip(!status.summaries.enabled, 'the hub has no API key, so it writes no summaries');

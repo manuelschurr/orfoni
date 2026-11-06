@@ -153,9 +153,10 @@
 									</button>
 									<span class="place">{row.place}</span>
 								</th>
-								<td class="when"><span class="label" aria-hidden="true">Last message </span>{ago(row.lastActive, now)}</td>
-								<td class="number ram"><span class="label" aria-hidden="true">RAM </span>{bytes(row.ramBytes)}</td>
-								<td class="number" title={row.swapBytes === null ? 'This server does not count swap per session' : undefined}><span class="label" aria-hidden="true">Swap </span>{row.swapBytes === null ? '–' : bytes(row.swapBytes)}</td>
+								<!-- A phone hides the column headers and shows each figure with its label instead, which takes the headers' place for a screen reader too. -->
+								<td class="when">{ago(row.lastActive, now)}</td>
+								<td class="number ram"><span class="label">RAM</span> {bytes(row.ramBytes)}</td>
+								<td class="number swap" title={row.swapBytes === null ? 'This server does not count swap per session' : undefined}><span class="label">Swap</span> {row.swapBytes === null ? '–' : bytes(row.swapBytes)}</td>
 								<td class="action">
 									{#if row.session}
 										{@const id = row.session.id}
@@ -238,6 +239,7 @@
 
 	thead th {
 		padding: 0 0.75rem 0.4rem;
+		white-space: nowrap;
 		color: var(--faint);
 		font-size: 0.72rem;
 		font-weight: 600;
@@ -332,16 +334,22 @@
 		padding: 0.75rem;
 	}
 
-	/* A phone has no room for columns, so each session is a block with its numbers on a line of their own. */
+	/* A phone has no room for columns, so each session is a block: its name with Stop beside it, and its figures on a line below. */
+	.narrow table,
+	.narrow tbody {
+		display: block;
+	}
+
 	.narrow thead {
 		display: none;
 	}
 
 	.narrow tbody tr {
 		display: grid;
-		grid-template-columns: repeat(3, auto) 1fr;
+		grid-template-areas: 'name name name action' 'when ram swap swap';
+		grid-template-columns: auto auto minmax(0, 1fr) auto;
 		align-items: center;
-		gap: 0.25rem 1rem;
+		gap: 0.3rem 1rem;
 		padding: 0.6rem 0;
 	}
 
@@ -351,8 +359,26 @@
 	}
 
 	.narrow .session {
-		grid-column: 1 / -1;
+		grid-area: name;
+		width: auto;
+		min-width: 0;
 		max-width: none;
+	}
+
+	.narrow .when {
+		grid-area: when;
+	}
+
+	.narrow .ram {
+		grid-area: ram;
+	}
+
+	.narrow .swap {
+		grid-area: swap;
+	}
+
+	.narrow .action {
+		grid-area: action;
 	}
 
 	.narrow .label {

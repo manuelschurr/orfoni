@@ -53,10 +53,10 @@ test('lists each session that holds memory by RAM and swap together, with when a
 	expect(screen.getByText(/^3 orfoni sessions run and hold 3\.1 GB of RAM and 3\.5 GB of swap\./)).toBeTruthy();
 	const names = screen.getAllByRole('row').slice(1).map((tr) => within(tr).getByRole('rowheader').querySelector('.title')?.textContent);
 	expect(names).toEqual(['Hide subagent messages', 'Demo focus', 'Tmux pane navigation', 'Eagle']);
-	expect(cells(/Demo focus/)).toEqual(['Demo focus , Idle swarm', '5 d ago', '352 MB', '2.7 GB', 'Stop']);
-	expect(cells(/Hide subagent messages/)).toEqual(['Hide subagent messages , Answered orfoni, with a shell', '2 h ago', '2.6 GB', '850 MB', 'Stop']);
-	expect(cells(/Eagle/)).toEqual(['Eagle , Idle alpha', '10 min ago', '150 MB', '–', 'Stop']);
-	expect(cells(/Tmux pane navigation/)).toEqual(['Tmux pane navigation root, outside orfoni in tmux main', '3 d ago', '954 MB', '746 MB', '']);
+	expect(cells(/Demo focus/)).toEqual(['Demo focus , Idle swarm', '5 d ago', 'RAM 352 MB', 'Swap 2.7 GB', 'Stop']);
+	expect(cells(/Hide subagent messages/)).toEqual(['Hide subagent messages , Answered orfoni, with a shell', '2 h ago', 'RAM 2.6 GB', 'Swap 850 MB', 'Stop']);
+	expect(cells(/Eagle/)).toEqual(['Eagle , Idle alpha', '10 min ago', 'RAM 150 MB', 'Swap –', 'Stop']);
+	expect(cells(/Tmux pane navigation/)).toEqual(['Tmux pane navigation root, outside orfoni in tmux main', '3 d ago', 'RAM 954 MB', 'Swap 746 MB', '']);
 	expect(screen.queryByText('Stopped long ago')).toBeNull();
 });
 
@@ -99,7 +99,7 @@ test('the figures refresh every 5 seconds while the screen is open', async () =>
 	vi.advanceTimersByTime(5_000);
 	transport.respond('memoryReport', report([held('s1', 2 * GB, 0)]));
 	await settle();
-	expect(within(row(/Old idea/)).getByText('2.0 GB')).toBeTruthy();
+	expect(cells(/Old idea/)[2]).toBe('RAM 2.0 GB');
 	view.unmount();
 	vi.advanceTimersByTime(20_000);
 	expect(transport.requests('memoryReport')).toHaveLength(2);
