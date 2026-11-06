@@ -15,6 +15,7 @@ import {
 	type HubMessage,
 	type HubStatus,
 	type ImageType,
+	type MemoryReport,
 	type MessageDocument,
 	type MessageImage,
 	type OtherSession,
@@ -32,7 +33,7 @@ import { dialogOpensOnNo } from './dialog.js';
 import { privateDir, writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
-import { paneMemory, systemMemory } from './memory.js';
+import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { noticesOf, titleOf } from './session/notices.js';
@@ -76,6 +77,8 @@ const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 // Claude Code draws a request's dialog as it runs the hook, and the next one once the hook's answer has closed the one before.
 const DIALOG_WAIT_MS = 1_000;
+// tmux gives each pane a scope of its own with this name. A process outside one, such as a Claude Code started straight from an SSH login, shares its cgroup with everything else in that login.
+const PANE_SCOPE = /^tmux-spawn-[^/]+\.scope$/;
 const DIALOG_POLL_MS = 100;
 const DIALOG_SETTLE_MS = 300;
 const LOW_MEMORY_BYTES = 1.5 * 1024 ** 3;
@@ -310,6 +313,12 @@ function pastConversations(listed: SDKSessionInfo[], held: Set<string>): PastCon
 		.slice(0, MAX_PAST_CONVERSATIONS);
 }
 
+// Swap is known only when every scope counts it.
+function added(held: ScopeMemory[]): { ramBytes: number; swapBytes: number | null } {
+	const swap = held.map((memory) => memory.swapBytes);
+	return { ramBytes: held.reduce((sum, memory) => sum + memory.ramBytes, 0), swapBytes: swap.includes(null) ? null : (swap as number[]).reduce((sum, bytes) => sum + bytes, 0) };
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -498,6 +507,8 @@ export class Hub {
 				return {};
 			case 'hubStatus':
 				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.plan };
+			case 'memoryReport':
+				return this.memoryReport();
 			case 'relaunchSession':
 				return this.relaunch(this.session(request.sessionId), request);
 			case 'forkSession':
@@ -979,6 +990,30 @@ export class Hub {
 		const name = `${prefix}${Math.max(0, ...numbers) + 1}`;
 		await this.options.tmux.newSession(name, session.projectDir, {}, [this.options.shell, '-l']);
 		return name;
+	}
+
+	private async memoryReport(): Promise<MemoryReport> {
+		const panes = (await this.options.tmux.listSessions()).filter((pane) => !pane.paneDead);
+		const read = (pid: number, whose: string) =>
+			scopeMemory(pid, this.options.systemRoot).catch((error: Error) => {
+				this.options.log(`orfoni-hub: reading the memory of ${whose} failed: ${error.message}`);
+				return null;
+			});
+		const sessions = await Promise.all(
+			[...this.sessions.values()].map(async ({ id }) => {
+				const name = tmuxName(id);
+				const own = panes.filter((pane) => pane.name === name || pane.name.startsWith(`${name}-sh`));
+				const held = (await Promise.all(own.map((pane) => read(pane.panePid, `session ${id}`)))).filter((memory) => memory !== null);
+				return held.length === 0 ? [] : [{ sessionId: id, shells: own.filter((pane) => pane.name !== name).length, ...added(held) }];
+			}),
+		);
+		const others = await Promise.all(
+			this.shownOthers.map(async ({ pid }) => {
+				const held = await read(pid, `process ${pid}`);
+				return held && PANE_SCOPE.test(basename(held.scope)) ? [{ pid, ...added([held]) }] : [];
+			}),
+		);
+		return { server: await serverMemory(this.options.systemRoot), sessions: sessions.flat(), others: others.flat() };
 	}
 
 	private async checkPanes(): Promise<void> {

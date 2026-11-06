@@ -132,19 +132,20 @@ function body(name: string, claudeSessionId: string, fields: Record<string, unkn
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
-function writeMeminfo(availableBytes: number, totalBytes = 12 * GB): void {
+function writeMeminfo(availableBytes: number, totalBytes = 12 * GB, swapFreeBytes = 12 * GB, swapTotalBytes = 12 * GB): void {
 	mkdirSync(join(dir, 'root/proc'), { recursive: true });
-	writeFileSync(join(dir, 'root/proc/meminfo'), `MemTotal: ${totalBytes / 1024} kB\nMemFree: 1000 kB\nMemAvailable: ${availableBytes / 1024} kB\n`);
+	writeFileSync(join(dir, 'root/proc/meminfo'), `MemTotal: ${totalBytes / 1024} kB\nMemFree: 1000 kB\nMemAvailable: ${availableBytes / 1024} kB\nSwapTotal: ${swapTotalBytes / 1024} kB\nSwapFree: ${swapFreeBytes / 1024} kB\n`);
 }
 
-function writeCgroup(panePid: number, currentBytes: number, oomKills = 0): void {
-	const scope = `user.slice/tmux-spawn-${panePid}.scope`;
+// A kernel that counts swap per cgroup writes memory.swap.current, which the scope then has.
+function writeCgroup(panePid: number, currentBytes: number, oomKills = 0, swapBytes?: number, scope = `user.slice/tmux-spawn-${panePid}.scope`): void {
 	mkdirSync(join(dir, 'root/proc', String(panePid)), { recursive: true });
 	mkdirSync(join(dir, 'root/sys/fs/cgroup', scope), { recursive: true });
 	writeFileSync(join(dir, 'root/proc', String(panePid), 'cgroup'), `0::/${scope}\n`);
 	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.current'), `${currentBytes}\n`);
 	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.max'), `${8 * GB}\n`);
 	writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.events'), `max 0\noom 0\noom_kill ${oomKills}\n`);
+	if (swapBytes !== undefined) writeFileSync(join(dir, 'root/sys/fs/cgroup', scope, 'memory.swap.current'), `${swapBytes}\n`);
 }
 
 const OTHER = 'dc5b988b-a782-4352-9056-0c133ae7370a' as ClaudeSessionId;
@@ -1326,6 +1327,33 @@ describe('memory', () => {
 		expect(released(watching)).toEqual([{ type: 'released', version: '0.3.22' }]);
 		expect(released(other)).toEqual([]);
 		expect(released(gone)).toEqual([]);
+	});
+
+	test('memoryReport tells the RAM and swap that each running session holds with its shells, and each session outside orfoni that runs in a tmux pane of its own', async () => {
+		writeMeminfo(3 * GB, 12 * GB, 4 * GB, 12 * GB);
+		runOther(4321);
+		// Started straight from an SSH login, so its cgroup holds the whole login.
+		runOther(4322, { sessionId: '3f0c4c4e-5d8a-4b7e-9a51-1c2d3e4f5a6b', tmux: null });
+		const client = await startHub();
+		const busy = await ready(client);
+		const quiet = await ready(client);
+		const stopped = await ready(client);
+		await client.ok('stopSession', { sessionId: stopped.id });
+		await client.ok('openShell', { sessionId: busy.id });
+		writeCgroup(1000, 2 * GB, 0, 3 * GB);
+		writeCgroup(1001, 300 * MB);
+		writeCgroup(1002, 500 * MB, 0, 0);
+		writeCgroup(4321, 900 * MB, 0, 700 * MB);
+		writeCgroup(4322, 4 * GB, 0, GB, 'user.slice/user-0.slice/session-3.scope');
+		await client.ok('listOtherSessions', {});
+		expect(await client.ok('memoryReport', {})).toEqual({
+			server: { availableBytes: 3 * GB, totalBytes: 12 * GB, swapFreeBytes: 4 * GB, swapTotalBytes: 12 * GB },
+			sessions: [
+				{ sessionId: busy.id, shells: 1, ramBytes: 2 * GB + 500 * MB, swapBytes: 3 * GB },
+				{ sessionId: quiet.id, shells: 0, ramBytes: 300 * MB, swapBytes: null },
+			],
+			others: [{ pid: 4321, ramBytes: 900 * MB, swapBytes: 700 * MB }],
+		});
 	});
 
 	test('startSession warns when less than 1.5 GB of memory is available', async () => {

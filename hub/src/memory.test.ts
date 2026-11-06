@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { paneMemory, systemMemory } from './memory.js';
+import { paneMemory, scopeMemory, serverMemory, systemMemory } from './memory.js';
 
 const scope = '/user.slice/user-0.slice/user@0.service/tmux-spawn-1.scope';
 
@@ -34,6 +34,40 @@ describe('paneMemory', () => {
 
 	test('gives null for a process that does not exist', async () => {
 		expect(await paneMemory(2 ** 30)).toBeNull();
+	});
+});
+
+describe('scopeMemory', () => {
+	test('reads the RAM and swap of the scope a process runs in, and names the scope', async () => {
+		const root = fakeRoot('max');
+		writeFileSync(join(root, 'sys/fs/cgroup', scope, 'memory.swap.current'), '2097152\n');
+		expect(await scopeMemory(4242, root)).toEqual({ scope, ramBytes: 7340032, swapBytes: 2097152 });
+	});
+
+	test('a kernel that does not count swap per scope gives no swap', async () => {
+		expect(await scopeMemory(4242, fakeRoot('max'))).toEqual({ scope, ramBytes: 7340032, swapBytes: null });
+	});
+
+	test('reads a live process on this machine', async () => {
+		expect((await scopeMemory(process.pid))?.ramBytes).toBeGreaterThan(0);
+	});
+
+	test('gives null for a process that does not exist', async () => {
+		expect(await scopeMemory(2 ** 30)).toBeNull();
+	});
+});
+
+describe('serverMemory', () => {
+	test('reads the available and total RAM and the free and total swap in bytes', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'orfoni-meminfo-'));
+		mkdirSync(join(root, 'proc'));
+		writeFileSync(join(root, 'proc/meminfo'), 'MemTotal:       12242248 kB\nMemAvailable:    7268896 kB\nSwapTotal:      12582908 kB\nSwapFree:        4404732 kB\n');
+		expect(await serverMemory(root)).toEqual({ availableBytes: 7268896 * 1024, totalBytes: 12242248 * 1024, swapFreeBytes: 4404732 * 1024, swapTotalBytes: 12582908 * 1024 });
+	});
+
+	test('reads this machine', async () => {
+		const memory = await serverMemory();
+		expect(memory.swapTotalBytes).toBeGreaterThanOrEqual(memory.swapFreeBytes);
 	});
 });
 

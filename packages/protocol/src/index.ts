@@ -62,6 +62,19 @@ export const HubStatus = z.object({
 });
 export type HubStatus = z.infer<typeof HubStatus>;
 
+// What processes hold, as the memory-capped scopes of their tmux panes count it. Swap is null where the kernel does not count it per scope.
+const HeldMemory = z.object({ ramBytes: z.number(), swapBytes: z.number().nullable() });
+
+// Who holds the server's memory, for the screen that finds sessions to stop.
+export const MemoryReport = z.object({
+	server: z.object({ availableBytes: z.number(), totalBytes: z.number(), swapFreeBytes: z.number(), swapTotalBytes: z.number() }),
+	// Each orfoni session with a process running, its Claude Code or a shell opened from it, all of which Stop ends.
+	sessions: z.array(HeldMemory.extend({ sessionId: SessionId, shells: z.number().int() })),
+	// Each session outside orfoni whose memory the hub can tell apart, which is one that runs in a tmux pane of its own.
+	others: z.array(HeldMemory.extend({ pid: z.number().int() })),
+});
+export type MemoryReport = z.infer<typeof MemoryReport>;
+
 // A Claude Code session that orfoni did not start, found in Claude Code's session registry. `tmux` is the tmux session it runs in, if any.
 export const OtherSession = z.object({
 	pid: z.number().int(),
@@ -230,6 +243,7 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('openShell'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('listProjectDirs') }),
 	z.object({ id, method: z.literal('hubStatus') }),
+	z.object({ id, method: z.literal('memoryReport') }),
 	z.object({ id, method: z.literal('removeSession'), sessionId: SessionId }),
 	z.object({ id, method: z.literal('relaunchSession'), sessionId: SessionId, model: z.string().min(1).optional(), effort: Effort.optional(), permissionMode: PermissionMode.optional() }),
 	z.object({ id, method: z.literal('forkSession'), sessionId: SessionId, prompt: z.string().min(1), title: z.string().min(1).optional() }),
