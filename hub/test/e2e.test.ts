@@ -27,6 +27,26 @@ async function start({ dir = newProjectDir(), ...params }: { prompt?: string; pe
 	return { id: result.session.id, dir };
 }
 
+// The hub restores its sessions before it listens, which takes longer the more sessions it keeps.
+async function restartHub(): Promise<void> {
+	execFileSync('systemctl', ['--user', 'restart', 'orfoni-hub']);
+	client.close();
+	client = await eventually(
+		async () => {
+			const fresh = HubClient.connect();
+			try {
+				await fresh.request('listSessions', {});
+				return fresh;
+			} catch {
+				fresh.close();
+				return null;
+			}
+		},
+		(connected) => connected !== null,
+		30_000,
+	).then((connected) => connected!);
+}
+
 const pendingApproval = (item: ChatItem) => item.kind === 'approval' && item.status === 'pending';
 
 // A folder Claude Code already trusts, so no trust dialog holds up a session started there, and its status line runs from the start.
@@ -210,23 +230,7 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 	test('hub restart keeps the session', async () => {
 		const { id } = await start({ prompt: 'Write a poem of 30 short lines about terminals. No tools.' });
 		await client.waitForChat(id, (item) => item.kind === 'assistant');
-		execFileSync('systemctl', ['--user', 'restart', 'orfoni-hub']);
-		client.close();
-		// The hub restores its sessions before it listens, which takes longer the more sessions it keeps.
-		client = await eventually(
-			async () => {
-				const fresh = HubClient.connect();
-				try {
-					await fresh.request('listSessions', {});
-					return fresh;
-				} catch {
-					fresh.close();
-					return null;
-				}
-			},
-			(connected) => connected !== null,
-			30_000,
-		).then((connected) => connected!);
+		await restartHub();
 		let state = '';
 		for (let i = 0; i < 120 && state !== 'answered'; i++) {
 			const sessions = (await client.request('listSessions', {})) as { id: string; state: string }[];
@@ -470,6 +474,27 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		await client.waitForSession(id, (s) => s.turnFrom === 'task');
 		const { chat } = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
 		expect(chat.filter((item) => item.kind === 'user').map((item) => (item.kind === 'user' ? item.text : ''))).toEqual(['Use the Bash tool with run_in_background set to true to run: sleep 5; echo bg-done. Then reply with exactly: started, and stop.']);
+	});
+
+	test('a background subagent\'s report shows as a message from it in a turn a task started, live and in history, not as a message from you', async () => {
+		const prompt = 'Use the Agent tool with run_in_background set to true, subagent_type general-purpose, description "Say pong", and prompt "Reply with exactly: pong. Use no tools." Then reply with exactly: started, and stop.';
+		const { id } = await start({ prompt, permissionMode: 'auto', dir: TRUSTED_DIR });
+		const report = await client.waitForChat(id, (item) => item.kind === 'peer');
+		expect(report).toMatchObject({ from: { kind: 'subagent', agentId: expect.stringMatching(/^a[0-9a-f]+$/) }, text: expect.stringMatching(/^pong\.?$/i) });
+		await client.waitForSession(id, (s) => s.turnFrom === 'task' && s.state !== 'working');
+		const live = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		expect(live.chat.filter((item) => item.kind === 'user').map((item) => (item.kind === 'user' ? item.text : ''))).toEqual([prompt]);
+		// The app names the report after the Agent call whose result carries the subagent's ID.
+		const agentId = report.kind === 'peer' && report.from.kind === 'subagent' ? report.from.agentId : '?';
+		const call = live.chat.find((item) => item.kind === 'tool' && item.name === 'Agent');
+		expect(JSON.stringify(call?.kind === 'tool' ? call.output : null)).toContain(agentId);
+		// After a restart the hub has no live chat, so the whole conversation comes from the transcript.
+		await restartHub();
+		const { chat } = (await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		expect(chat.filter((item) => item.kind === 'peer')).toEqual([{ ...report, id: expect.any(String), at: expect.any(Number) }]);
+		expect(chat.filter((item) => item.kind === 'user').map((item) => (item.kind === 'user' ? item.text : ''))).toEqual([prompt]);
+		const historyCall = chat.find((item) => item.kind === 'tool' && item.name === 'Agent');
+		expect(JSON.stringify(historyCall?.kind === 'tool' ? historyCall.output : null)).toContain(agentId);
 	});
 
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
