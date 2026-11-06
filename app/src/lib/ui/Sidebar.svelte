@@ -35,7 +35,7 @@
 		<span class="brand">orfoni{#if version}<span class="version" title="Installed version">{version}</span>{/if}</span>
 		<button class="btn" onclick={onnew}>New session</button>
 	</div>
-	{#if findUpdate}<UpdateButton find={findUpdate} />{/if}
+	{#if findUpdate}<UpdateButton find={findUpdate} hints={client.releaseHints} />{/if}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="groups" onkeydown={arrowKeys}>
 		{#each groups as group (group.dir)}

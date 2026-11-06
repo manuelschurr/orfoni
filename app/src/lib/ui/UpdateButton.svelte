@@ -1,18 +1,16 @@
 <script lang="ts">
 	import type { Update } from '../updates';
 
-	let { find }: { find: () => Promise<Update | null> } = $props();
+	// The app looks when it starts and each time hints counts up, as it does when the app connects to the hub and when the hub says a release is out.
+	let { find, hints = 0 }: { find: () => Promise<Update | null>; hints?: number } = $props();
 	let update = $state<Update | null>(null);
 	let step = $state<{ kind: 'offered' } | { kind: 'installing' } | { kind: 'failed'; reason: string }>({ kind: 'offered' });
 
 	$effect(() => {
-		const look = () =>
-			find().then((found) => {
-				if (found && step.kind !== 'installing') update = found;
-			});
-		void look();
-		const timer = setInterval(look, 6 * 3_600_000);
-		return () => clearInterval(timer);
+		void hints;
+		void find().then((found) => {
+			if (found && step.kind !== 'installing') update = found;
+		});
 	});
 
 	// On Windows the installer closes orfoni, installs the new version without asking, and starts it again, so a successful install never returns here.

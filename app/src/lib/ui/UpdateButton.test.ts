@@ -10,7 +10,7 @@ async function settle(): Promise<void> {
 }
 
 afterEach(() => {
-	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 test('offers a newer version, and while it installs says so instead of offering it again', async () => {
@@ -37,15 +37,17 @@ test('a failed update says why and can be tried again', async () => {
 	expect(install).toHaveBeenCalledTimes(2);
 });
 
-test('shows nothing while the installed version is the newest, and looks again every six hours', async () => {
-	vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-	const found: (Update | null)[] = [null, { version: '0.3.21', install: async () => {} }];
+test('shows nothing while the installed version is the newest, and looks again each time it gets a hint, with no timer', async () => {
+	const intervals = vi.spyOn(globalThis, 'setInterval');
+	const found: (Update | null)[] = [null, { version: '0.3.22', install: async () => {} }];
 	const find = vi.fn(async () => found.shift() ?? null);
-	render(UpdateButton, { find });
+	const { rerender } = render(UpdateButton, { find, hints: 0 });
 	await settle();
+	expect(find).toHaveBeenCalledOnce();
 	expect(screen.queryByRole('button')).toBeNull();
-	vi.advanceTimersByTime(6 * 3_600_000);
+	await rerender({ find, hints: 1 });
 	await settle();
 	expect(find).toHaveBeenCalledTimes(2);
-	expect(screen.getByRole('button', { name: 'Update to 0.3.21' })).toBeTruthy();
+	expect(screen.getByRole('button', { name: 'Update to 0.3.22' })).toBeTruthy();
+	expect(intervals).not.toHaveBeenCalled();
 });
