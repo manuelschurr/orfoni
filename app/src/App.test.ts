@@ -157,7 +157,8 @@ function notifications(): { title: string; body?: string; extra?: Record<string,
 	return shown;
 }
 
-function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType<typeof otherSession>[] = []) {
+// `results` answers other requests by their method.
+function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType<typeof otherSession>[] = [], results: Record<string, unknown> = {}) {
 	const hub = { line: (_message: unknown) => {}, click: (_message: unknown) => {} };
 	const commands = inTauri((cmd, args, push) => {
 		switch (cmd) {
@@ -175,6 +176,7 @@ function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType
 				if (request.method === 'openSession' && opened) hub.line({ type: 'response', id: request.id, ok: true, result: { session: opened, chat: [] } });
 				const other = others.find((candidate) => candidate.pid === request.pid);
 				if (request.method === 'openOtherSession' && other) hub.line({ type: 'response', id: request.id, ok: true, result: { session: other, chat: [] } });
+				if (request.method in results) hub.line({ type: 'response', id: request.id, ok: true, result: results[request.method] });
 				return null;
 			}
 			case 'plugin:notification|register_listener': {
@@ -503,6 +505,25 @@ test('on a narrow screen, going back closes a session outside orfoni like one of
 	history.back();
 	await waitFor(() => expect(screen.queryByText('Outside orfoni')).toBeNull());
 	expect(layers()).toBe(0);
+});
+
+test('on a narrow screen, the memory screen opens from the status bar in place of the session list, and going back closes it', async () => {
+	stubMedia(narrowWindow);
+	const GB = 1024 ** 3;
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })], [], {
+		hubStatus: { memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0 } },
+		memoryReport: { server: { availableBytes: 3 * GB, totalBytes: 12 * GB, swapFreeBytes: 4 * GB, swapTotalBytes: 12 * GB }, sessions: [{ sessionId: 'a1', shells: 0, ramBytes: GB, swapBytes: GB }], others: [] },
+	});
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: '3.0 GB of 12.0 GB free on the VPS' }));
+	expect(await screen.findByRole('heading', { level: 1, name: 'Memory' })).toBeTruthy();
+	expect(await screen.findByRole('row', { name: /Fix the login page/ })).toBeTruthy();
+	expect(layers()).toBe(1);
+
+	history.back();
+	await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Memory' })).toBeNull());
+	expect(layers()).toBe(0);
+	expect(screen.getByRole('button', { name: /^Fix the login page/ })).toBeTruthy();
 });
 
 test('on a narrow screen, a session that is removed while open takes its history entry along', async () => {

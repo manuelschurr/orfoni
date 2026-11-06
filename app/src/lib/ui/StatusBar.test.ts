@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, expect, test, vi } from 'vitest';
 import { connectedClient } from '../testing';
@@ -27,6 +27,15 @@ test('once connected, the status bar shows the memory free on the VPS and what s
 	expect(screen.getByText('4.2 GB of 11.7 GB free on the VPS')).toBeTruthy();
 	expect(screen.getByText('Summaries on, $0.37 today')).toBeTruthy();
 	expect(screen.getByText('Connected')).toBeTruthy();
+});
+
+test('the free memory opens the memory screen', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, true, 0.37));
+	await settle();
+	await fireEvent.click(screen.getByRole('button', { name: '4.2 GB of 11.7 GB free on the VPS' }));
+	expect(client.memoryShown).toBe(true);
 });
 
 test('the VPS memory and the summary spend refresh every 30 seconds, and go away while the hub is unreachable', async () => {

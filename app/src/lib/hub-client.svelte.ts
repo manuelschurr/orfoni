@@ -181,6 +181,8 @@ export class HubClient {
 	problem = $state<string | null>(null);
 	others = $state.raw<OtherSession[]>([]);
 	other = $state.raw<OtherView | null>(null);
+	// The memory screen, which takes the place of a conversation like a session outside orfoni does.
+	memoryShown = $state(false);
 	changes = $state.raw<Change[]>([]);
 	// The slash commands of each folder, listed once per connection. A folder whose listing is under way or failed has none.
 	commands = $state.raw(new Map<string, SlashCommand[]>());
@@ -216,6 +218,7 @@ export class HubClient {
 	select(sessionId: SessionId | null): Promise<void> {
 		this.selected = sessionId;
 		this.other = null;
+		this.memoryShown = false;
 		this.openError = null;
 		return sessionId === null ? Promise.resolve() : this.open(sessionId);
 	}
@@ -224,9 +227,21 @@ export class HubClient {
 		const session = this.others.find((other) => other.pid === pid);
 		if (!session) return Promise.reject(new HubRequestError('not_found', `No session with process ${pid} runs outside orfoni.`));
 		this.selected = null;
+		this.memoryShown = false;
 		this.openError = null;
 		this.other = { session, chat: undefined, error: null };
 		return this.loadOther();
+	}
+
+	showMemory(): void {
+		this.selected = null;
+		this.other = null;
+		this.openError = null;
+		this.memoryShown = true;
+	}
+
+	memoryReport(): Promise<MemoryReport> {
+		return this.request('memoryReport', {});
 	}
 
 	async send(sessionId: SessionId, text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): Promise<void> {

@@ -20,6 +20,7 @@
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
 	import EarlierConversationsDialog from './lib/ui/EarlierConversationsDialog.svelte';
+	import MemoryView from './lib/ui/MemoryView.svelte';
 	import { bytes, folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
 	import NewSessionDialog from './lib/ui/NewSessionDialog.svelte';
@@ -59,7 +60,7 @@
 	const narrow = new MediaQuery(NARROW);
 	const touch = new MediaQuery('(pointer: coarse)');
 	// The open conversation, which a narrow window shows in place of the session list.
-	const conversation = $derived(session?.id ?? (client?.other ? `outside ${client.other.session.pid}` : null));
+	const conversation = $derived(session?.id ?? (client?.other ? `outside ${client.other.session.pid}` : client?.memoryShown ? 'memory' : null));
 	const screen = $derived<'list' | 'conversation'>(conversation === null ? 'list' : 'conversation');
 	// What a narrow window shows in front of the conversation it was opened over, while there is something to show.
 	let front = $state<{ layer: 'tasks' | 'terminal'; over: string } | null>(null);
@@ -229,6 +230,8 @@
 				{#key client.other.session.pid}
 					<OtherSessionView {client} narrow={narrow.current} onback={() => void client?.select(null)} onported={started} />
 				{/key}
+			{:else if client.memoryShown}
+				<MemoryView {client} narrow={narrow.current} onback={() => void client?.select(null)} />
 			{:else}
 				<div class="welcome">
 					<p>Pick a session on the left, or start a new one.</p>

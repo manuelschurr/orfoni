@@ -68,7 +68,7 @@
 	</div>
 	{#if hub}
 		<p class="stats">
-			<span>{bytes(hub.memory.availableBytes)} of {bytes(hub.memory.totalBytes)} free on the VPS</span>
+			<button class="memory" title="Which sessions hold the memory" aria-current={client.memoryShown ? 'page' : undefined} onclick={() => client.showMemory()}>{bytes(hub.memory.availableBytes)} of {bytes(hub.memory.totalBytes)} free on the VPS</button>
 			<span>{hub.summaries.enabled ? `Summaries on, ${usd.format(hub.summaries.spentTodayUsd)} today` : 'Summaries off'}</span>
 			{#each windows as { name, usedPercent, resetsAt, soon } (name)}
 				<span class:warning={usedPercent >= 80}>{name} {Math.round(usedPercent)}% used, resets {soon ? `at ${clock.format(resetsAt)}` : dayAndClock.format(resetsAt)}</span>
@@ -158,6 +158,24 @@
 		color: var(--faint);
 		font-size: 0.75rem;
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* Opens the memory screen, and reads as a link so the bar stays quiet. */
+	.memory {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		text-decoration: underline dotted;
+		text-underline-offset: 0.2em;
+		cursor: pointer;
+	}
+
+	.memory:hover,
+	.memory[aria-current='page'] {
+		color: var(--text);
 	}
 
 	/* The colour and weight the header gives memory near its limit. */
