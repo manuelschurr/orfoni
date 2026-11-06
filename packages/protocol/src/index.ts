@@ -29,6 +29,8 @@ export const SessionSummary = z.object({
 	claudeSessionId: ClaudeSessionId.nullable(),
 	state: SessionStateKind,
 	stateSince: z.number(),
+	// When a message last passed between you and Claude, which a hub restart keeps, unlike stateSince. Null from a hub before 0.3.23.
+	lastActiveAt: z.number().nullable().default(null),
 	summary: z.object({ about: z.string(), status: z.string(), at: z.number() }).nullable().default(null),
 	tasks: z.object({ done: z.number().int(), total: z.number().int() }).nullable().default(null),
 	memory: z.object({ currentBytes: z.number(), maxBytes: z.number().nullable(), oomKills: z.number().int() }).nullable().default(null),

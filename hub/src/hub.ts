@@ -222,11 +222,11 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push };
 }
 
-const SHOWN = ['state', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -245,17 +245,29 @@ function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
 	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
 }
 
-async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<{ state: SessionStateKind; lastTurnEndedAt: number | null }> {
+interface Restored {
+	state: SessionStateKind;
+	lastTurnEndedAt: number | null;
+	lastActiveAt: number;
+}
+
+// A state file from before lastActiveAt has only the end of the last turn you started.
+function storedActivity({ lastActiveAt, lastTurnEndedAt, createdAt }: StoredSession): number {
+	return lastActiveAt ?? lastTurnEndedAt ?? createdAt;
+}
+
+async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<Restored> {
 	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt } = stored;
 	try {
 		const history = await options.readHistory(claudeSessionId, projectDir);
-		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt };
-		// The Stop hook of a turn that ended while the hub was down reached nobody, so the transcript is the only record of when it ended.
+		// What happened while the hub was down reached nobody through the hooks, so the transcript is the only record of it.
+		const lastActiveAt = Math.max(storedActivity(stored), lastEntryAt(history) ?? 0);
+		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt, lastActiveAt };
 		const endedAt = Math.max(lastTurnEndedAt ?? 0, lastEntryAt(history) ?? 0) || null;
-		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt };
+		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt, lastActiveAt };
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
-		return { state: 'working', lastTurnEndedAt };
+		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored) };
 	}
 }
 
@@ -347,13 +359,15 @@ export class Hub {
 		const running = new Set((await options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
 		const hub = new Hub(options, state.summaries);
 		const restored = await Promise.all(
-			state.sessions.map((stored) => (running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline' as const, lastTurnEndedAt: stored.lastTurnEndedAt })),
+			state.sessions.map((stored): Promise<Restored> | Restored =>
+				running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline', lastTurnEndedAt: stored.lastTurnEndedAt, lastActiveAt: storedActivity(stored) },
+			),
 		);
 		const taskFiles = await Promise.all(state.sessions.map((stored) => readTaskFiles(options.claudeTasksDir, stored.claudeSessionId)));
 		const now = Date.now();
 		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
-			const { state: kind, lastTurnEndedAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, state: kind };
+			const { state: kind, lastTurnEndedAt, lastActiveAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -911,7 +925,7 @@ export class Hub {
 	private async listProjectDirs(): Promise<ProjectDir[]> {
 		const lastActive = new Map<string, number | null>();
 		for (const root of ['projects', 'code']) for (const path of await subfolders(join(this.options.home, root))) lastActive.set(path, null);
-		for (const { projectDir, model } of this.sessions.values()) lastActive.set(projectDir, Math.max(lastActive.get(projectDir) ?? 0, model.stateSince));
+		for (const { projectDir, model } of this.sessions.values()) lastActive.set(projectDir, Math.max(lastActive.get(projectDir) ?? 0, model.lastActiveAt));
 		return [...lastActive]
 			.map(([path, lastActive]) => ({ path, lastActive }))
 			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0) || a.path.localeCompare(b.path));
@@ -1124,6 +1138,7 @@ export class Hub {
 						taskList: model.taskList,
 						lastTurnEndedAt: model.lastTurnEndedAt,
 						lastViewedAt: model.lastViewedAt,
+						lastActiveAt: model.lastActiveAt,
 					})),
 					summaries: this.summarizer.budget,
 				}),

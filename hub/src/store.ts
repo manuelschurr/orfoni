@@ -20,7 +20,8 @@ const StoredSessionV2 = StoredSessionV1.extend({
 	lastViewedAt: z.number().nullable(),
 });
 
-const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem) });
+// A file from before lastActiveAt has none, and the session then counts as active when its last turn ended.
+const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null) });
 export type StoredSession = z.infer<typeof StoredSession>;
 
 const HubState = z.object({ version: z.literal(3), sessions: z.array(StoredSession), summaries: SummaryBudget.nullable() });
@@ -33,6 +34,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 		sessions: sessions.map(({ tasks, ...session }) => ({
 			...session,
 			taskList: Object.entries(tasks).map(([id, done]) => ({ id, subject: unnamedTask(id), status: done ? 'completed' : 'pending', activeForm: null })),
+			lastActiveAt: null,
 		})),
 		summaries,
 	}),
@@ -42,7 +44,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 const HubStateV1 = z.object({ version: z.literal(1), sessions: z.array(StoredSessionV1) }).transform(
 	({ sessions }): HubState => ({
 		version: 3,
-		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null })),
+		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null })),
 		summaries: null,
 	}),
 );

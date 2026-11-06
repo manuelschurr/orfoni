@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
+	import { lastActive } from '../hub-client.svelte';
 	import { oomKills, relativeTime, rowMemory, stateLabel, tasksDone } from './format';
 
 	let { session, title, selected, now, onselect }: { session: SessionSummary; title: string; selected: boolean; now: number; onselect: () => void } = $props();
@@ -15,7 +16,7 @@
 		<span class="line">
 			<span class="title">{title}</span>
 			<span class="sr-only">{stateLabel[session.state]}{unread ? ', unread' : ''},</span>
-			<span class="time">{relativeTime(session.stateSince, now)}</span>
+			<span class="time" title="Last message">{relativeTime(lastActive(session), now)}</span>
 		</span>
 		{#if about || session.tasks || memory}
 			<span class="line second">

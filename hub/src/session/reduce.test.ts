@@ -52,6 +52,33 @@ describe('reduce', () => {
 		expect(run(started, hook('prompt', { text }, 2), hook('stop', { lastAssistantMessage: 'It said pong.' }, 3))).toMatchObject({ state: 'idle', lastTurnEndedAt: null });
 	});
 
+	// The list shows how long a session has been quiet, which a restart, opening it, an approval answered or Claude Code exiting says nothing about.
+	test('the last activity moves with a message to Claude, a finished reply, a request, and the end of a turn, and with nothing else', () => {
+		const approvalId = RequestId.parse('r-active');
+		const chain: [SessionInput, number][] = [
+			[started, 0],
+			[prompted, 2],
+			[hook('assistant_text', { messageId: 'm1', index: 0, delta: 'Wor', final: false }, 3), 2],
+			[hook('assistant_text', { messageId: 'm1', index: 1, delta: 'king on it.', final: true }, 4), 4],
+			[hook('tool_start', { toolUseId: 't1', name: 'Bash', input: { command: 'ls' } }, 5), 4],
+			[{ kind: 'request_opened', requestId: approvalId, item: approval(approvalId), at: 6 }, 6],
+			[{ kind: 'request_closed', requestId: approvalId, outcome: 'allowed', at: 7 }, 6],
+			[hook('stop', { lastAssistantMessage: 'done' }, 8), 8],
+			[{ kind: 'view_changed', viewing: true, at: 9 }, 8],
+			[hook('notification', { kind: 'idle_prompt' }, 10), 8],
+			[{ kind: 'pane_exited', at: 11 }, 8],
+		];
+		let model = emptySession(0, first);
+		for (const [input, lastActiveAt] of chain) {
+			model = reduce(model, input);
+			expect({ input: input.kind === 'hook' ? input.event.type : input.kind, lastActiveAt: model.lastActiveAt }).toEqual({ input: input.kind === 'hook' ? input.event.type : input.kind, lastActiveAt });
+		}
+	});
+
+	test('a turn that ends in an error counts as activity', () => {
+		expect(run(started, prompted, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: null }, 5)).lastActiveAt).toBe(5);
+	});
+
 	test('session_start with source clear takes the new Claude session ID, empties the chat, and goes idle', () => {
 		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_start', { source: 'clear' }, 4, second));
 		expect(model.claudeSessionId).toBe(second);

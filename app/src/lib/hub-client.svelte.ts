@@ -69,6 +69,11 @@ export interface Project {
 	others: OtherSession[];
 }
 
+// When a message last passed between you and Claude. A hub before 0.3.23 reports only when the state last changed, which its restart sets for every session.
+export function lastActive(session: SessionSummary): number {
+	return session.lastActiveAt ?? session.stateSince;
+}
+
 // Only orfoni's own sessions place a folder, so folders that hold nothing but sessions outside orfoni come last.
 export function groupProjects(sessions: Iterable<SessionSummary>, others: Iterable<OtherSession>): Project[] {
 	const groups = new Map<string, Project>();
@@ -79,12 +84,12 @@ export function groupProjects(sessions: Iterable<SessionSummary>, others: Iterab
 	};
 	for (const session of sessions) group(session.projectDir).sessions.push(session);
 	for (const other of others) group(other.projectDir).others.push(other);
-	const newest = (project: Project) => project.sessions[0]?.stateSince ?? 0;
+	const newest = (project: Project) => (project.sessions[0] ? lastActive(project.sessions[0]) : 0);
 	const newestOther = (project: Project) => project.others[0]?.statusSince ?? 0;
 	return [...groups.values()]
 		.map((project) => ({
 			...project,
-			sessions: project.sessions.toSorted((a, b) => b.stateSince - a.stateSince),
+			sessions: project.sessions.toSorted((a, b) => lastActive(b) - lastActive(a)),
 			others: project.others.toSorted((a, b) => b.statusSince - a.statusSince),
 		}))
 		.sort((a, b) => newest(b) - newest(a) || newestOther(b) - newestOther(a) || a.dir.localeCompare(b.dir));

@@ -57,6 +57,13 @@ test('a row with no summary, no tasks, and memory under 1 GB shows only its titl
 	expect(words(row(/Fresh session/))).toBe('Fresh session Idle, now');
 });
 
+test("a row's time is when a message last passed, not when the hub last restarted", async () => {
+	const now = Date.now();
+	const { client } = await connectedClient([summary('s1', 'idle', { title: 'Old session', stateSince: now - 45 * 60_000, lastActiveAt: now - 3 * 86_400_000 })]);
+	render(Sidebar, { client, onnew: () => {} });
+	expect(words(row(/Old session/))).toBe('Old session Idle, 3 d');
+});
+
 test('a row shows its memory after an out-of-memory kill, even when the memory is low again', async () => {
 	const { client } = await connectedClient([summary('s1', 'idle', { title: 'Ran the big suite', memory: { currentBytes: 300 * MB, maxBytes: 8 * GB, oomKills: 2 } })]);
 	render(Sidebar, { client, onnew: () => {} });

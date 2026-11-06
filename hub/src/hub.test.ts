@@ -319,7 +319,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1888,7 +1888,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
@@ -2216,9 +2216,36 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
 		]);
+	});
+
+	// A restart used to stamp every session with the moment the hub came back, so the whole list read "45 min".
+	test('the last message survives a restart, and a running session whose transcript moved on while the hub was down takes the newer time', async () => {
+		const client = await startHub();
+		const quiet = await ready(client);
+		const busy = await ready(client);
+		const off = await ready(client);
+		vi.setSystemTime(T0 + 1000);
+		for (const { id, claude } of [quiet, busy, off]) {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+			await hub.hook(id, body('Stop', claude));
+		}
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && (JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as { sessions: { lastActiveAt: number }[] }).sessions.every((session) => session.lastActiveAt === T0 + 1000));
+		hub.close();
+		const finished = (at: number) => [entry('user', 'hi'), { ...entry('assistant', [{ type: 'text', text: 'done' }], 'end_turn'), timestamp: new Date(at).toISOString() }];
+		transcripts.set(quiet.claude, finished(T0 + 900));
+		transcripts.set(busy.claude, finished(T0 + 30_000));
+		vi.setSystemTime(T0 + 3_600_000);
+
+		const after = await startHub(fakeTmux([`orfoni-${quiet.id}`, `orfoni-${busy.id}`]));
+		const sessions = (await after.ok('listSessions', {})) as SessionSummary[];
+		expect(Object.fromEntries(sessions.map((session) => [session.id, [session.lastActiveAt, session.stateSince]]))).toEqual({
+			[quiet.id]: [T0 + 1000, T0 + 3_600_000],
+			[busy.id]: [T0 + 30_000, T0 + 3_600_000],
+			[off.id]: [T0 + 1000, T0 + 3_600_000],
+		});
 	});
 
 	test('a session that kept running comes back idle when its transcript ends with a finished reply, and working otherwise', async () => {
@@ -2476,6 +2503,8 @@ describe('listProjectDirs', () => {
 		vi.setSystemTime(T0 + 2000);
 		await start(client);
 		vi.setSystemTime(T0 + 3000);
+		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'hi' }));
+		vi.setSystemTime(T0 + 4000);
 		await client.ok('stopSession', { sessionId: first.id });
 		expect(await client.ok('listProjectDirs', {})).toEqual({
 			dirs: [

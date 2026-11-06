@@ -25,6 +25,7 @@ const state: HubState = {
 			],
 			lastTurnEndedAt: 1400,
 			lastViewedAt: 1450,
+			lastActiveAt: 1420,
 		},
 		{
 			id: SessionId.parse('s-2'),
@@ -36,6 +37,7 @@ const state: HubState = {
 			taskList: [],
 			lastTurnEndedAt: null,
 			lastViewedAt: null,
+			lastActiveAt: null,
 		},
 	],
 	summaries: { day: '2026-10-27', requests: 12, spentUsd: 0.0042 },
@@ -107,7 +109,7 @@ describe('store', () => {
 		const loaded = await loadState(path, (line) => logged.push(line));
 		expect(loaded).toEqual({
 			version: 3,
-			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null })),
+			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null })),
 			summaries: null,
 		});
 		expect(readdirSync(dir)).toEqual(['state.json']);
@@ -131,13 +133,23 @@ describe('store', () => {
 						{ id: '2', subject: 'Task #2', status: 'pending', activeForm: null },
 						{ id: '10', subject: 'Task #10', status: 'completed', activeForm: null },
 					],
+					lastActiveAt: null,
 				},
-				{ ...second, taskList: [] },
+				{ ...second, taskList: [], lastActiveAt: null },
 			],
 			summaries: beforeTaskLists.summaries,
 		});
 		expect(readdirSync(dir)).toEqual(['state.json']);
 		expect(logged).toEqual([expect.stringContaining('version 2')]);
+	});
+
+	test('a version 3 file from before the last activity was kept loads with none, without a migration', async () => {
+		const path = join(scratch(), 'state.json');
+		const before = { ...state, sessions: state.sessions.map(({ lastActiveAt: _, ...session }) => session) };
+		writeFileSync(path, JSON.stringify(before));
+		const logged: string[] = [];
+		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, lastActiveAt: null })) });
+		expect(logged).toEqual([]);
 	});
 
 	test.each([

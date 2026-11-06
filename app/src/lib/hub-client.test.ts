@@ -8,7 +8,7 @@ const CLAUDE_1 = ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111');
 const CLAUDE_2 = ClaudeSessionId.parse('22222222-2222-4222-8222-222222222222');
 
 function session(id: string, projectDir: string, stateSince: number, state: SessionStateKind = 'idle', claudeSessionId = CLAUDE_1): SessionSummary {
-	return { id: SessionId.parse(id), projectDir, title: null, claudeSessionId, state, stateSince, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null };
+	return { id: SessionId.parse(id), projectDir, title: null, claudeSessionId, state, stateSince, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null };
 }
 
 const a1 = session('a1', '/root/projects/alpha', 100);
@@ -50,6 +50,18 @@ describe('HubClient', () => {
 			['/root/code/beta', ['b1']],
 		]);
 		transport.push({ type: 'sessionUpdated', session: { ...b1, state: 'working', stateSince: 400 } });
+		expect(client.projects.map((p) => p.dir)).toEqual(['/root/code/beta', '/root/projects/alpha']);
+	});
+
+	// A hub restart sets every session's stateSince to the moment it started again.
+	test('orders the sessions and folders by the last message, which a hub restart keeps, when the hub reports it', async () => {
+		const restarted = (target: SessionSummary, lastActiveAt: number) => ({ ...target, stateSince: 900, lastActiveAt });
+		await connect([restarted(a1, 100), restarted(a2, 300), restarted(b1, 200)]);
+		expect(client.projects.map((p) => [p.dir, p.sessions.map((s) => s.id)])).toEqual([
+			['/root/projects/alpha', ['a2', 'a1']],
+			['/root/code/beta', ['b1']],
+		]);
+		transport.push({ type: 'sessionUpdated', session: restarted(b1, 400) });
 		expect(client.projects.map((p) => p.dir)).toEqual(['/root/code/beta', '/root/projects/alpha']);
 	});
 

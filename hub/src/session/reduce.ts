@@ -32,6 +32,8 @@ export interface SessionModel {
 	push: { message: string; at: number } | null;
 	lastTurnEndedAt: number | null;
 	lastViewedAt: number | null;
+	// When a message last passed between you and Claude: a message to Claude, a reply, a request, or the end of a turn. A hub restart keeps it, unlike stateSince.
+	lastActiveAt: number;
 }
 
 export type SessionInput =
@@ -58,7 +60,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: at };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -99,6 +101,10 @@ function readStatusLine(model: SessionModel, statusLine: StatusLine): SessionMod
 	// The plan usage is the account's, which the hub keeps apart, so it alone changes no session.
 	const same = kept !== null && kept.model.id === statusLine.model.id && kept.model.name === statusLine.model.name && kept.effort === statusLine.effort && kept.context === statusLine.context;
 	return same ? model : { ...model, statusLine, ranOn: statusLine };
+}
+
+function active(model: SessionModel, at: number): SessionModel {
+	return { ...model, lastActiveAt: at };
 }
 
 function enter(model: SessionModel, state: SessionStateKind, at: number): SessionModel {
@@ -168,11 +174,11 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 				}
 				case 'prompt': {
 					const items = promptItems(event.text, at);
-					return enter({ ...model, chat: [...model.chat, ...items], turnFrom: items[0]?.kind === 'user' ? 'you' : 'task' }, 'working', at);
+					return enter({ ...model, chat: [...model.chat, ...items], turnFrom: items[0]?.kind === 'user' ? 'you' : 'task', lastActiveAt: at }, 'working', at);
 				}
 				case 'assistant_text':
 					return {
-						...model,
+						...(event.final ? active(model, at) : model),
 						chat: upsert(model.chat, isAssistant(event.messageId), (existing) => ({
 							kind: 'assistant',
 							id: event.messageId,
@@ -222,11 +228,11 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 						})),
 					};
 				case 'stop':
-					return endTurn(model, at);
+					return endTurn(active(model, at), at);
 				case 'stop_failure':
 					return enter(
 						{
-							...model,
+							...active(model, at),
 							chat: [...model.chat, { kind: 'notice', id: `notice-${randomUUID()}`, text: event.lastAssistantMessage ?? event.error, at }],
 						},
 						'failed',
@@ -245,7 +251,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 		case 'request_opened': {
 			const waiting = input.item.kind === 'question' || input.item.kind === 'plan' ? 'needs_answer' : 'needs_approval';
 			return enter(
-				{ ...model, chat: [...model.chat, input.item], openRequests: [...model.openRequests, input.requestId] },
+				{ ...active(model, at), chat: [...model.chat, input.item], openRequests: [...model.openRequests, input.requestId] },
 				waiting,
 				at,
 			);
