@@ -497,6 +497,14 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(JSON.stringify(historyCall?.kind === 'tool' ? historyCall.output : null)).toContain(agentId);
 	});
 
+	// The version names no release, so an app that hears of it looks for its update and finds only the real latest.
+	test('a release announced with the command-line client reaches a client that asked to hear of releases', async () => {
+		await client.request('watchReleases', {});
+		const since = client.mark();
+		expect(execFileSync('orfoni', ['announce-release', '0.0.0'], { encoding: 'utf8' })).toMatch(/^told \d+ connected apps? about 0\.0\.0$/m);
+		expect(await client.waitFor((message) => message.type === 'released', since, 10_000)).toEqual({ type: 'released', version: '0.0.0' });
+	});
+
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
 		const before = defaults();
 		const { id } = await start({
