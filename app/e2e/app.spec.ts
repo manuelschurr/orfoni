@@ -545,6 +545,20 @@ test('a PDF picked with the paperclip goes to Claude with the message, and the c
 	await expect(page.getByRole('main').getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0);
 });
 
+test('a background subagent\'s report folds into a quiet line named after its task, not into a message from you, and opens to show the report', async ({ page }) => {
+	const prompt = 'Use the Agent tool with run_in_background set to true, subagent_type general-purpose, description "Say pong", and prompt "Reply with exactly: pong. Use no tools." Then reply with exactly: started, and stop.';
+	const session = await startReady({ title: 'subagent check', prompt, permissionMode: 'auto' });
+	await openSession(page, session);
+	const line = page.getByRole('button', { name: 'Report from the agent: Say pong' });
+	await expect(line).toBeVisible({ timeout: REPLY_MS });
+	await expect(line).toHaveAttribute('aria-expanded', 'false');
+	// Claude answers once when it starts the subagent and again once it has read the report.
+	await expect(claude(page)).toHaveCount(2, { timeout: REPLY_MS });
+	await expect(you(page)).toHaveText([prompt]);
+	await line.click();
+	await expect(page.getByRole('main').getByText(/^pong\.?$/i)).toBeVisible();
+});
+
 test('an image pasted into the message box goes to Claude with the message', async ({ page }) => {
 	const session = await startReady({ title: 'image check' });
 	await openSession(page, session);
