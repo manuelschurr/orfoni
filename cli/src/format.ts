@@ -12,6 +12,8 @@ export function formatChatItem(item: ChatItem): string {
 			return `claude: ${item.text}`;
 		case 'notice':
 			return `notice: ${item.text}`;
+		case 'peer':
+			return item.from.kind === 'subagent' ? `subagent ${item.from.agentId}: ${item.text}` : `session ${item.from.name ?? 'without a name'}: ${item.text}`;
 		case 'tool':
 			return `tool ${item.name} (${item.status}): ${JSON.stringify(item.input)}`;
 		case 'approval': {

@@ -6,6 +6,7 @@ import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
+import { peerMessages } from '../peer-message.js';
 import { taskNotice } from '../task-notification.js';
 import { sameTaskList, trackTasks, type PendingTaskCall } from './tasks.js';
 
@@ -138,6 +139,14 @@ function liveActivity(model: SessionModel): SessionModel {
 	return model.activity !== null && !(model.state === 'working' && model.viewing) ? { ...model, activity: null } : model;
 }
 
+// Claude Code sends Claude a background task's notice, a subagent's report and another session's message through the prompt, the way it sends what you type.
+function promptItems(text: string, at: number): ChatItem[] {
+	const notice = taskNotice(text);
+	if (notice !== null) return [{ kind: 'notice', id: `notice-${randomUUID()}`, text: notice, at }];
+	const peers = peerMessages(text, `peer-${randomUUID()}`, at);
+	return peers.length > 0 ? peers : [{ kind: 'user', id: `user-${randomUUID()}`, text, at }];
+}
+
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 	const stepped = step(model, input);
 	const next = liveActivity(input.kind === 'hook' ? withTasks(stepped, input.event) : stepped);
@@ -158,9 +167,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt': {
-					const notice = taskNotice(event.text);
-					const item: ChatItem = notice === null ? { kind: 'user', id: `user-${randomUUID()}`, text: event.text, at } : { kind: 'notice', id: `notice-${randomUUID()}`, text: notice, at };
-					return enter({ ...model, chat: [...model.chat, item], turnFrom: notice === null ? 'you' : 'task' }, 'working', at);
+					const items = promptItems(event.text, at);
+					return enter({ ...model, chat: [...model.chat, ...items], turnFrom: items[0]?.kind === 'user' ? 'you' : 'task' }, 'working', at);
 				}
 				case 'assistant_text':
 					return {

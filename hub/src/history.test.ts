@@ -95,6 +95,13 @@ test('a task notification in the transcript shows as a notice with its summary, 
 	expect(normalizeHistory([message('user', text)])).toEqual([{ kind: 'notice', id: expect.any(String), text: 'Background command "Run the full simulator test suite" completed (exit code 0)', at: Date.parse('2026-10-26T12:00:00.000Z') }]);
 });
 
+test('a subagent report in the transcript, which Claude Code marks as meta, shows as a message from that subagent', () => {
+	const text = `Another Claude session sent a message:\n<agent-message from="a26ea0c1f9122457e">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to. The report follows:\n  pong\n</agent-message>\n\nThis came from another Claude session, not typed by your user.`;
+	const report = { ...message('user', text), is_meta: true } as SessionMessage;
+	const hidden = { ...message('user', '<system-reminder>\nfor Claude\n</system-reminder>'), is_meta: true } as SessionMessage;
+	expect(normalizeHistory([report, hidden])).toEqual([{ kind: 'peer', id: expect.any(String), from: { kind: 'subagent', agentId: 'a26ea0c1f9122457e' }, text: 'pong', at: Date.parse('2026-10-26T12:00:00.000Z') }]);
+});
+
 describe('joinHistory', () => {
 	const notice: ChatItem = { kind: 'notice', id: 'n1', text: 'summary', at: 1 };
 	const firstPrompt: ChatItem = { kind: 'user', id: 'user-h1', text: 'first', at: 2 };
@@ -118,6 +125,11 @@ describe('joinHistory', () => {
 	test('a first live notice cuts the history at its transcript copy', () => {
 		const live: ChatItem[] = [{ kind: 'notice', id: 'notice-p1', text: 'Agent "Research" finished', at: 9 }];
 		expect(joinHistory([firstPrompt, reply, { kind: 'notice', id: 'notice-h3', text: 'Agent "Research" finished', at: 8 }], live)).toEqual([firstPrompt, reply, ...live]);
+	});
+
+	test('a first live subagent report cuts the history at its transcript copy', () => {
+		const report = (id: string, at: number): ChatItem => ({ kind: 'peer', id, from: { kind: 'subagent', agentId: 'a1' }, text: 'pong', at });
+		expect(joinHistory([firstPrompt, reply, report('peer-h3', 8)], [report('peer-p1', 9)])).toEqual([firstPrompt, reply, report('peer-p1', 9)]);
 	});
 
 	test('history without a copy of the first live item stays whole', () => {

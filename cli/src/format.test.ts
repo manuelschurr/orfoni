@@ -57,6 +57,12 @@ describe('formatChatItem', () => {
 		expect(line).toBe('tool Read (done): {"file_path":"/a"}');
 	});
 
+	test('prints a message from a subagent or another session with who sent it', () => {
+		expect(formatChatItem({ kind: 'peer', id: 'p1', from: { kind: 'subagent', agentId: 'a26ea0c1' }, text: 'pong', at: 0 })).toBe('subagent a26ea0c1: pong');
+		expect(formatChatItem({ kind: 'peer', id: 'p2', from: { kind: 'session', name: 'swarm repo' }, text: 'boards free', at: 0 })).toBe('session swarm repo: boards free');
+		expect(formatChatItem({ kind: 'peer', id: 'p3', from: { kind: 'session', name: null }, text: 'hi', at: 0 })).toBe('session without a name: hi');
+	});
+
 	test('prints a notice', () => {
 		expect(formatChatItem({ kind: 'notice', id: 'n1', text: 'Conversation compacted', at: 0 })).toBe('notice: Conversation compacted');
 	});

@@ -43,6 +43,15 @@ describe('reduce', () => {
 		expect(model.state).toBe('working');
 	});
 
+	// Claude Code hands Claude a subagent's report, or another session's message, in a message of its own, which fires the prompt hook like one you typed.
+	test('a subagent report shows as a message from that subagent, not as one from you, and its turn counts as a task\'s', () => {
+		const text = '<agent-message from="a26ea0c1f9122457e">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to. The report follows:\n  pong\n</agent-message>';
+		const model = run(started, hook('prompt', { text }, 2));
+		expect(model.chat).toEqual([{ kind: 'peer', id: expect.any(String), from: { kind: 'subagent', agentId: 'a26ea0c1f9122457e' }, text: 'pong', at: 2 }]);
+		expect(model).toMatchObject({ state: 'working', turnFrom: 'task' });
+		expect(run(started, hook('prompt', { text }, 2), hook('stop', { lastAssistantMessage: 'It said pong.' }, 3))).toMatchObject({ state: 'idle', lastTurnEndedAt: null });
+	});
+
 	test('session_start with source clear takes the new Claude session ID, empties the chat, and goes idle', () => {
 		const model = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_start', { source: 'clear' }, 4, second));
 		expect(model.claudeSessionId).toBe(second);

@@ -1,6 +1,7 @@
 import type { SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatItem } from '@orfoni/protocol';
 import { z } from 'zod';
+import { peerMessages } from './peer-message.js';
 import { taskNotice } from './task-notification.js';
 
 const Entry = z.object({
@@ -55,6 +56,11 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 				items.push({ kind: 'notice', id: `notice-${id}`, text: notice, at });
 				return;
 			}
+			const peers = peerMessages(text.data.text, `peer-${id}`, at);
+			if (peers.length > 0) {
+				items.push(...peers);
+				return;
+			}
 			const shown = typed(text.data.text);
 			if (shown !== null) items.push({ kind: 'user', id: `user-${id}`, text: shown, at });
 			return;
@@ -81,7 +87,11 @@ export function normalizeHistory(messages: SessionMessage[], before = Infinity):
 			items.push({ kind: 'notice', id: `notice-${uuid}`, text: textOf(body.content), at });
 			continue;
 		}
-		if (is_meta) continue;
+		// Claude Code marks a subagent's report and another session's message as meta, along with what it records for itself alone.
+		if (is_meta) {
+			items.push(...peerMessages(textOf(body.content), `peer-${uuid}`, at));
+			continue;
+		}
 		if (typeof body.content === 'string') block(type, uuid, at, { type: 'text', text: body.content });
 		else body.content.forEach((raw, index) => block(type, `${uuid}-${index}`, at, raw));
 	}
@@ -103,7 +113,7 @@ export function lastEntryAt(messages: SessionMessage[]): number | null {
 }
 
 function sameEvent(a: ChatItem, b: ChatItem): boolean {
-	if ((a.kind === 'user' && b.kind === 'user') || (a.kind === 'notice' && b.kind === 'notice')) return a.text === b.text;
+	if ((a.kind === 'user' && b.kind === 'user') || (a.kind === 'notice' && b.kind === 'notice') || (a.kind === 'peer' && b.kind === 'peer')) return a.text === b.text;
 	if (a.kind === 'tool' && b.kind === 'tool') return a.toolUseId === b.toolUseId;
 	return false;
 }

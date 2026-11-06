@@ -129,6 +129,14 @@ export const ChatItem = z.discriminatedUnion('kind', [
 		status: z.enum(['pending', 'approved', 'rejected', 'withdrawn']),
 	}),
 	z.object({ kind: z.literal('notice'), id: z.string(), text: z.string(), at: z.number() }),
+	// A message another Claude sent the session: a subagent's report, or a message from another session, which reaches Claude the way a message you typed does. A subagent is named by its agent ID, which the Agent call that started it returns, and another session by the name it gave.
+	z.object({
+		kind: z.literal('peer'),
+		id: z.string(),
+		from: z.discriminatedUnion('kind', [z.object({ kind: z.literal('subagent'), agentId: z.string() }), z.object({ kind: z.literal('session'), name: z.string().nullable() })]),
+		text: z.string(),
+		at: z.number(),
+	}),
 ]);
 export type ChatItem = z.infer<typeof ChatItem>;
 

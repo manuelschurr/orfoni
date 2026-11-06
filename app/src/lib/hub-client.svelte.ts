@@ -93,6 +93,7 @@ export function itemKey(item: ChatItem): string {
 		case 'user':
 		case 'assistant':
 		case 'notice':
+		case 'peer':
 			return `${item.kind}:${item.id}`;
 		case 'tool':
 			return `tool:${item.toolUseId}`;
