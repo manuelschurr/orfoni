@@ -39,7 +39,7 @@ import { noticesOf, titleOf } from './session/notices.js';
 import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
-import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
+import { newerPlan, parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { readTaskFiles } from './task-files.js';
@@ -421,7 +421,7 @@ export class Hub {
 			this.report(`orfoni-hub: ignored the status line of session ${session.id}: ${error.message}`);
 			return;
 		}
-		if (statusLine.plan) this.plan = statusLine.plan;
+		this.plan = newerPlan(this.plan, statusLine.plan);
 		this.apply(session, { kind: 'status_line', statusLine, at: Date.now() });
 	}
 

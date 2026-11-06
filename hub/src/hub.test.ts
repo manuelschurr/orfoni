@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, OtherSession, PastConversation, SessionId, SessionSummary } from '@orfoni/protocol';
+import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, HubStatus, OtherSession, PastConversation, SessionId, SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { documentName, Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
@@ -1389,17 +1389,26 @@ describe('model and effort', () => {
 		expect(other.session(id)).toMatchObject({ context: 87.5 });
 	});
 
-	// The plan windows belong to the account, so they come with the hub status rather than with a session.
-	test('the hub status carries the plan usage the latest status line reported, with when each window starts afresh', async () => {
+	// The plan windows belong to the account, so they come with the hub status rather than with a session. Each session repeats what it saw at its last turn, as 14, 18, 34, 36 and 38% of one 5-hour window did on 2026-11-06.
+	test('the hub status carries the freshest plan usage the sessions report: the latest window, its highest share, and a window no report has dropped', async () => {
 		const client = await startHub();
 		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: null });
-		const { id } = await ready(client);
-		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 89, resets_at: 1793124600 }, seven_day: { used_percentage: 47, resets_at: 1793271600 } } }));
-		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 89, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 47, resetsAt: 1793271600_000 } } });
-		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 91, resets_at: 1793124600 } } }));
-		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 91 }, sevenDay: null } });
-		hub.status(id, statusLine({ rate_limits: undefined }));
-		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: { fiveHour: { usedPercent: 91 } } });
+		const { id: active } = await ready(client);
+		const { id: idle } = await ready(client);
+		const plan = async () => ((await client.ok('hubStatus', {})) as HubStatus).plan;
+		const window = (used: number, resets: number) => ({ used_percentage: used, resets_at: resets });
+		hub.status(active, statusLine({ rate_limits: { five_hour: window(38, 1793124600), seven_day: window(17, 1793271600) } }));
+		expect(await plan()).toEqual({ fiveHour: { usedPercent: 38, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 17, resetsAt: 1793271600_000 } });
+		hub.status(idle, statusLine({ rate_limits: { five_hour: window(14, 1793124600), seven_day: window(13, 1793271600) } }));
+		hub.status(idle, statusLine({ rate_limits: { seven_day: window(5, 1793271600) } }));
+		hub.status(idle, statusLine({ rate_limits: undefined }));
+		expect(await plan()).toEqual({ fiveHour: { usedPercent: 38, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 17, resetsAt: 1793271600_000 } });
+		hub.status(active, statusLine({ rate_limits: { five_hour: window(41, 1793124600), seven_day: window(18, 1793271600) } }));
+		expect(await plan()).toMatchObject({ fiveHour: { usedPercent: 41 }, sevenDay: { usedPercent: 18 } });
+		// A window that started afresh has a later reset time, so its share replaces the higher one of the window before.
+		hub.status(active, statusLine({ rate_limits: { five_hour: window(2, 1793142600), seven_day: window(18, 1793271600) } }));
+		hub.status(idle, statusLine({ rate_limits: { five_hour: window(14, 1793124600) } }));
+		expect(await plan()).toMatchObject({ fiveHour: { usedPercent: 2, resetsAt: 1793142600_000 } });
 	});
 
 	test('the plan usage changes no session, so a status line that only moves it tells no client', async () => {
