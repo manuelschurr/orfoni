@@ -1,0 +1,14 @@
+ts	phase	decision	why	evidence	result
+2026-11-07T11:30:00Z	spike	28 sessions, 19 of them in swarm, and 11 with a message in the last 48 hours; folders and sessions were already newest first, so the crowding was volume, not order	he said the overview got crowded and asked for ideas	lastActiveAt in state.json on 2026-11-07	VERIFIED
+2026-11-07T11:30:00Z	design	fold a folder's idle and ended sessions once 48 hours have passed since a message, rather than filter the list	a filter is a mode that hides a session needing you once forgotten, and costs a row on the phone; the fold keeps the folders and only shortens them	he picked the fold and 48 hours (2026-11-07)	accepted
+2026-11-07T11:30:00Z	design	fold by the time a message last passed, not by whether Claude Code runs	running follows use only in part: a memento session ended a day ago was current, a swarm session idle 5 days was not, and a VPS restart ends them all	ages against states in state.json	accepted
+2026-11-07T11:30:00Z	design	working, needs approval, needs an answer, answered and failed never fold	the fold must never hide a session that needs you	component test	accepted
+2026-11-07T11:30:00Z	design	the open session stays in view while its folder is folded, and keeps its place among the older ones while the folder is open	choosing an older session must not move the row under the pointer, and folding must not hide what you are reading	component test	accepted
+2026-11-07T11:30:00Z	design	the folded line counts the older sessions still running	those hold memory, which the Memory screen frees	live: 11 older sessions, 2 still running in swarm	accepted
+2026-11-07T11:30:00Z	design	which folders are open is kept per device in localStorage, not in the hub	a convenience of each screen, and the phone has less room than the desktop	component test	accepted
+2026-11-07T11:30:00Z	design	sessions outside orfoni do not fold	each is a running process the design wants ported in, and they already sit after orfoni's own	none needed	accepted
+2026-11-07T11:30:00Z	design	no manual pin or hide	the rule needs no upkeep; an override is worth adding only if it misfires, and would then live in the hub so every device agrees	none needed	rejected
+2026-11-07T11:30:00Z	design	the app alone decides, from lastActiveAt and the state the hub already sends	no protocol change, so hubs and apps of any version keep working together	none needed	accepted
+2026-11-07T11:30:00Z	design	test sessions default to the current time instead of 1970	the list would fold every test session away	full suite: 832 pass	accepted
+2026-11-07T11:30:00Z	verified	the browser build against the live hub at 1400 px and 400 px, light and dark	the fold line lines up with the titles and opens in place	screenshots; live check passes	VERIFIED
+2026-11-07T11:30:00Z	unverified	the fold in the Windows and Android apps	needs a release		PENDING
