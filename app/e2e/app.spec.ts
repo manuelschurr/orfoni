@@ -77,10 +77,24 @@ test('the bridge refuses connections that lack its token', async () => {
 	expect(await refused(`${BRIDGE}/terminal?${new URLSearchParams({ target: '=orfoni-0', cols: '80', rows: '24' })}`)).toBe(true);
 });
 
-test('the session list loads', async ({ page }) => {
+test('the session list loads, and a session idle or ended for more than 48 hours shows once its folder opens the older ones', async ({ page }) => {
 	await hub.start({ projectDir: newProjectDir(), title: 'list check' });
 	const sessions = await hub.sessions();
 	await page.goto(APP);
+	// Sessions within ten minutes of 48 hours could fold while the check runs, so the check leaves them out until every folder is open.
+	const hours = (session: SessionSummary) => (Date.now() - (session.lastActiveAt ?? session.stateSince)) / 3600_000;
+	const quiet = sessions.filter((session) => session.state === 'idle' || session.state === 'offline');
+	const older = quiet.filter((session) => hours(session) > 48.2);
+	const recent = sessions.filter((session) => !quiet.includes(session) || hours(session) < 47.8);
+	for (const session of recent) await expect(page.locator(`[data-session="${session.id}"]`)).toBeVisible();
+	for (const session of older) await expect(page.locator(`[data-session="${session.id}"]`)).toHaveCount(0);
+	const folds = page.locator('[data-fold]');
+	await expect(folds.first()).toBeVisible({ visible: older.length > 0 });
+	for (const fold of await folds.all()) {
+		await expect(fold).toHaveText(/^\s*\d+ older sessions?(, \d+ still running)?$/);
+		await fold.click();
+		await expect(fold).toHaveAttribute('aria-expanded', 'true');
+	}
 	for (const session of sessions) await expect(page.locator(`[data-session="${session.id}"]`)).toBeVisible();
 });
 
