@@ -1,7 +1,7 @@
 import { ClaudeSessionId, RequestId, SessionId, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { FakeTransport } from './fake-transport';
-import { HubClient } from './hub-client.svelte';
+import { HubClient, isRecent } from './hub-client.svelte';
 import { otherSession } from './testing';
 
 const CLAUDE_1 = ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111');
@@ -406,3 +406,15 @@ describe('releases', () => {
 	});
 });
 
+
+test('an idle or ended session counts as recent for 48 hours after a message last passed, and one that works, waits, has an unread reply or failed always does', () => {
+	const now = 10 * 86_400_000;
+	const hours = (count: number) => now - count * 3600_000;
+	const at = (state: SessionStateKind, lastActiveAt: number) => ({ ...session('s1', '/root/projects/alpha', now, state), lastActiveAt });
+	expect(isRecent(at('idle', hours(47.9)), now)).toBe(true);
+	expect(isRecent(at('idle', hours(48)), now)).toBe(false);
+	expect(isRecent(at('offline', hours(47.9)), now)).toBe(true);
+	expect(isRecent(at('offline', hours(72)), now)).toBe(false);
+	for (const state of ['working', 'needs_approval', 'needs_answer', 'answered', 'failed'] as const) expect(isRecent(at(state, hours(240)), now)).toBe(true);
+	expect(isRecent({ ...session('s2', '/root/projects/alpha', hours(1)), lastActiveAt: null }, now)).toBe(true);
+});

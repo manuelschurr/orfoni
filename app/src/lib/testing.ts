@@ -24,7 +24,7 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 		title: null,
 		claudeSessionId: ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111'),
 		state,
-		stateSince: 1000,
+		stateSince: Date.now(),
 		lastActiveAt: null,
 		summary: null,
 		tasks: null,

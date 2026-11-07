@@ -76,6 +76,14 @@ export function lastActive(session: SessionSummary): number {
 	return session.lastActiveAt ?? session.stateSince;
 }
 
+// How long after a message last passed an idle or ended session stays in view, before the list folds it under its folder's older sessions.
+export const RECENT_MS = 48 * 3600_000;
+
+// A session that works, waits on you, has an unread reply, or failed stays in view however long ago a message passed.
+export function isRecent(session: SessionSummary, now: number): boolean {
+	return (session.state !== 'idle' && session.state !== 'offline') || now - lastActive(session) < RECENT_MS;
+}
+
 // Only orfoni's own sessions place a folder, so folders that hold nothing but sessions outside orfoni come last.
 export function groupProjects(sessions: Iterable<SessionSummary>, others: Iterable<OtherSession>): Project[] {
 	const groups = new Map<string, Project>();
