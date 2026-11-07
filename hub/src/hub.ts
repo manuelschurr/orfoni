@@ -935,7 +935,12 @@ export class Hub {
 
 	private async listProjectDirs(): Promise<ProjectDir[]> {
 		const lastActive = new Map<string, number | null>();
-		for (const root of ['projects', 'code']) for (const path of await subfolders(join(this.options.home, root))) lastActive.set(path, null);
+		// The VPS layout: ~/code/<repo>, and ~/projects/<project>/<repo> for the big projects. A folder in ~/projects that is a repo itself is listed as it is.
+		for (const path of await subfolders(join(this.options.home, 'code'))) lastActive.set(path, null);
+		for (const project of await subfolders(join(this.options.home, 'projects'))) {
+			if (await stat(join(project, '.git')).then(() => true, () => false)) lastActive.set(project, null);
+			else for (const path of await subfolders(project)) lastActive.set(path, null);
+		}
 		for (const { projectDir, model } of this.sessions.values()) lastActive.set(projectDir, Math.max(lastActive.get(projectDir) ?? 0, model.lastActiveAt));
 		return [...lastActive]
 			.map(([path, lastActive]) => ({ path, lastActive }))

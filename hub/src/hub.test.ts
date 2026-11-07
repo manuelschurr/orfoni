@@ -2519,11 +2519,12 @@ describe('read state and the state file', () => {
 });
 
 describe('listProjectDirs', () => {
-	test('lists the folders under ~/projects and ~/code and every session folder once, newest session first, then by path', async () => {
+	test('lists ~/code/<repo>, ~/projects/<project>/<repo> and every session folder once, newest session first, then by path', async () => {
 		const home = join(dir, 'home');
-		const alpha = join(home, 'projects', 'alpha');
-		for (const folder of [alpha, join(home, 'projects', 'gamma'), join(home, 'code', 'beta')]) mkdirSync(folder, { recursive: true });
+		const alpha = join(home, 'projects', 'big', 'alpha');
+		for (const folder of [alpha, join(home, 'projects', 'gamma', '.git'), join(home, 'code', 'beta')]) mkdirSync(folder, { recursive: true });
 		writeFileSync(join(home, 'projects', 'notes.txt'), 'not a folder');
+		writeFileSync(join(home, 'projects', 'big', 'notes.txt'), 'not a folder');
 		const client = await startHub();
 		const first = await start(client, { projectDir: alpha });
 		vi.setSystemTime(T0 + 1000);
