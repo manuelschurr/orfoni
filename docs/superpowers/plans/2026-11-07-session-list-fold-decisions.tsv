@@ -12,3 +12,4 @@ ts	phase	decision	why	evidence	result
 2026-11-07T11:30:00Z	design	test sessions default to the current time instead of 1970	the list would fold every test session away	full suite: 832 pass	accepted
 2026-11-07T11:30:00Z	verified	the browser build against the live hub at 1400 px and 400 px, light and dark	the fold line lines up with the titles and opens in place	screenshots; live check passes	VERIFIED
 2026-11-07T11:30:00Z	unverified	the fold in the Windows and Android apps	needs a release		PENDING
+2026-11-07T12:01:18Z	release	v0.3.24 published from cb68974: Windows installer, latest.json and the signed arm64 APK; release.sh told the hub, which told 2 connected apps; the APK built in this pane, which held 0.4 GB of its 8 GB cap	he said push and release	https://github.com/manuelschurr/orfoni/releases/tag/v0.3.24; tools/check-update.mjs verified the live manifest	done
