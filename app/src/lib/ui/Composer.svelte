@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { DocumentType, ImageType, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_IMAGE_BYTES, MAX_IMAGES, type SessionId, type SlashCommand } from '@orfoni/protocol';
+	import { onMount, tick } from 'svelte';
 	import type { HubClient } from '../hub-client.svelte';
 	import { needsYou } from './format';
 
@@ -59,6 +60,11 @@
 	export function focus(): void {
 		box?.focus();
 	}
+
+	// Each session opens with a box of its own, ready for typing. On a touch screen the focus would open the phone's keyboard over the conversation, which a tap on the box opens when wanted. The focus waits for the update that opened the session, so a dialog that started it has closed and no longer keeps the focus to itself.
+	onMount(() => {
+		if (!touch) void tick().then(() => box?.focus());
+	});
 
 	function take(command: SlashCommand): void {
 		text = `/${command.name} `;

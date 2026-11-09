@@ -171,6 +171,39 @@ test('a message waiting on an approval keeps its text', async ({ page }) => {
 	await expect(you(page)).toHaveCount(1);
 });
 
+test('a session opened from the list or the New session dialog takes typing at once, and on a touch screen it opens without the keyboard', async ({ page, browser }) => {
+	const [first, second] = [await startReady(), await startReady()];
+	const box = page.getByRole('textbox', { name: 'Message' });
+	await openSession(page, first);
+	await expect(box).toBeFocused();
+	await page.locator(`[data-session="${second.id}"]`).click();
+	await expect(box).toBeFocused();
+	await page.keyboard.type('typed straight away');
+	await expect(box).toHaveValue('typed straight away');
+
+	await page.getByRole('navigation').getByRole('button', { name: 'New session' }).click();
+	const dialog = page.getByRole('dialog', { name: 'New session' });
+	await dialog.getByLabel('Folder', { exact: true }).fill(newProjectDir());
+	await dialog.getByRole('button', { name: 'Start session' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(box).toBeFocused();
+
+	const phone = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 412, height: 915 } });
+	try {
+		const tapped = await phone.newPage();
+		await tapped.goto(`http://127.0.0.1:5173${APP}`);
+		expect(await tapped.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+		await tapped.locator(`[data-session="${first.id}"]`).tap();
+		const phoneBox = tapped.getByRole('textbox', { name: 'Message' });
+		await expect(phoneBox).toBeVisible();
+		// Past the update that opened the session, where the focus would have come.
+		await tapped.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 100))));
+		await expect(phoneBox).not.toBeFocused();
+	} finally {
+		await phone.close();
+	}
+});
+
 test('interrupt a running turn', async ({ page }) => {
 	const session = await startReady({ prompt: 'Write a 3000 word essay about the history of terminals, in plain prose. No tools.' });
 	await openSession(page, session);

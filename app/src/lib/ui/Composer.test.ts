@@ -56,6 +56,18 @@ test('without a touch screen the hint says Enter sends', async () => {
 	expect(screen.getByText('Enter sends, Shift+Enter adds a line, and a message that starts with ! runs in the shell.')).toBeTruthy();
 });
 
+test('an opened session takes typing in its message box at once, but on a touch screen the box waits for a tap, so the keyboard stays closed', async () => {
+	const { client } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await waitFor(() => expect(document.activeElement).toBe(box()));
+	cleanup();
+
+	render(Composer, { client, sessionId: summary('a1').id, touch: true });
+	await tick();
+	await tick();
+	expect(document.activeElement).not.toBe(box());
+});
+
 test('a message the hub could not deliver stays in the box, with the reason under it', async () => {
 	const { client, transport } = await connectedClient([summary('a1')]);
 	render(Composer, { client, sessionId: summary('a1').id });
