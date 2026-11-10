@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
-import { ChatItem, ErrorCode, parseHubMessage, SessionSummary, type ClientRequest, type HubMessage, type SessionId } from '@orfoni/protocol';
+import { ChatItem, ErrorCode, HubStatus, parseHubMessage, SessionSummary, type ClientRequest, type HubMessage, type SessionId } from '@orfoni/protocol';
 import { matchSession, parseArgs, usage, type Command } from './args.js';
-import { formatChatItem, formatSession } from './format.js';
+import { formatChatItem, formatPlan, formatSession } from './format.js';
 
 type Method = ClientRequest['method'];
 type Params<M extends Method> = Omit<Extract<ClientRequest, { method: M }>, 'id' | 'method'>;
@@ -139,6 +139,11 @@ async function run(hub: Connection, command: Command): Promise<void> {
 		case 'shell':
 			console.log(JSON.stringify(await hub.request('openShell', { sessionId: await findSession(hub, command.session) })));
 			return;
+		case 'plan': {
+			if (command.change) await hub.request('setPlanSettings', command.change);
+			console.log(formatPlan(HubStatus.parse(await hub.request('hubStatus', {})), Date.now()));
+			return;
+		}
 		case 'announce-release': {
 			const { told } = z.object({ told: z.number() }).parse(await hub.request('announceRelease', { version: command.version }));
 			console.log(`told ${told} connected app${told === 1 ? '' : 's'} about ${command.version}`);

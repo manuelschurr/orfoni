@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, RequestId, SessionId, type SessionSummary } from '@orfoni/protocol';
-import { formatChatItem, formatSession } from './format.js';
+import { ClaudeSessionId, RequestId, SessionId, type HubStatus, type SessionSummary } from '@orfoni/protocol';
+import { formatChatItem, formatPlan, formatSession } from './format.js';
 
 const requestId = RequestId.parse('req-1');
 
@@ -80,5 +80,47 @@ describe('formatSession', () => {
 		};
 		expect(formatSession(session)).toBe('0b9c1f2e\tidle\t/root/code/orfoni\thub');
 		expect(formatSession({ ...session, title: null })).toBe('0b9c1f2e\tidle\t/root/code/orfoni\t');
+	});
+});
+
+describe('formatPlan', () => {
+	const now = Date.parse('2026-11-10T09:00:00Z');
+	const plan = { fiveHour: { usedPercent: 76.6, resetsAt: Date.parse('2026-11-10T12:40:00Z') }, sevenDay: { usedPercent: 70, resetsAt: Date.parse('2026-11-12T11:00:00Z') } };
+	const automation: NonNullable<HubStatus['automation']> = {
+		settings: { continueAfterLimit: true, startWindowAt: 330 },
+		timeZone: 'Europe/Berlin',
+		nextWindowStartAt: Date.parse('2026-11-11T04:30:00Z'),
+		lastWindowStart: { at: Date.parse('2026-11-10T04:30:10Z'), started: true, resetsAt: Date.parse('2026-11-10T09:30:00Z'), problem: null },
+	};
+
+	test('prints the limits, the start time with the next and the last start, and the continue, with every time in the time zone of the hub', () => {
+		expect(formatPlan({ plan, automation }, now)).toBe(
+			[
+				'5-hour limit: 77% used, resets 2026-11-10 13:40',
+				'weekly limit: 70% used, resets 2026-11-12 12:00',
+				'start-window: 05:30 Europe/Berlin, next start 2026-11-11 05:30',
+				'last start: 2026-11-10 05:30, started a window that resets 2026-11-10 10:30',
+				'continue: on',
+			].join('\n'),
+		);
+	});
+
+	test('says so when both are off, and leaves out a window whose reset has passed or that Claude Code has not reported', () => {
+		const off = { ...automation, settings: { continueAfterLimit: false, startWindowAt: null }, nextWindowStartAt: null, lastWindowStart: null };
+		expect(formatPlan({ plan: { fiveHour: { usedPercent: 100, resetsAt: now - 1000 }, sevenDay: null }, automation: off }, now)).toBe('start-window: off\ncontinue: off');
+		expect(formatPlan({ plan: null, automation: off }, now)).toBe('start-window: off\ncontinue: off');
+	});
+
+	test('a last start that found a window running, or failed, says which', () => {
+		const running = { at: Date.parse('2026-11-10T04:30:10Z'), started: false, resetsAt: Date.parse('2026-11-10T05:00:00Z'), problem: null };
+		expect(formatPlan({ plan: null, automation: { ...automation, lastWindowStart: running } }, now)).toContain('last start: 2026-11-10 05:30, a window was running until 2026-11-10 06:00');
+		const refused = { ...running, problem: "You've hit your 5-hour limit · resets 6am (Europe/Berlin)" };
+		expect(formatPlan({ plan: null, automation: { ...automation, lastWindowStart: refused } }, now)).toContain("last start: 2026-11-10 05:30, a window was running until 2026-11-10 06:00, failed: You've hit your 5-hour limit · resets 6am (Europe/Berlin)");
+		const failed = { ...running, resetsAt: null, problem: 'authentication_failed' };
+		expect(formatPlan({ plan: null, automation: { ...automation, lastWindowStart: failed } }, now)).toContain('last start: 2026-11-10 05:30, failed: authentication_failed');
+	});
+
+	test('a hub from before the plan limits says that it does nothing about them', () => {
+		expect(formatPlan({ plan, automation: null }, now)).toBe('This hub does nothing about the plan limits yet. Update it with hub/scripts/install.sh.');
 	});
 });

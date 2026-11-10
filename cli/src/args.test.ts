@@ -44,6 +44,16 @@ describe('parseArgs', () => {
 		expect(parseArgs(['announce-release'], cwd)).toMatchObject({ ok: false });
 	});
 
+	test('parses plan alone, with a start time or off for the window, and with on or off for the continue', () => {
+		expect(parseArgs(['plan'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan' } });
+		expect(parseArgs(['plan', 'start-window', '05:30'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { startWindowAt: 330 } } });
+		expect(parseArgs(['plan', 'start-window', '5:05'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { startWindowAt: 305 } } });
+		expect(parseArgs(['plan', 'start-window', '23:59'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { startWindowAt: 1439 } } });
+		expect(parseArgs(['plan', 'start-window', 'off'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { startWindowAt: null } } });
+		expect(parseArgs(['plan', 'continue', 'off'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { continueAfterLimit: false } } });
+		expect(parseArgs(['plan', 'continue', 'on'], cwd)).toEqual({ ok: true, via: null, command: { name: 'plan', change: { continueAfterLimit: true } } });
+	});
+
 	test('parses answers as question=label pairs, splitting at the first =', () => {
 		expect(parseArgs(['answer', 'r1', 'Which database?=Postgres', 'Flags?=a=b'], cwd)).toEqual({
 			ok: true,
@@ -65,6 +75,12 @@ describe('parseArgs', () => {
 		[['answer', 'r1', 'Q=a', 'Q=b'], 'answer Q given twice'],
 		[['start', ''], 'start needs <dir> [prompt]'],
 		[['rm'], 'rm needs <session>'],
+		[['plan', 'start-window', '24:00'], 'start-window takes a time of day such as 05:30, or off, not 24:00'],
+		[['plan', 'start-window', '5.30'], 'start-window takes a time of day such as 05:30, or off, not 5.30'],
+		[['plan', 'start-window', '05:60'], 'start-window takes a time of day such as 05:30, or off, not 05:60'],
+		[['plan', 'start-window'], 'plan needs [start-window <HH:MM|off> | continue <on|off>]'],
+		[['plan', 'continue', 'maybe'], 'plan needs [start-window <HH:MM|off> | continue <on|off>]'],
+		[['plan', 'windows', 'on'], 'plan needs [start-window <HH:MM|off> | continue <on|off>]'],
 	])('rejects %j', (argv, error) => {
 		expect(parseArgs(argv, cwd)).toEqual({ ok: false, error });
 	});

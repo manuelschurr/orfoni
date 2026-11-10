@@ -9,7 +9,11 @@ export type Command =
 	| { name: 'allow' | 'approve-plan'; requestId: RequestId }
 	| { name: 'deny'; requestId: RequestId; message?: string }
 	| { name: 'answer'; requestId: RequestId; answers: Record<string, string> }
-	| { name: 'announce-release'; version: string };
+	| { name: 'announce-release'; version: string }
+	| { name: 'plan'; change?: PlanChange };
+
+// One setting of what the hub does about the plan's limits.
+export type PlanChange = { startWindowAt: number | null } | { continueAfterLimit: boolean };
 
 type SessionCommand = 'watch' | 'interrupt' | 'stop' | 'rm' | 'shell';
 
@@ -53,6 +57,26 @@ function parseAnswers(pairs: string[]): Result<{ answers: Record<string, string>
 	return { ok: true, answers };
 }
 
+// A time of day as 5:30 or 05:30, in minutes after midnight.
+function minutes(time: string): number | null {
+	const parts = /^(\d{1,2}):(\d{2})$/.exec(time);
+	const [hour, minute] = parts ? [Number(parts[1]), Number(parts[2])] : [24, 0];
+	return hour < 24 && minute < 60 ? hour * 60 + minute : null;
+}
+
+function parsePlan([setting, value]: string[]): Result<{ command: Command }> {
+	if (setting === undefined) return ok({ name: 'plan' });
+	if (setting === 'start-window' && value !== undefined) {
+		const startWindowAt = value === 'off' ? null : minutes(value);
+		if (value !== 'off' && startWindowAt === null) return { ok: false, error: `start-window takes a time of day such as 05:30, or off, not ${value}` };
+		return ok({ name: 'plan', change: { startWindowAt } });
+	}
+	if (setting === 'continue' && (value === 'on' || value === 'off')) return ok({ name: 'plan', change: { continueAfterLimit: value === 'on' } });
+	return { ok: false, error: `plan needs ${PLAN_USAGE}` };
+}
+
+const PLAN_USAGE = '[start-window <HH:MM|off> | continue <on|off>]';
+
 const subcommands: Record<Command['name'], Subcommand> = {
 	list: { usage: '', min: 0, max: 0, build: () => ok({ name: 'list' }) },
 	start: {
@@ -75,6 +99,8 @@ const subcommands: Record<Command['name'], Subcommand> = {
 		max: 2,
 		build: ([r, message]) => ok({ name: 'deny', requestId: RequestId.parse(r), ...(message ? { message } : {}) }),
 	},
+	// Without arguments it shows the plan's limits and what the hub does about them. The start time is in the hub's time zone.
+	plan: { usage: PLAN_USAGE, min: 0, max: 2, build: parsePlan },
 	// tools/release.sh runs it once a release is published, so the apps connected to the hub look for the update.
 	'announce-release': { usage: '<version>', min: 1, max: 1, build: ([version]) => ok({ name: 'announce-release', version: version! }) },
 	answer: {
