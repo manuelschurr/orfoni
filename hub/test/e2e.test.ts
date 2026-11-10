@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -503,6 +503,49 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		const since = client.mark();
 		expect(execFileSync('orfoni', ['announce-release', '0.0.0'], { encoding: 'utf8' })).toMatch(/^told \d+ connected apps? about 0\.0\.0$/m);
 		expect(await client.waitFor((message) => message.type === 'released', since, 10_000)).toEqual({ type: 'released', version: '0.0.0' });
+	});
+
+	// A turn at a plan limit cannot be had on demand, so the check hands the hub what Claude Code hands it then: the StopFailure hook, and a transcript that ends on the failed turn with the limit's reset time. The limit it names reset two minutes ago, so the continue is due at once and goes to the real session.
+	test('a session whose turn ran into a plan limit gets continue once the limit has reset, and Claude goes on', async () => {
+		const { id } = await start({ prompt: 'Reply with exactly: ready', dir: TRUSTED_DIR });
+		const { claudeSessionId } = await client.waitForSession(id, (s) => s.state === 'answered', undefined, 60_000);
+		const resetsAt = (Math.floor(Date.now() / 1000) - 120) * 1000;
+		const transcript = join(mkdtempSync(join(tmpdir(), 'orfoni-limit-')), `${claudeSessionId}.jsonl`);
+		writeFileSync(transcript, `${JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, quotaLimits: { status: 'rejected', resetsAt: resetsAt / 1000, rateLimitType: 'five_hour' } })}\n`);
+		const since = client.mark();
+		const hook = { hook_event_name: 'StopFailure', session_id: claudeSessionId, error: 'rate_limit', last_assistant_message: "You've hit your 5-hour limit · resets 1am (Europe/Berlin)", transcript_path: transcript };
+		const socket = join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`, 'orfoni', 'hooks.sock');
+		execFileSync('curl', ['-sS', '-m', '5', '--unix-socket', socket, '--data-binary', '@-', '-H', 'Content-Type: application/json', '-H', `X-Orfoni-Session: ${id}`, 'http://localhost/hook'], { input: JSON.stringify(hook) });
+		expect(await client.waitForSession(id, (s) => s.limit?.resetsAt != null, since, 10_000)).toMatchObject({ state: 'failed', limit: { resetsAt, continuesAt: resetsAt + 60_000 } });
+		await client.waitForChat(id, (item) => item.kind === 'notice' && item.text === 'The limit has reset, so orfoni sends continue.', since);
+		await client.waitForChat(id, (item) => item.kind === 'user' && item.text === 'continue', since);
+		expect(await client.waitForSession(id, (s) => s.state === 'working', since, 30_000)).toMatchObject({ limit: null });
+		await client.waitForChat(id, (item) => item.kind === 'assistant' && item.done, since);
+		expect(await client.waitForSession(id, (s) => s.state === 'answered', since, 60_000)).toMatchObject({ limit: null });
+	});
+
+	// The start time is twelve hours off, so the hub has no exchange of its own while the check runs.
+	test('the hub says what it does about the plan limits, takes a start time for the window, and gives it back through the command-line client', async () => {
+		const before = ((await client.request('hubStatus', {})) as HubStatus).automation;
+		if (!before) throw new Error('the hub reports nothing about the plan limits');
+		expect(before.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+		const later = new Date(Date.now() + 12 * 3600_000);
+		const startWindowAt = later.getHours() * 60 + later.getMinutes();
+		const clock = `${String(later.getHours()).padStart(2, '0')}:${String(later.getMinutes()).padStart(2, '0')}`;
+		try {
+			const set = (await client.request('setPlanSettings', { startWindowAt, continueAfterLimit: false })) as NonNullable<HubStatus['automation']>;
+			expect(set.settings).toEqual({ startWindowAt, continueAfterLimit: false });
+			expect(set.nextWindowStartAt).toBeGreaterThan(Date.now() + 11 * 3600_000);
+			expect(set.nextWindowStartAt).toBeLessThan(Date.now() + 18 * 3600_000);
+			const printed = execFileSync('orfoni', ['plan'], { encoding: 'utf8' });
+			expect(printed).toContain(`start-window: ${clock} ${before.timeZone}, next start `);
+			expect(printed).toContain('continue: off');
+			expect(execFileSync('orfoni', ['plan', 'start-window', 'off'], { encoding: 'utf8' })).toContain('start-window: off');
+			expect(((await client.request('hubStatus', {})) as HubStatus).automation).toMatchObject({ settings: { startWindowAt: null, continueAfterLimit: false }, nextWindowStartAt: null });
+		} finally {
+			await client.request('setPlanSettings', before.settings);
+		}
+		expect(((await client.request('hubStatus', {})) as HubStatus).automation?.settings).toEqual(before.settings);
 	});
 
 	test('a session reports its task list, its task progress, and its memory against the pane cap', async () => {
