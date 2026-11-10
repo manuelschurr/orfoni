@@ -9,6 +9,7 @@ import { documentName, Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
 import type { ApiKey, SummaryClient } from './summaries.js';
 import { AttachError, type Tmux } from './tmux.js';
+import type { WindowExchange } from './window-start.js';
 
 const SOCKET = '/run/user/0/orfoni/hooks.sock';
 const PROJECT = '/work/proj';
@@ -227,6 +228,9 @@ let conversations: Map<string, SDKSessionInfo[]>;
 let apiKey: ApiKey;
 let summaryPrompts: string[];
 let kills: [number, NodeJS.Signals][];
+// When the hub had its short exchange with Claude, and what each one tells.
+let exchanges: number[];
+let exchange: () => WindowExchange;
 
 const summaryClient: SummaryClient = async ({ prompt }) => {
 	summaryPrompts.push(prompt);
@@ -260,6 +264,10 @@ async function startHub(tmux = fakeTmux(), options: Partial<HubOptions> = {}): P
 			return { commands: new Promise((answer, fail) => listings.push({ projectDir, signal, answer, fail, end })), ended };
 		},
 		listConversations: async (projectDir) => conversations.get(projectDir) ?? [],
+		startWindow: async () => {
+			exchanges.push(Date.now());
+			return exchange();
+		},
 		log: (line) => logs.push(line),
 		...options,
 	});
@@ -290,6 +298,8 @@ beforeEach(() => {
 	summaryPrompts = [];
 	kills = [];
 	listings = [];
+	exchanges = [];
+	exchange = () => ({ plan: { fiveHour: { resetsAt: Date.now() + 5 * 3600_000, usedPercent: 0 }, sevenDay: null }, problem: null, limited: false });
 	writeMeminfo(6 * GB);
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 	vi.setSystemTime(T0);
@@ -2355,7 +2365,7 @@ describe('plan limits', () => {
 	test('with the setting off no continue is planned, and changing it replans the sessions that wait on a limit', async () => {
 		const client = await startHub();
 		expect(await client.ok('hubStatus', {})).toMatchObject({ automation: { settings: { continueAfterLimit: true } } });
-		expect(await client.ok('setPlanSettings', { continueAfterLimit: false })).toMatchObject({ settings: { continueAfterLimit: false } });
+		expect(await client.ok('setPlanSettings', { continueAfterLimit: false })).toMatchObject({ settings: { continueAfterLimit: false, startWindowAt: null } });
 		const session = await ready(client);
 		await hitLimit(client, session);
 		expect(client.session(session.id)?.limit).toEqual({ resetsAt: RESET, continuesAt: null });
@@ -2407,6 +2417,116 @@ describe('plan limits', () => {
 		expect(notices(client, session.id).at(-1)).toBe('orfoni could not send continue: Claude Code did not confirm the message within 5 s');
 		expect(client.session(session.id)).toMatchObject({ state: 'failed', limit: { resetsAt: RESET, continuesAt: null } });
 		expect(logs).toEqual([`orfoni-hub: sending continue to session ${session.id} after its limit reset failed: Claude Code did not confirm the message within 5 s`]);
+	});
+});
+
+describe('window start', () => {
+	const MINUTE = 60_000;
+	const HOUR = 60 * MINUTE;
+	// The time of day half an hour after the tests' clock starts, in the time zone they run in, as the hub reads it.
+	const START_AT = T0 + 30 * MINUTE;
+	const startWindowAt = new Date(START_AT).getHours() * 60 + new Date(START_AT).getMinutes();
+	const clock = (time: number) => new Date(time).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+	const automation = async (client: TestClient) => ((await client.ok('hubStatus', {})) as HubStatus).automation;
+	const fresh = () => ({ plan: { fiveHour: { resetsAt: Date.now() + 5 * HOUR, usedPercent: 0 }, sevenDay: null }, problem: null, limited: false });
+
+	test('the hub has no exchange with Claude of its own until it is given a start time, and none once that is taken away', async () => {
+		const client = await startHub();
+		expect(await automation(client)).toEqual({ settings: { continueAfterLimit: true, startWindowAt: null }, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, nextWindowStartAt: null, lastWindowStart: null });
+		await vi.advanceTimersByTimeAsync(HOUR);
+		expect(exchanges).toEqual([]);
+		// The start time passed half an hour ago, so a start is due now.
+		expect(await client.ok('setPlanSettings', { startWindowAt })).toMatchObject({ settings: { continueAfterLimit: true, startWindowAt }, nextWindowStartAt: Date.now() });
+		expect(await client.ok('setPlanSettings', { startWindowAt: null })).toMatchObject({ settings: { startWindowAt: null }, nextWindowStartAt: null });
+		await vi.advanceTimersByTimeAsync(HOUR);
+		expect(exchanges).toEqual([]);
+	});
+
+	test('from the start time on the hub has one short exchange with Claude a day, and shows the window that started and when the next start is', async () => {
+		const client = await startHub();
+		expect(await client.ok('setPlanSettings', { startWindowAt })).toMatchObject({ nextWindowStartAt: START_AT, lastWindowStart: null });
+		await vi.advanceTimersByTimeAsync(29 * MINUTE);
+		expect(exchanges).toEqual([]);
+		await vi.advanceTimersByTimeAsync(2 * MINUTE);
+		expect(exchanges).toHaveLength(1);
+		const ranAt = exchanges[0]!;
+		expect(ranAt - START_AT).toBeLessThan(MINUTE);
+		expect(await client.ok('hubStatus', {})).toMatchObject({
+			plan: { fiveHour: { resetsAt: ranAt + 5 * HOUR, usedPercent: 0 }, sevenDay: null },
+			automation: { nextWindowStartAt: START_AT + 24 * HOUR, lastWindowStart: { at: ranAt, started: true, resetsAt: ranAt + 5 * HOUR, problem: null } },
+		});
+		expect(logs).toEqual([`orfoni-hub: started a 5-hour window at ${clock(ranAt)}, which resets at ${clock(ranAt + 5 * HOUR)}`]);
+		await vi.advanceTimersByTimeAsync(23 * HOUR + 58 * MINUTE);
+		expect(exchanges).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(2 * MINUTE);
+		expect(exchanges).toHaveLength(2);
+	});
+
+	test('a window that a session reports as running at the start time is waited out, and the hub starts one a minute after it resets', async () => {
+		const client = await startHub();
+		const { id } = await ready(client);
+		const resetsAt = T0 + 50 * MINUTE;
+		hub.status(id, statusLine({ rate_limits: { five_hour: { used_percentage: 40, resets_at: resetsAt / 1000 } } }));
+		expect(await client.ok('setPlanSettings', { startWindowAt })).toMatchObject({ nextWindowStartAt: resetsAt + MINUTE });
+		await vi.advanceTimersByTimeAsync(resetsAt + 30_000 - Date.now());
+		expect(exchanges).toEqual([]);
+		await vi.advanceTimersByTimeAsync(MINUTE);
+		expect(exchanges).toHaveLength(1);
+		expect(exchanges[0]).toBeGreaterThanOrEqual(resetsAt + MINUTE);
+	});
+
+	test('an exchange that lands in a window the hub did not know of is had again a minute after that window resets', async () => {
+		const client = await startHub();
+		const resetsAt = T0 + 60 * MINUTE;
+		exchange = () => (exchanges.length === 1 ? { plan: { fiveHour: { resetsAt, usedPercent: 80 }, sevenDay: null }, problem: null, limited: false } : fresh());
+		await client.ok('setPlanSettings', { startWindowAt });
+		await vi.advanceTimersByTimeAsync(31 * MINUTE);
+		expect(exchanges).toHaveLength(1);
+		expect(await automation(client)).toMatchObject({ nextWindowStartAt: resetsAt + MINUTE, lastWindowStart: { at: exchanges[0], started: false, resetsAt, problem: null } });
+		expect(logs).toEqual([`orfoni-hub: a 5-hour window was running at ${clock(exchanges[0]!)} and resets at ${clock(resetsAt)}, so orfoni tries again at ${clock(resetsAt + MINUTE)}`]);
+		await vi.advanceTimersByTimeAsync(29 * MINUTE);
+		expect(exchanges).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(2 * MINUTE);
+		expect(exchanges).toHaveLength(2);
+		expect(await automation(client)).toMatchObject({ nextWindowStartAt: START_AT + 24 * HOUR, lastWindowStart: { at: exchanges[1], started: true, resetsAt: exchanges[1]! + 5 * HOUR } });
+	});
+
+	test('an exchange that fails shows why and is tried again a quarter of an hour later', async () => {
+		const client = await startHub();
+		exchange = () => {
+			if (exchanges.length === 1) throw new Error('spawn claude ENOENT');
+			return fresh();
+		};
+		await client.ok('setPlanSettings', { startWindowAt });
+		await vi.advanceTimersByTimeAsync(31 * MINUTE);
+		const failedAt = exchanges[0]!;
+		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: null, automation: { nextWindowStartAt: failedAt + 15 * MINUTE, lastWindowStart: { at: failedAt, started: false, resetsAt: null, problem: 'spawn claude ENOENT' } } });
+		expect(logs).toEqual([`orfoni-hub: starting a 5-hour window at ${clock(failedAt)} failed: spawn claude ENOENT, so orfoni tries again at ${clock(failedAt + 15 * MINUTE)}`]);
+		await vi.advanceTimersByTimeAsync(16 * MINUTE);
+		expect(exchanges).toHaveLength(2);
+		expect(await automation(client)).toMatchObject({ lastWindowStart: { problem: null } });
+	});
+
+	test('a start the plan limit refuses says so and is not tried again that day when the limit names no reset', async () => {
+		const client = await startHub();
+		exchange = () => ({ plan: { fiveHour: null, sevenDay: null }, problem: "You've hit your weekly limit", limited: true });
+		await client.ok('setPlanSettings', { startWindowAt });
+		await vi.advanceTimersByTimeAsync(6 * HOUR);
+		expect(exchanges).toHaveLength(1);
+		expect(await automation(client)).toMatchObject({ nextWindowStartAt: START_AT + 24 * HOUR, lastWindowStart: { resetsAt: null, problem: "You've hit your weekly limit" } });
+	});
+
+	test('a restart keeps the start time and the last start, so the hub starts no second window that day', async () => {
+		const client = await startHub();
+		await client.ok('setPlanSettings', { startWindowAt });
+		await vi.advanceTimersByTimeAsync(31 * MINUTE);
+		const ranAt = exchanges[0]!;
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).plan?.lastWindowStart?.at === ranAt);
+		hub.close();
+		const after = await startHub();
+		expect(await automation(after)).toMatchObject({ settings: { startWindowAt }, nextWindowStartAt: START_AT + 24 * HOUR, lastWindowStart: { at: ranAt, started: true, resetsAt: ranAt + 5 * HOUR, problem: null } });
+		await vi.advanceTimersByTimeAsync(6 * HOUR);
+		expect(exchanges).toHaveLength(1);
 	});
 });
 

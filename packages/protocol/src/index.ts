@@ -60,10 +60,23 @@ const PlanWindow = z.object({ usedPercent: z.number(), resetsAt: z.number() });
 export const PlanSettings = z.object({
 	// Whether the hub sends continue to a session that ran into a plan limit, once that limit has reset.
 	continueAfterLimit: z.boolean(),
+	// The time of day, in minutes after midnight in the hub's time zone, from which the hub starts a 5-hour window as soon as none is running, or null to leave the first window to your first message.
+	startWindowAt: z.number().int().min(0).max(1439).nullable(),
 });
 export type PlanSettings = z.infer<typeof PlanSettings>;
 
-export const PlanAutomation = z.object({ settings: PlanSettings });
+// One start of a window by the hub: when it ran, whether a window started with it, when the window it found resets, and what went wrong. A start that found a window running started none and names that window's reset.
+export const WindowStart = z.object({ at: z.number(), started: z.boolean(), resetsAt: z.number().nullable(), problem: z.string().nullable() });
+export type WindowStart = z.infer<typeof WindowStart>;
+
+export const PlanAutomation = z.object({
+	settings: PlanSettings,
+	// The hub's time zone, such as Europe/Berlin, which the start time is in.
+	timeZone: z.string(),
+	// When the hub next starts a window, null while that is off, and how its last start went.
+	nextWindowStartAt: z.number().nullable(),
+	lastWindowStart: WindowStart.nullable(),
+});
 export type PlanAutomation = z.infer<typeof PlanAutomation>;
 
 export const HubStatus = z.object({

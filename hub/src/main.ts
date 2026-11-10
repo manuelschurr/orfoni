@@ -8,6 +8,7 @@ import { listenHooks } from './hook-server.js';
 import { Hub } from './hub.js';
 import { claudeClient, readApiKey, SUMMARY_MODEL } from './summaries.js';
 import { createTmux, runTmux } from './tmux.js';
+import { startWindow } from './window-start.js';
 
 function runtimePath(name: string): string {
 	return join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`, 'orfoni', name);
@@ -16,10 +17,11 @@ function runtimePath(name: string): string {
 async function daemon(): Promise<void> {
 	const log = (line: string) => console.error(line);
 	const hookSocket = runtimePath('hooks.sock');
+	const stateDir = join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni');
 	const hub = await Hub.start({
 		tmux: createTmux(runTmux(process.env.ORFONI_TMUX_SOCKET ?? 'orfoni')),
 		hookSocket,
-		stateDir: join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni'),
+		stateDir,
 		claudeConfigPath: join(homedir(), '.claude.json'),
 		home: homedir(),
 		shell: process.env.SHELL ?? '/bin/bash',
@@ -36,6 +38,7 @@ async function daemon(): Promise<void> {
 		listCommands,
 		// orfoni shows a git worktree as a folder of its own, and claude --resume leaves out the conversations the Agent SDK, claude -p or a background session ran.
 		listConversations: (projectDir) => listSessions({ dir: projectDir, includeWorktrees: false, includeProgrammatic: false }),
+		startWindow: () => startWindow(join(stateDir, 'window-start')),
 		taskTools: process.env.ORFONI_TASK_TOOLS !== '0',
 		log,
 	});

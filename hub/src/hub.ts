@@ -21,6 +21,7 @@ import {
 	type OtherSession,
 	type PastConversation,
 	type PlanAutomation,
+	type PlanSettings,
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
@@ -47,6 +48,7 @@ import { loadState, saveState, type StoredPlan, type StoredSession } from './sto
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { readTaskFiles } from './task-files.js';
 import { AttachError, sessionTarget, type Tmux } from './tmux.js';
+import { nextWindowStart, windowStarted, type WindowExchange } from './window-start.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const INPUT_READY_DELAY_MS = 2_000;
@@ -76,6 +78,7 @@ const PANE_CHECK_INTERVAL_MS = 5_000;
 const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
 const LIMIT_CHECK_INTERVAL_MS = 5_000;
+const WINDOW_CHECK_INTERVAL_MS = 30_000;
 // Claude Code writes a failed turn's entry before it runs the hook, and the tries cover a write that reaches the file a moment later.
 const LIMIT_READ_TRIES = 5;
 const LIMIT_READ_WAIT_MS = 400;
@@ -117,6 +120,8 @@ export interface HubOptions {
 	listCommands(projectDir: string, signal: AbortSignal): { commands: Promise<ClaudeCommand[]>; ended: Promise<void> };
 	// The conversations in Claude Code's history of a folder, as claude --resume offers them there.
 	listConversations(projectDir: string): Promise<SDKSessionInfo[]>;
+	// A short exchange with Claude on the plan the sessions run on, which starts a 5-hour window when none is running.
+	startWindow(): Promise<WindowExchange>;
 	// Claude Code hides TaskCreate and TaskUpdate from current models unless asked, and task progress comes from those tools. On unless false.
 	taskTools?: boolean;
 	log(line: string): void;
@@ -329,6 +334,10 @@ function added(held: ScopeMemory[]): { ramBytes: number; swapBytes: number | nul
 	return { ramBytes: held.reduce((sum, memory) => sum + memory.ramBytes, 0), swapBytes: swap.includes(null) ? null : (swap as number[]).reduce((sum, bytes) => sum + bytes, 0) };
 }
 
+function clock(time: number): string {
+	return new Date(time).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+}
+
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -348,6 +357,10 @@ export class Hub {
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
 	private readonly limitCheck = setInterval(() => void this.continueAfterLimits(), LIMIT_CHECK_INTERVAL_MS);
 	private continuing = false;
+	private readonly windowCheck = setInterval(() => void this.checkWindowStart(), WINDOW_CHECK_INTERVAL_MS);
+	private startingWindow = false;
+	private planSettings: PlanSettings;
+	private lastWindowStart: StoredPlan['lastWindowStart'];
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
 	// The conversations a port or a continue is starting an orfoni session on right now.
@@ -360,8 +373,10 @@ export class Hub {
 	private constructor(
 		private readonly options: HubOptions,
 		budget: SummaryBudget | null,
-		private planSettings: StoredPlan,
+		{ lastWindowStart, ...planSettings }: StoredPlan,
 	) {
+		this.planSettings = planSettings;
+		this.lastWindowStart = lastWindowStart;
 		this.registry = new Registry(options.claudeSessionsDir, options.systemRoot, options.log);
 		this.summarizer = new Summarizer({
 			...options.summaries,
@@ -401,6 +416,7 @@ export class Hub {
 		clearInterval(this.activityCheck);
 		clearInterval(this.registryCheck);
 		clearInterval(this.limitCheck);
+		clearInterval(this.windowCheck);
 		this.summarizer.close();
 	}
 
@@ -1093,11 +1109,46 @@ export class Hub {
 	}
 
 	private automation(): PlanAutomation {
-		return { settings: { ...this.planSettings } };
+		const next = this.nextWindowStart();
+		const last = this.lastWindowStart;
+		return {
+			settings: { ...this.planSettings },
+			timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			// A start that is due runs within half a minute.
+			nextWindowStartAt: next === null ? null : Math.max(next, Date.now()),
+			lastWindowStart: last && { at: last.at, started: last.started, resetsAt: last.resetsAt, problem: last.problem },
+		};
 	}
 
-	private setPlanSettings({ continueAfterLimit }: Extract<ClientRequest, { method: 'setPlanSettings' }>): PlanAutomation {
+	private nextWindowStart(): number | null {
+		return nextWindowStart({ startAt: this.planSettings.startWindowAt, last: this.lastWindowStart, fiveHourResetsAt: this.plan?.fiveHour?.resetsAt ?? null, now: Date.now() });
+	}
+
+	// The first message after a window has ended starts the next one, so a short exchange early in the day has the window under way, and its reset nearer, by the time you start.
+	private async checkWindowStart(): Promise<void> {
+		const due = this.nextWindowStart();
+		if (this.startingWindow || due === null || Date.now() < due) return;
+		this.startingWindow = true;
+		const at = Date.now();
+		let exchange: WindowExchange;
+		try {
+			exchange = await this.options.startWindow();
+		} catch (error) {
+			exchange = { plan: { fiveHour: null, sevenDay: null }, problem: (error as Error).message, limited: false };
+		}
+		this.startingWindow = false;
+		if (exchange.plan.fiveHour !== null || exchange.plan.sevenDay !== null) this.plan = newerPlan(this.plan, exchange.plan);
+		const started = windowStarted(at, exchange);
+		this.lastWindowStart = started;
+		this.save();
+		const again = started.again === null ? '' : `, so orfoni tries again at ${clock(started.again)}`;
+		if (started.problem !== null) this.options.log(`orfoni-hub: starting a 5-hour window at ${clock(at)} failed: ${started.problem}${again}`);
+		else if (started.resetsAt !== null) this.options.log(started.started ? `orfoni-hub: started a 5-hour window at ${clock(at)}, which resets at ${clock(started.resetsAt)}` : `orfoni-hub: a 5-hour window was running at ${clock(at)} and resets at ${clock(started.resetsAt)}${again}`);
+	}
+
+	private setPlanSettings({ continueAfterLimit, startWindowAt }: Extract<ClientRequest, { method: 'setPlanSettings' }>): PlanAutomation {
 		if (continueAfterLimit !== undefined) this.planSettings = { ...this.planSettings, continueAfterLimit };
+		if (startWindowAt !== undefined) this.planSettings = { ...this.planSettings, startWindowAt };
 		this.save();
 		// A session that waits on a limit whose reset time is known continues, or no longer does, as the setting now says.
 		for (const session of this.sessions.values()) {
@@ -1265,7 +1316,7 @@ export class Hub {
 						limit: model.limit,
 					})),
 					summaries: this.summarizer.budget,
-					plan: this.planSettings,
+					plan: { ...this.planSettings, lastWindowStart: this.lastWindowStart },
 				}),
 			)
 			.catch((error: Error) => this.options.log(`orfoni-hub: saving ${path} failed: ${error.message}`));

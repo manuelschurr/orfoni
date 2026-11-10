@@ -1,5 +1,5 @@
 import { readFile, rename } from 'node:fs/promises';
-import { ClaudeSessionId, SessionId, SessionSummary, TaskItem } from '@orfoni/protocol';
+import { ClaudeSessionId, PlanSettings, SessionId, SessionSummary, TaskItem, WindowStart } from '@orfoni/protocol';
 import { z } from 'zod';
 import { writePrivate } from './files.js';
 import { unnamedTask } from './session/tasks.js';
@@ -27,8 +27,12 @@ const StoredLimit = z.object({ at: z.number(), resetsAt: z.number().nullable(), 
 const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null), limit: StoredLimit.nullable().default(null) });
 export type StoredSession = z.infer<typeof StoredSession>;
 
-// What the hub does about the plan's limits. Each setting has a default of its own, so a file from before a setting takes that setting's default.
-const StoredPlan = z.object({ continueAfterLimit: z.boolean().default(true) });
+// What the hub does about the plan's limits, and how its last start of a window went, with when it tries again on the same day. Each setting has a default of its own, so a file from before a setting takes that setting's default.
+const StoredPlan = z.object({
+	continueAfterLimit: PlanSettings.shape.continueAfterLimit.default(true),
+	startWindowAt: PlanSettings.shape.startWindowAt.default(null),
+	lastWindowStart: WindowStart.extend({ again: z.number().nullable() }).nullable().default(null),
+});
 export type StoredPlan = z.infer<typeof StoredPlan>;
 
 function defaultPlan(): StoredPlan {

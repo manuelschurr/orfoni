@@ -43,10 +43,10 @@ const state: HubState = {
 		},
 	],
 	summaries: { day: '2026-10-27', requests: 12, spentUsd: 0.0042 },
-	plan: { continueAfterLimit: false },
+	plan: { continueAfterLimit: false, startWindowAt: 330, lastWindowStart: { at: 5000, started: true, resetsAt: 23000, problem: null, again: null } },
 };
 
-const plan = { continueAfterLimit: true };
+const plan = { continueAfterLimit: true, startWindowAt: null, lastWindowStart: null };
 const empty: HubState = { version: 3, sessions: [], summaries: null, plan };
 
 // Written by the milestone 1 hub, commit 9a117cb.
@@ -165,8 +165,8 @@ describe('store', () => {
 		writeFileSync(path, JSON.stringify(before));
 		const logged: string[] = [];
 		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, limit: null })), plan });
-		writeFileSync(path, JSON.stringify({ ...before, plan: {} }));
-		expect((await loadState(path, (line) => logged.push(line))).plan).toEqual(plan);
+		writeFileSync(path, JSON.stringify({ ...before, plan: { continueAfterLimit: false } }));
+		expect((await loadState(path, (line) => logged.push(line))).plan).toEqual({ ...plan, continueAfterLimit: false });
 		expect(logged).toEqual([]);
 	});
 

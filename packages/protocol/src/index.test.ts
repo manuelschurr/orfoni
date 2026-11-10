@@ -191,8 +191,9 @@ describe('milestone 3 fields', () => {
 describe('plan limits', () => {
 	test('a hub status carries what the hub does about the limits, and null from a hub that does nothing', () => {
 		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: false, spentTodayUsd: 0 } };
-		const automation = { settings: { continueAfterLimit: true } };
+		const automation = { settings: { continueAfterLimit: true, startWindowAt: 330 }, timeZone: 'Europe/Berlin', nextWindowStartAt: 1794371400000, lastWindowStart: { at: 1794285000000, started: true, resetsAt: 1794303000000, problem: null } };
 		expect(HubStatus.parse({ ...status, automation }).automation).toEqual(automation);
+		expect(HubStatus.parse({ ...status, automation: { ...automation, settings: { continueAfterLimit: false, startWindowAt: null }, nextWindowStartAt: null, lastWindowStart: null } }).automation).toMatchObject({ nextWindowStartAt: null, lastWindowStart: null });
 		expect(HubStatus.parse(status).automation).toBeNull();
 	});
 
@@ -200,6 +201,9 @@ describe('plan limits', () => {
 		expect(parseClientRequest('{"id":4,"method":"setPlanSettings","continueAfterLimit":false}')).toEqual({ id: 4, method: 'setPlanSettings', continueAfterLimit: false });
 		expect(parseClientRequest('{"id":4,"method":"setPlanSettings"}')).toEqual({ id: 4, method: 'setPlanSettings' });
 		expectBadMessage('{"id":4,"method":"setPlanSettings","continueAfterLimit":"yes"}');
+		expect(parseClientRequest('{"id":4,"method":"setPlanSettings","startWindowAt":330}')).toEqual({ id: 4, method: 'setPlanSettings', startWindowAt: 330 });
+		expect(parseClientRequest('{"id":4,"method":"setPlanSettings","startWindowAt":null}')).toEqual({ id: 4, method: 'setPlanSettings', startWindowAt: null });
+		for (const time of ['1440', '-1', '330.5', '"05:30"']) expectBadMessage(`{"id":4,"method":"setPlanSettings","startWindowAt":${time}}`);
 	});
 
 	test('a session that ran into a limit says when the limit resets and when the hub continues it', () => {
