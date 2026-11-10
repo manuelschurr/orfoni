@@ -102,7 +102,7 @@ export function readExchange(exchange: WindowExchange, message: unknown): Window
 	return exchange;
 }
 
-// A short exchange with Haiku through Claude Code, on the login the sessions run on, which is what starts a 5-hour window when none is running. It runs in a folder of its own without settings, tools or a transcript, and took 3.5 s and about 600 tokens on 2026-11-10.
+// A short exchange with Haiku through Claude Code, on the login the sessions run on, which is what starts a 5-hour window when none is running. It runs in a folder of its own without settings, tools or a transcript, and took 3.5 s and 1,792 tokens on 2026-11-10, 604 of them for the exchange itself.
 export async function startWindow(dir: string): Promise<WindowExchange> {
 	await privateDir(dir);
 	const stop = new AbortController();

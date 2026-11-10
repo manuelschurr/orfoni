@@ -110,8 +110,9 @@ The hub has these jobs:
 - Open a plain shell in the session's folder as its own tmux session, tagged with the Claude session it belongs to, and close those shells when the Claude session is stopped.
 - Write summaries and track which answers you have not read yet.
 - Read memory use and out-of-memory kills for each pane.
+- Send continue to a session once the plan limit its turn ran into has reset, and start the day's first 5-hour window at a set time, as Plan limits below describes.
 
-The hub stores only what Claude Code and tmux do not: summaries, read state, and the list of project folders. It keeps them in one small file with a version field and writes it atomically, by writing a temporary file and renaming it. That file and the per-session settings files have mode 0600, in directories with mode 0700.
+The hub stores only what Claude Code and tmux do not: summaries, read state, the list of project folders, the plan settings with the last start of a window, and for a session at a limit when the limit resets. It keeps them in one small file with a version field and writes it atomically, by writing a temporary file and renaming it. That file and the per-session settings files have mode 0600, in directories with mode 0700.
 
 Sessions do not depend on the hub. If the hub is down, Claude keeps working, because a hook that fails defaults to continuing. When the hub comes back, it rebuilds each session's state from tmux and the transcripts. A session whose tmux session runs comes back `idle` when the last user or assistant message of its transcript is an assistant message with `stop_reason` `end_turn`, and `working` otherwise.
 
@@ -182,6 +183,14 @@ The hub writes a summary when a turn finishes and when a session starts waiting 
 
 Sessions themselves run on Manuel's Claude subscription through the normal `claude` login, exactly as they do in Tabby today.
 
+## Plan limits
+
+The subscription the sessions run on has a 5-hour and a weekly limit. A 5-hour window starts with the first message after the one before has ended. The hub does two things about the limits by itself, each a setting in its state file that the app and the command-line client change (Manuel, 2026-11-10).
+
+It sends continue after a limit. A turn that runs into a limit ends with `StopFailure` and the error `rate_limit`, and the session sits at its prompt. On 2026-11-09 the 5-hour limit stopped the sessions at 21:12, it reset at 01:00, and they sat until someone typed Continue at 09:10. Claude Code names the reset time only in the transcript: the entry it writes for the failed turn carries it in seconds, under `quotaLimits` from 2.1.265 on and also under `apiErrorParams.rate_limit_info` from 2.1.319 on, while the hook input and `getSessionMessages()` leave both out (measured 2026-11-10 on the transcripts of six sessions). The hub reads the end of the transcript file the hook names, only when the file is named after the session's conversation, and sends `continue` a minute after the reset, one session after the other. The session keeps the limit for as long as it stands where the failed turn left it, in the state file too, and a message, an interrupt, a new conversation or the end of Claude Code drops it. A continue the limit refuses again is sent again five minutes later at the earliest, and after three in a row without a tool call or the end of a turn the hub stops until you write. The state stays `failed`, with the limit as a field of the session, because a new state or chat item would break the apps already installed.
+
+It starts the window early. Given a start time, a time of day in the hub's time zone, the hub has a short exchange with Haiku from that time on, as soon as no window is running. The exchange goes through the Agent SDK's `query()` on the `claude` the sessions run, in a folder of its own, without settings, tools or a transcript, so it is no session, shows in no list and sends no notification. On 2026-11-10 it took 3.5 s and 1,792 tokens, 604 of them for the exchange itself, and Claude Code reported for it the same two windows the sessions' status lines showed, so it counts toward the plan like a message in a session. The rate limit event Claude Code sends with the exchange tells the hub what happened. A window that resets four hours on or later began with the exchange or within the hour before, and the day's start is done. One that was already running is waited out, and the hub has the exchange again a minute after it resets, as it does when a session's status line told it of a running window beforehand. An exchange that failed is tried again a quarter of an hour later, unless a limit refused it. Five hours after the start time the day's start is over, since any window running at the start time has ended by then.
+
 ## Other sessions
 
 Manuel also starts Claude Code outside orfoni: in Tabby's tmux, from Termius on the phone, as a fork, or as a background session. orfoni lists these as other sessions under their project folder and can port one in, which moves the conversation into an orfoni session with the chat, approvals, states, summaries, and memory limits that orfoni gives its own sessions. Over time everything is meant to move into orfoni (Manuel, 2026-10-27).
@@ -226,6 +235,10 @@ Each milestone ends with a check on the real thing, not only tests.
 - The terminal returns as a feature, with the lessons from v0: one reader per channel, the size set before attaching, the Unicode 11 widths add-on, and no shared lock between keystrokes and other work.
 - Android needs `russh` to cross-compile, a safe place for the SSH key, and Tauri's younger Android support to hold up.
 - The session registry in `~/.claude/sessions/` is an internal Claude Code file without documentation. orfoni reads it only to list and port other sessions, and a registry it cannot read leaves that list empty.
+- The reset time of a plan limit comes from fields of the transcript that no documentation names. If Claude Code renames them, a session at a limit shows no reset time and gets no continue, and the hub logs that it could not tell.
+- A continue goes to a session nobody is watching, in whatever permission mode it runs, and what it does then draws on the window that has just started. Stop keeps a session from going on, and the setting turns all of it off.
+- No turn at a real limit has passed through the hub yet. The checks hand the hub the hook and the transcript of such a turn as Claude Code wrote them on 2026-11-09. Whether Claude Code has written the entry by the time the hook runs is unmeasured, so the hub reads the file up to five times over two seconds.
+- That a short exchange starts a window when none is running rests on how the plan counts messages, which Anthropic can change. The hub tells from the reset time the exchange reports, and says in the app when it cannot.
 
 ## Lessons from v0
 
