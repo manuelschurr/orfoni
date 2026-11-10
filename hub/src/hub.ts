@@ -20,6 +20,7 @@ import {
 	type MessageImage,
 	type OtherSession,
 	type PastConversation,
+	type PlanAutomation,
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
@@ -33,6 +34,7 @@ import { dialogOpensOnNo } from './dialog.js';
 import { privateDir, writePrivate } from './files.js';
 import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
+import { CONTINUE_TEXT, continueAt, limitReset, MAX_CONTINUES } from './limit.js';
 import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
@@ -41,7 +43,7 @@ import { emptySession, endsSession, reduce, unread, type SessionInput, type Sess
 import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
 import { newerPlan, parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
-import { loadState, saveState, type StoredSession } from './store.js';
+import { loadState, saveState, type StoredPlan, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { readTaskFiles } from './task-files.js';
 import { AttachError, sessionTarget, type Tmux } from './tmux.js';
@@ -73,6 +75,10 @@ function sentPrompt(text: string, images: number): (prompt: string) => boolean {
 const PANE_CHECK_INTERVAL_MS = 5_000;
 const ACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const REGISTRY_CHECK_INTERVAL_MS = 5_000;
+const LIMIT_CHECK_INTERVAL_MS = 5_000;
+// Claude Code writes a failed turn's entry before it runs the hook, and the tries cover a write that reaches the file a moment later.
+const LIMIT_READ_TRIES = 5;
+const LIMIT_READ_WAIT_MS = 400;
 const EXIT_TIMEOUT_MS = 10_000;
 const EXIT_CHECK_INTERVAL_MS = 100;
 // Claude Code draws a request's dialog as it runs the hook, and the next one once the hook's answer has closed the one before.
@@ -154,6 +160,7 @@ interface Waiter {
 
 type Send = (message: HubMessage) => void;
 type PermissionRequest = Extract<HookEvent, { type: 'permission_request' }>;
+type StopFailure = Extract<HookEvent, { type: 'stop_failure' }>;
 
 const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
@@ -225,11 +232,11 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push, limit: model.limit && { resetsAt: model.limit.resetsAt, continuesAt: model.limit.continueAt } };
 }
 
-const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push', 'limit'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt', 'limit'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -252,6 +259,7 @@ interface Restored {
 	state: SessionStateKind;
 	lastTurnEndedAt: number | null;
 	lastActiveAt: number;
+	limit: SessionModel['limit'];
 }
 
 // A state file from before lastActiveAt has only the end of the last turn you started.
@@ -260,17 +268,19 @@ function storedActivity({ lastActiveAt, lastTurnEndedAt, createdAt }: StoredSess
 }
 
 async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<Restored> {
-	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt } = stored;
+	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt, limit } = stored;
 	try {
 		const history = await options.readHistory(claudeSessionId, projectDir);
 		// What happened while the hub was down reached nobody through the hooks, so the transcript is the only record of it.
 		const lastActiveAt = Math.max(storedActivity(stored), lastEntryAt(history) ?? 0);
-		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt, lastActiveAt };
+		// The turn that ran into a limit is still the transcript's last, so the session stands where it left it and the planned continue still holds.
+		if (limit !== null && (lastEntryAt(history) ?? 0) <= limit.at) return { state: 'failed', lastTurnEndedAt, lastActiveAt, limit };
+		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt, lastActiveAt, limit: null };
 		const endedAt = Math.max(lastTurnEndedAt ?? 0, lastEntryAt(history) ?? 0) || null;
-		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt, lastActiveAt };
+		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt, lastActiveAt, limit: null };
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
-		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored) };
+		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored), limit: null };
 	}
 }
 
@@ -336,6 +346,8 @@ export class Hub {
 	private readonly activityCheck = setInterval(() => void this.checkActivity(), ACTIVITY_CHECK_INTERVAL_MS);
 	private checkingActivity = false;
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
+	private readonly limitCheck = setInterval(() => void this.continueAfterLimits(), LIMIT_CHECK_INTERVAL_MS);
+	private continuing = false;
 	private readonly registry: Registry;
 	private shownOthers: OtherSession[] = [];
 	// The conversations a port or a continue is starting an orfoni session on right now.
@@ -348,6 +360,7 @@ export class Hub {
 	private constructor(
 		private readonly options: HubOptions,
 		budget: SummaryBudget | null,
+		private planSettings: StoredPlan,
 	) {
 		this.registry = new Registry(options.claudeSessionsDir, options.systemRoot, options.log);
 		this.summarizer = new Summarizer({
@@ -366,17 +379,17 @@ export class Hub {
 	static async start(options: HubOptions): Promise<Hub> {
 		const state = await loadState(join(options.stateDir, 'state.json'), options.log);
 		const running = new Set((await options.tmux.listSessions()).filter((pane) => !pane.paneDead).map((pane) => pane.name));
-		const hub = new Hub(options, state.summaries);
+		const hub = new Hub(options, state.summaries, state.plan);
 		const restored = await Promise.all(
 			state.sessions.map((stored): Promise<Restored> | Restored =>
-				running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline', lastTurnEndedAt: stored.lastTurnEndedAt, lastActiveAt: storedActivity(stored) },
+				running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline', lastTurnEndedAt: stored.lastTurnEndedAt, lastActiveAt: storedActivity(stored), limit: null },
 			),
 		);
 		const taskFiles = await Promise.all(state.sessions.map((stored) => readTaskFiles(options.claudeTasksDir, stored.claudeSessionId)));
 		const now = Date.now();
 		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
-			const { state: kind, lastTurnEndedAt, lastActiveAt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind };
+			const { state: kind, lastTurnEndedAt, lastActiveAt, limit } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt, limit: null };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind, limit };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -387,6 +400,7 @@ export class Hub {
 		clearInterval(this.paneCheck);
 		clearInterval(this.activityCheck);
 		clearInterval(this.registryCheck);
+		clearInterval(this.limitCheck);
 		this.summarizer.close();
 	}
 
@@ -506,7 +520,7 @@ export class Hub {
 				await this.remove(this.session(request.sessionId));
 				return {};
 			case 'hubStatus':
-				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.plan };
+				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.plan, automation: this.automation() };
 			case 'memoryReport':
 				return this.memoryReport();
 			case 'relaunchSession':
@@ -534,6 +548,8 @@ export class Hub {
 				return { told: this.releaseWatchers.size };
 			case 'continueConversation':
 				return this.continueConversation(request);
+			case 'setPlanSettings':
+				return this.setPlanSettings(request);
 		}
 	}
 
@@ -1076,6 +1092,72 @@ export class Hub {
 		if (this.sessions.get(session.id) === session) this.apply(session, { kind: 'activity', activity, at: Date.now() });
 	}
 
+	private automation(): PlanAutomation {
+		return { settings: { ...this.planSettings } };
+	}
+
+	private setPlanSettings({ continueAfterLimit }: Extract<ClientRequest, { method: 'setPlanSettings' }>): PlanAutomation {
+		if (continueAfterLimit !== undefined) this.planSettings = { ...this.planSettings, continueAfterLimit };
+		this.save();
+		// A session that waits on a limit whose reset time is known continues, or no longer does, as the setting now says.
+		for (const session of this.sessions.values()) {
+			if (session.model.limit && session.model.limit.resetsAt !== null) this.planContinue(session, session.model.limit.resetsAt);
+		}
+		return this.automation();
+	}
+
+	// Claude Code names the reset time of the limit a turn ran into only in the transcript.
+	private async readLimit(session: Session, { transcriptPath, claudeSessionId }: StopFailure): Promise<void> {
+		const { limit } = session.model;
+		let resetsAt: number | null | undefined;
+		// The hook names the file, which is the session's own when it is named after its conversation.
+		if (transcriptPath !== null && basename(transcriptPath) === `${claudeSessionId}.jsonl`) {
+			for (let tries = 0; tries < LIMIT_READ_TRIES && resetsAt === undefined; tries++) {
+				if (tries > 0) await delay(LIMIT_READ_WAIT_MS);
+				resetsAt = await limitReset(transcriptPath);
+			}
+		}
+		// A turn started since then, and what that one runs into is read on its own.
+		if (limit === null || session.model.limit !== limit || this.sessions.get(session.id) !== session) return;
+		if (resetsAt === undefined) this.options.log(`orfoni-hub: session ${session.id} ran into a rate limit, and its transcript does not say when that resets, so orfoni sends it no continue`);
+		this.planContinue(session, resetsAt ?? null);
+	}
+
+	private planContinue(session: Session, resetsAt: number | null): void {
+		const now = Date.now();
+		const { continues } = session.model;
+		const enabled = this.planSettings.continueAfterLimit;
+		const gaveUp = enabled && resetsAt !== null && continues >= MAX_CONTINUES && session.model.limit?.resetsAt === null;
+		this.apply(session, {
+			kind: 'limit_planned',
+			resetsAt,
+			continueAt: continueAt({ enabled, resetsAt, continues, now }),
+			...(gaveUp ? { note: `The limit refused ${continues} continues in a row, so orfoni sends no more. A message from you starts it again.` } : {}),
+			at: now,
+		});
+	}
+
+	// One session after the other, so the sessions a limit stopped together do not all start again in the same second.
+	private async continueAfterLimits(): Promise<void> {
+		if (this.continuing) return;
+		this.continuing = true;
+		try {
+			for (const session of [...this.sessions.values()]) {
+				const due = session.model.limit?.continueAt ?? null;
+				if (due === null || Date.now() < due || this.sessions.get(session.id) !== session) continue;
+				this.apply(session, { kind: 'continuing', at: Date.now() });
+				try {
+					await this.send(session, CONTINUE_TEXT);
+				} catch (error) {
+					this.options.log(`orfoni-hub: sending continue to session ${session.id} after its limit reset failed: ${(error as Error).message}`);
+					this.apply(session, { kind: 'continue_dropped', note: `orfoni could not send continue: ${(error as Error).message}`, at: Date.now() });
+				}
+			}
+		} finally {
+			this.continuing = false;
+		}
+	}
+
 	private paneExited(session: Session): void {
 		const at = Date.now();
 		session.claude = { kind: 'exited' };
@@ -1131,6 +1213,7 @@ export class Hub {
 		for (const requestId of this.requests.observe(session.id, event)) this.apply(session, { kind: 'request_closed', requestId, outcome: 'withdrawn', at });
 		this.apply(session, { kind: 'hook', event, at });
 		if (readsTasks(event)) void this.readTasks(session);
+		if (event.type === 'stop_failure' && session.model.limit !== null) void this.readLimit(session, event);
 		if (event.type === 'session_start' && session.claude.kind === 'launching') session.claude = { kind: 'running', inputReadyAt: at + INPUT_READY_DELAY_MS };
 		if (endsSession(event)) session.claude = { kind: 'exited' };
 		void this.tellName(session);
@@ -1179,8 +1262,10 @@ export class Hub {
 						lastTurnEndedAt: model.lastTurnEndedAt,
 						lastViewedAt: model.lastViewedAt,
 						lastActiveAt: model.lastActiveAt,
+						limit: model.limit,
 					})),
 					summaries: this.summarizer.budget,
+					plan: this.planSettings,
 				}),
 			)
 			.catch((error: Error) => this.options.log(`orfoni-hub: saving ${path} failed: ${error.message}`));

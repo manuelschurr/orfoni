@@ -175,13 +175,16 @@ describe('parseHookEvent', () => {
 		expect(parseHookEvent('Stop', body)).toEqual({ type: 'stop', claudeSessionId: tuiSession, lastAssistantMessage: null });
 	});
 
-	test('StopFailure gives stop_failure with the error and the rendered error text', () => {
+	test('StopFailure gives stop_failure with the error, the rendered error text, and the transcript the failed turn stands in', () => {
 		expect(parseHookEvent('StopFailure', fixture('StopFailure-docs-example'))).toEqual({
 			type: 'stop_failure',
 			claudeSessionId: '00893aaf-19fa-41d2-8238-13269b9b3ca0',
 			error: 'rate_limit',
 			lastAssistantMessage: 'API Error: Rate limit reached',
+			transcriptPath: '/Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl',
 		});
+		const { transcript_path: _, ...body } = fixture('StopFailure-docs-example') as Record<string, unknown>;
+		expect(parseHookEvent('StopFailure', body)).toMatchObject({ transcriptPath: null });
 	});
 
 	test('an unknown hook name throws HookParseError', () => {

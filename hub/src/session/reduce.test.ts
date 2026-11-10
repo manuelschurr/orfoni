@@ -76,7 +76,7 @@ describe('reduce', () => {
 	});
 
 	test('a turn that ends in an error counts as activity', () => {
-		expect(run(started, prompted, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: null }, 5)).lastActiveAt).toBe(5);
+		expect(run(started, prompted, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: null, transcriptPath: null }, 5)).lastActiveAt).toBe(5);
 	});
 
 	test('session_start with source clear takes the new Claude session ID, empties the chat, and goes idle', () => {
@@ -296,18 +296,79 @@ describe('reduce', () => {
 	});
 
 	test('stop_failure appends a notice with the error text and fails', () => {
-		const model = run(started, prompted, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: 'API Error: Rate limit reached' }, 3));
+		const model = run(started, prompted, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: 'API Error: Rate limit reached', transcriptPath: null }, 3));
 		expect(model.chat[1]).toEqual({ kind: 'notice', id: expect.any(String), text: 'API Error: Rate limit reached', at: 3 });
 		expect(model.state).toBe('failed');
 	});
 
 	test('stop_failure without a rendered message uses the error type as the notice text', () => {
-		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3));
+		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 3));
 		expect(model.chat[1]).toEqual({ kind: 'notice', id: expect.any(String), text: 'overloaded', at: 3 });
 	});
 
+	describe('a plan limit', () => {
+		const limited = hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: "You've hit your 5-hour limit · resets 1am (Europe/Berlin)", transcriptPath: null }, 3);
+		const planned: SessionInput = { kind: 'limit_planned', resetsAt: 100, continueAt: 160, at: 4 };
+		const continuing: SessionInput = { kind: 'continuing', at: 160 };
+		const notices = (model: SessionModel) => model.chat.flatMap((item) => (item.kind === 'notice' ? [item.text] : []));
+
+		test('a turn that fails on a rate limit leaves a limit, which holds the reset time and the time of the continue once the hub has read them', () => {
+			expect(run(started, prompted, limited)).toMatchObject({ state: 'failed', limit: { at: 3, resetsAt: null, continueAt: null } });
+			const model = run(started, prompted, limited, planned);
+			expect(model.limit).toEqual({ at: 3, resetsAt: 100, continueAt: 160 });
+			expect(notices(model)).toEqual(["You've hit your 5-hour limit · resets 1am (Europe/Berlin)"]);
+		});
+
+		test('a turn that fails on another error leaves none, also after one that ran into a limit', () => {
+			const overloaded = hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 5);
+			expect(run(started, prompted, overloaded).limit).toBeNull();
+			expect(run(started, prompted, limited, planned, overloaded).limit).toBeNull();
+			expect(run(started, prompted, overloaded, planned).limit).toBeNull();
+		});
+
+		test('the limit goes when the session moves on: a message, an interrupt, a new conversation, or the end of Claude Code', () => {
+			const moves: SessionInput[] = [hook('prompt', { text: 'go on' }, 5), { kind: 'interrupted', at: 5 }, hook('session_start', { source: 'clear' }, 5, second), { kind: 'pane_exited', at: 5 }, hook('session_end', { reason: 'prompt_input_exit' }, 5)];
+			for (const move of moves) expect(run(started, prompted, limited, planned, move).limit).toBeNull();
+			const viewed = run(started, prompted, limited, planned, { kind: 'view_changed', viewing: true, at: 5 }, { kind: 'memory_read', memory: null, at: 6 });
+			expect(viewed.limit).toEqual({ at: 3, resetsAt: 100, continueAt: 160 });
+		});
+
+		test('the hub sending continue says so in the chat, counts it, and plans no second one', () => {
+			const model = run(started, prompted, limited, planned, continuing);
+			expect(model).toMatchObject({ state: 'failed', limit: { at: 3, resetsAt: 100, continueAt: null }, continues: 1, continuing: true });
+			expect(notices(model).at(-1)).toBe('The limit has reset, so orfoni sends continue.');
+			expect(run(started, prompted, continuing)).toMatchObject({ limit: null, continues: 0, continuing: false });
+		});
+
+		test('the continues count up while the limit refuses each, and start afresh once Claude got somewhere or you wrote', () => {
+			const sent = hook('prompt', { text: 'continue' }, 161);
+			const refused = [continuing, sent, hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: null, transcriptPath: null }, 162), planned];
+			const twice = [started, prompted, limited, planned, ...refused, ...refused];
+			expect(run(...twice)).toMatchObject({ state: 'failed', continues: 2, continuing: false });
+			const report = '<agent-message from="a26ea0c1f9122457e">\n[Subagent hand-back] The report follows:\n  pong\n</agent-message>';
+			expect(run(...twice, hook('prompt', { text: report }, 200)).continues).toBe(2);
+			expect(run(...twice, hook('prompt', { text: 'continue' }, 200)).continues).toBe(0);
+			expect(run(...twice, continuing, sent, hook('tool_start', { toolUseId: 't1', name: 'Bash', input: {} }, 163)).continues).toBe(0);
+			expect(run(...twice, continuing, sent, hook('tool_start', { toolUseId: 't1', name: 'Bash', input: {}, agentId: 'a1' }, 163)).continues).toBe(0);
+			expect(run(...twice, continuing, sent, hook('stop', { lastAssistantMessage: 'Done.' }, 163)).continues).toBe(0);
+			expect(run(...twice, hook('session_start', { source: 'clear' }, 200, second)).continues).toBe(0);
+		});
+
+		test('a continue the hub could not send says why in the chat, and the next message counts as yours', () => {
+			const model = run(started, prompted, limited, planned, continuing, { kind: 'continue_dropped', note: 'orfoni could not send continue: Claude Code did not confirm the message within 5 s', at: 166 });
+			expect(model).toMatchObject({ state: 'failed', limit: { continueAt: null }, continues: 1, continuing: false });
+			expect(notices(model).at(-1)).toBe('orfoni could not send continue: Claude Code did not confirm the message within 5 s');
+		});
+
+		test('a plan can come with a note for the chat', () => {
+			const model = run(started, prompted, limited, { ...planned, continueAt: null, note: 'The limit refused 3 continues in a row, so orfoni sends no more.' });
+			expect(model.limit).toEqual({ at: 3, resetsAt: 100, continueAt: null });
+			expect(notices(model).at(-1)).toBe('The limit refused 3 continues in a row, so orfoni sends no more.');
+		});
+	});
+
 	test('a prompt after a failure starts working again', () => {
-		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3), hook('prompt', { text: 'retry' }, 4));
+		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 3), hook('prompt', { text: 'retry' }, 4));
 		expect(model.state).toBe('working');
 	});
 
@@ -371,7 +432,7 @@ describe('reduce', () => {
 	});
 
 	test('notices keep distinct IDs across /clear', () => {
-		const failed = hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 3);
+		const failed = hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 3);
 		const before = run(started, prompted, failed);
 		const after = run(started, prompted, failed, hook('session_start', { source: 'clear' }, 4, second), hook('prompt', { text: 'x' }, 5), failed);
 		const noticeIds = [...before.chat, ...after.chat].flatMap((item) => (item.kind === 'notice' ? [item.id] : []));
@@ -597,7 +658,7 @@ describe('reduce', () => {
 
 	test.each<[string, SessionInput]>([
 		['the turn ends', hook('stop', { lastAssistantMessage: 'done' }, 11)],
-		['the turn fails', hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null }, 11)],
+		['the turn fails', hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 11)],
 		['the session waits for an approval', { kind: 'request_opened', requestId: req1, item: approval(req1), at: 11 }],
 		['the turn is interrupted', { kind: 'interrupted', at: 11 }],
 		['the pane exits', { kind: 'pane_exited', at: 11 }],

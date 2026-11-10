@@ -48,17 +48,31 @@ export const SessionSummary = z.object({
 	turnFrom: z.enum(['you', 'task']).nullable().default(null),
 	// The last message Claude sent you with Claude Code's PushNotification tool.
 	push: z.object({ message: z.string(), at: z.number() }).nullable().default(null),
+	// The plan limit the session's last turn ran into, while it stands where that left it: when the limit resets, and when the hub sends continue. Each is null when the hub does not know it or does not plan to.
+	limit: z.object({ resetsAt: z.number().nullable(), continuesAt: z.number().nullable() }).nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
 // One of the account's plan windows: how much of it is used, in percent, and when it starts afresh, in milliseconds since the epoch.
 const PlanWindow = z.object({ usedPercent: z.number(), resetsAt: z.number() });
 
+// What the hub does about the plan's limits by itself.
+export const PlanSettings = z.object({
+	// Whether the hub sends continue to a session that ran into a plan limit, once that limit has reset.
+	continueAfterLimit: z.boolean(),
+});
+export type PlanSettings = z.infer<typeof PlanSettings>;
+
+export const PlanAutomation = z.object({ settings: PlanSettings });
+export type PlanAutomation = z.infer<typeof PlanAutomation>;
+
 export const HubStatus = z.object({
 	memory: z.object({ availableBytes: z.number(), totalBytes: z.number() }),
 	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number(), problem: z.string().nullable().default(null) }),
 	// The account's plan usage as the latest status line of any session reported it, and null until one has.
 	plan: z.object({ fiveHour: PlanWindow.nullable(), sevenDay: PlanWindow.nullable() }).nullable().default(null),
+	// Null from a hub before 0.3.25, which does nothing about the limits.
+	automation: PlanAutomation.nullable().default(null),
 });
 export type HubStatus = z.infer<typeof HubStatus>;
 
@@ -265,6 +279,8 @@ export const ClientRequest = z.discriminatedUnion('method', [
 	// An app asks to hear of releases, because an app from before 0.3.22 refuses the released message. tools/release.sh announces each release once it is published.
 	z.object({ id, method: z.literal('watchReleases') }),
 	z.object({ id, method: z.literal('announceRelease'), version: z.string().regex(/^\d+\.\d+\.\d+$/) }),
+	// Changes the settings it names and leaves the others as they are.
+	z.object({ id, method: z.literal('setPlanSettings'), ...PlanSettings.partial().shape }),
 	z.object({
 		id,
 		method: z.literal('continueConversation'),

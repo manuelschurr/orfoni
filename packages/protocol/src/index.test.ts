@@ -145,7 +145,7 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
@@ -163,6 +163,7 @@ describe('milestone 3 fields', () => {
 			context: 42,
 			turnFrom: 'task',
 			push: { message: 'Flashing done, node 5 failed.', at: 3 },
+			limit: { resetsAt: 1794268800000, continuesAt: null },
 		};
 		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
 	});
@@ -173,7 +174,7 @@ describe('milestone 3 fields', () => {
 
 	test('a hub status carries the VPS memory, the summary budget, and why summaries are not working', () => {
 		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42, problem: 'the last summary failed, timeout' } };
-		expect(HubStatus.parse(status)).toEqual({ ...status, plan: null });
+		expect(HubStatus.parse(status)).toEqual({ ...status, plan: null, automation: null });
 	});
 
 	test('a hub status carries the plan windows, or null for one Claude Code did not report', () => {
@@ -184,6 +185,26 @@ describe('milestone 3 fields', () => {
 	test('a hub status from a hub without problem reports none', () => {
 		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: true, spentTodayUsd: 0.42 } };
 		expect(HubStatus.parse(status).summaries.problem).toBeNull();
+	});
+});
+
+describe('plan limits', () => {
+	test('a hub status carries what the hub does about the limits, and null from a hub that does nothing', () => {
+		const status = { memory: { availableBytes: 6e9, totalBytes: 12e9 }, summaries: { enabled: false, spentTodayUsd: 0 } };
+		const automation = { settings: { continueAfterLimit: true } };
+		expect(HubStatus.parse({ ...status, automation }).automation).toEqual(automation);
+		expect(HubStatus.parse(status).automation).toBeNull();
+	});
+
+	test('setPlanSettings names the settings it changes, and any it leaves out stay as they are', () => {
+		expect(parseClientRequest('{"id":4,"method":"setPlanSettings","continueAfterLimit":false}')).toEqual({ id: 4, method: 'setPlanSettings', continueAfterLimit: false });
+		expect(parseClientRequest('{"id":4,"method":"setPlanSettings"}')).toEqual({ id: 4, method: 'setPlanSettings' });
+		expectBadMessage('{"id":4,"method":"setPlanSettings","continueAfterLimit":"yes"}');
+	});
+
+	test('a session that ran into a limit says when the limit resets and when the hub continues it', () => {
+		const session = { id: 's', projectDir: '/p', title: null, claudeSessionId: null, state: 'failed', stateSince: 1, limit: { resetsAt: 1794268800000, continuesAt: 1794268860000 } };
+		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toMatchObject({ session: { limit: session.limit } });
 	});
 });
 

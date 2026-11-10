@@ -6,6 +6,7 @@ import {
 	OtherSession,
 	PastConversation,
 	PermissionMode,
+	PlanAutomation,
 	ProjectDir,
 	SlashCommand,
 	SessionSummary,
@@ -52,6 +53,7 @@ const results = {
 	continueConversation: started,
 	watchReleases: done,
 	announceRelease: z.object({ told: z.number() }),
+	setPlanSettings: PlanAutomation,
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 

@@ -26,6 +26,7 @@ const state: HubState = {
 			lastTurnEndedAt: 1400,
 			lastViewedAt: 1450,
 			lastActiveAt: 1420,
+			limit: { at: 1420, resetsAt: 9000, continueAt: 9060 },
 		},
 		{
 			id: SessionId.parse('s-2'),
@@ -38,12 +39,15 @@ const state: HubState = {
 			lastTurnEndedAt: null,
 			lastViewedAt: null,
 			lastActiveAt: null,
+			limit: null,
 		},
 	],
 	summaries: { day: '2026-10-27', requests: 12, spentUsd: 0.0042 },
+	plan: { continueAfterLimit: false },
 };
 
-const empty: HubState = { version: 3, sessions: [], summaries: null };
+const plan = { continueAfterLimit: true };
+const empty: HubState = { version: 3, sessions: [], summaries: null, plan };
 
 // Written by the milestone 1 hub, commit 9a117cb.
 const milestone1 = {
@@ -109,8 +113,9 @@ describe('store', () => {
 		const loaded = await loadState(path, (line) => logged.push(line));
 		expect(loaded).toEqual({
 			version: 3,
-			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null })),
+			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null })),
 			summaries: null,
+			plan,
 		});
 		expect(readdirSync(dir)).toEqual(['state.json']);
 		expect(logged).toEqual([expect.stringContaining('version 1')]);
@@ -134,10 +139,12 @@ describe('store', () => {
 						{ id: '10', subject: 'Task #10', status: 'completed', activeForm: null },
 					],
 					lastActiveAt: null,
+					limit: null,
 				},
-				{ ...second, taskList: [], lastActiveAt: null },
+				{ ...second, taskList: [], lastActiveAt: null, limit: null },
 			],
 			summaries: beforeTaskLists.summaries,
+			plan,
 		});
 		expect(readdirSync(dir)).toEqual(['state.json']);
 		expect(logged).toEqual([expect.stringContaining('version 2')]);
@@ -149,6 +156,17 @@ describe('store', () => {
 		writeFileSync(path, JSON.stringify(before));
 		const logged: string[] = [];
 		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, lastActiveAt: null })) });
+		expect(logged).toEqual([]);
+	});
+
+	test('a version 3 file from before the plan limits loads with no session waiting on a limit and each setting at its default, without a migration', async () => {
+		const path = join(scratch(), 'state.json');
+		const { plan: _, ...before } = { ...state, sessions: state.sessions.map(({ limit: _, ...session }) => session) };
+		writeFileSync(path, JSON.stringify(before));
+		const logged: string[] = [];
+		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, limit: null })), plan });
+		writeFileSync(path, JSON.stringify({ ...before, plan: {} }));
+		expect((await loadState(path, (line) => logged.push(line))).plan).toEqual(plan);
 		expect(logged).toEqual([]);
 	});
 

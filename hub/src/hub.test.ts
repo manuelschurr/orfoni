@@ -320,7 +320,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null, limit: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1306,13 +1306,13 @@ describe('memory', () => {
 	test('hubStatus reports the VPS memory and whether summaries are on with what they cost today', async () => {
 		writeMeminfo(3 * GB, 12 * GB);
 		const client = await startHub();
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0, problem: 'no key in tests' }, plan: null });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: false, spentTodayUsd: 0, problem: 'no key in tests' }, plan: null, automation: expect.anything() });
 		apiKey = { key: 'sk-test' };
 		const { id, claude } = await ready(client);
 		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
 		await hub.hook(id, body('Stop', claude));
 		await untilRealTime(() => client.session(id)?.summary !== null);
-		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null }, plan: null });
+		expect(await client.ok('hubStatus', {})).toEqual({ memory: { availableBytes: 3 * GB, totalBytes: 12 * GB }, summaries: { enabled: true, spentTodayUsd: (900 * 0.1 + 40 * 0.5) / 1_000_000, problem: null }, plan: null, automation: expect.anything() });
 	});
 
 	test('a release announced to the hub reaches the clients that asked to hear of releases while they are connected, and no others', async () => {
@@ -1916,7 +1916,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null, limit: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
@@ -2233,6 +2233,183 @@ describe('hooks', () => {
 	});
 });
 
+describe('plan limits', () => {
+	const RESET = T0 + 3_600_000;
+	const HIT = "You've hit your 5-hour limit · resets 1pm (Europe/Berlin)";
+
+	// The transcript ends on the entry Claude Code writes for a turn that ran into a plan limit, which names the reset time in seconds.
+	function limitTranscript(claude: ClaudeSessionId, resetsAt: number | null = RESET): string {
+		const path = join(dir, 'transcripts', `${claude}.jsonl`);
+		mkdirSync(join(dir, 'transcripts'), { recursive: true });
+		const limits = resetsAt === null ? {} : { apiErrorParams: { rate_limit_info: { status: 'rejected', resetsAt: resetsAt / 1000, rateLimitType: 'five_hour' } }, quotaLimits: { status: 'rejected', resetsAt: resetsAt / 1000, rateLimitType: 'five_hour' } };
+		const failed = { type: 'assistant', isSidechain: false, message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: HIT }] }, error: 'rate_limit', isApiErrorMessage: true, ...limits };
+		writeFileSync(path, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\n${JSON.stringify(failed)}\n${JSON.stringify({ type: 'system', subtype: 'turn_duration' })}\n`);
+		return path;
+	}
+
+	async function hitLimit(client: TestClient, { id, claude }: { id: SessionId; claude: ClaudeSessionId }, resetsAt: number | null = RESET): Promise<void> {
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		await hub.hook(id, body('StopFailure-docs-example', claude, { last_assistant_message: HIT, transcript_path: limitTranscript(claude, resetsAt) }));
+		if (resetsAt !== null) await untilRealTime(() => client.session(id)?.limit?.resetsAt === resetsAt);
+	}
+
+	const continues = () => fake.of('submit').filter(([, text]) => text === 'continue');
+
+	// The hub looks every five seconds for a continue that is due and then waits five seconds for Claude Code to confirm it, so the clock stops at the moment it is sent.
+	async function untilContinues(client: TestClient, id: SessionId, sent: number): Promise<void> {
+		const due = client.session(id)?.limit?.continuesAt;
+		if (due === null || due === undefined) throw new Error('no continue is planned');
+		if (due > Date.now()) await vi.advanceTimersByTimeAsync(due - Date.now());
+		await stepUntil(() => continues().length === sent, 10_000);
+	}
+	const notices = (client: TestClient, id: SessionId) => client.chat(id).flatMap((item) => (item.kind === 'notice' ? [item.text] : []));
+
+	test('a session that ran into a plan limit shows when the limit resets, gets continue a minute after that, and works again', async () => {
+		const client = await startHub();
+		const session = await ready(client);
+		await hitLimit(client, session);
+		expect(client.session(session.id)).toMatchObject({ state: 'failed', limit: { resetsAt: RESET, continuesAt: RESET + 60_000 } });
+		expect(notices(client, session.id)).toEqual([HIT]);
+
+		await vi.advanceTimersByTimeAsync(RESET + 50_000 - Date.now());
+		expect(continues()).toEqual([]);
+		await untilContinues(client, session.id, 1);
+		expect(Date.now()).toBeLessThan(RESET + 66_000);
+		expect(continues()).toEqual([[`orfoni-${session.id}`, 'continue']]);
+		expect(notices(client, session.id)).toEqual([HIT, 'The limit has reset, so orfoni sends continue.']);
+		await hub.hook(session.id, body('UserPromptSubmit', session.claude, { prompt: 'continue' }));
+		expect(client.session(session.id)).toMatchObject({ state: 'working', limit: null });
+		expect(client.chat(session.id).at(-1)).toMatchObject({ kind: 'user', text: 'continue' });
+
+		await vi.advanceTimersByTimeAsync(600_000);
+		expect(continues()).toHaveLength(1);
+		expect(logs).toEqual([]);
+	});
+
+	test('the sessions a limit stopped together continue one after the other', async () => {
+		const client = await startHub();
+		const first = await ready(client);
+		const second = await ready(client);
+		await hitLimit(client, first);
+		await hitLimit(client, second);
+		await untilContinues(client, first.id, 1);
+		await step(2000);
+		expect(continues()).toEqual([[`orfoni-${first.id}`, 'continue']]);
+		await hub.hook(first.id, body('UserPromptSubmit', first.claude, { prompt: 'continue' }));
+		await stepUntil(() => continues().length === 2);
+		expect(continues()).toEqual([[`orfoni-${first.id}`, 'continue'], [`orfoni-${second.id}`, 'continue']]);
+	});
+
+	test('a turn that failed on another error, or on a rate limit whose transcript names no reset, gets no continue', async () => {
+		const client = await startHub();
+		const overloaded = await ready(client);
+		await hub.hook(overloaded.id, body('UserPromptSubmit', overloaded.claude, { prompt: 'hi' }));
+		await hub.hook(overloaded.id, body('StopFailure-docs-example', overloaded.claude, { error: 'overloaded', transcript_path: limitTranscript(overloaded.claude) }));
+		const unnamed = await ready(client);
+		await hitLimit(client, unnamed, null);
+		const missing = await ready(client);
+		await hub.hook(missing.id, body('UserPromptSubmit', missing.claude, { prompt: 'hi' }));
+		await hub.hook(missing.id, body('StopFailure-docs-example', missing.claude, { transcript_path: join(dir, 'transcripts', `${missing.claude}.jsonl`) }));
+		// The file is named after another conversation, so it is not the session's own.
+		const foreign = await ready(client);
+		await hub.hook(foreign.id, body('UserPromptSubmit', foreign.claude, { prompt: 'hi' }));
+		await hub.hook(foreign.id, body('StopFailure-docs-example', foreign.claude, { transcript_path: limitTranscript(unnamed.claude) }));
+		await step(3000);
+		expect(client.session(overloaded.id)).toMatchObject({ state: 'failed', limit: null });
+		for (const { id } of [unnamed, missing, foreign]) expect(client.session(id)).toMatchObject({ state: 'failed', limit: { resetsAt: null, continuesAt: null } });
+		await step(RESET + 600_000 - Date.now());
+		expect(continues()).toEqual([]);
+		expect(logs.toSorted()).toEqual([missing, foreign].map(({ id }) => `orfoni-hub: session ${id} ran into a rate limit, and its transcript does not say when that resets, so orfoni sends it no continue`).sort());
+	});
+
+	test('a failure Claude Code writes a moment after its hook is still read', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+		const path = limitTranscript(claude);
+		const written = readFileSync(path, 'utf8');
+		writeFileSync(path, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\n`);
+		await hub.hook(id, body('StopFailure-docs-example', claude, { last_assistant_message: HIT, transcript_path: path }));
+		await step(500);
+		writeFileSync(path, written);
+		await stepUntil(() => client.session(id)?.limit?.resetsAt === RESET);
+		expect(client.session(id)?.limit).toEqual({ resetsAt: RESET, continuesAt: RESET + 60_000 });
+	});
+
+	test('a message from you, or stopping the session, before the limit resets leaves nothing to continue', async () => {
+		const client = await startHub();
+		const messaged = await ready(client);
+		const stopped = await ready(client);
+		await hitLimit(client, messaged);
+		await hitLimit(client, stopped);
+		await hub.hook(messaged.id, body('UserPromptSubmit', messaged.claude, { prompt: 'never mind, do this instead' }));
+		await hub.hook(messaged.id, body('Stop', messaged.claude));
+		await client.ok('stopSession', { sessionId: stopped.id });
+		expect(client.session(messaged.id)?.limit).toBeNull();
+		expect(client.session(stopped.id)).toMatchObject({ state: 'offline', limit: null });
+		await vi.advanceTimersByTimeAsync(RESET + 600_000 - Date.now());
+		expect(continues()).toEqual([]);
+		expect(fake.of('newSession')).toHaveLength(2);
+	});
+
+	test('with the setting off no continue is planned, and changing it replans the sessions that wait on a limit', async () => {
+		const client = await startHub();
+		expect(await client.ok('hubStatus', {})).toMatchObject({ automation: { settings: { continueAfterLimit: true } } });
+		expect(await client.ok('setPlanSettings', { continueAfterLimit: false })).toMatchObject({ settings: { continueAfterLimit: false } });
+		const session = await ready(client);
+		await hitLimit(client, session);
+		expect(client.session(session.id)?.limit).toEqual({ resetsAt: RESET, continuesAt: null });
+		await client.ok('setPlanSettings', { continueAfterLimit: true });
+		expect(client.session(session.id)?.limit).toEqual({ resetsAt: RESET, continuesAt: RESET + 60_000 });
+		await client.ok('setPlanSettings', { continueAfterLimit: false });
+		expect(client.session(session.id)?.limit).toEqual({ resetsAt: RESET, continuesAt: null });
+		expect(await client.ok('setPlanSettings', {})).toMatchObject({ settings: { continueAfterLimit: false } });
+		await vi.advanceTimersByTimeAsync(RESET + 600_000 - Date.now());
+		expect(continues()).toEqual([]);
+		expect(notices(client, session.id)).toEqual([HIT]);
+	});
+
+	test('a continue the limit refuses again is sent again five minutes later, and after three in a row the hub says so and sends no more until you write', async () => {
+		const client = await startHub();
+		const session = await ready(client);
+		const { id, claude } = session;
+		await hitLimit(client, session);
+		const refuse = async (sent: number) => {
+			await untilContinues(client, id, sent);
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
+			await hub.hook(id, body('StopFailure-docs-example', claude, { last_assistant_message: HIT, transcript_path: limitTranscript(claude) }));
+			await untilRealTime(() => client.session(id)?.limit?.resetsAt === RESET);
+		};
+		await refuse(1);
+		const refusedAt = Date.now();
+		expect(client.session(id)?.limit).toEqual({ resetsAt: RESET, continuesAt: refusedAt + 300_000 });
+		await refuse(2);
+		expect(Date.now()).toBeGreaterThanOrEqual(refusedAt + 300_000);
+		await refuse(3);
+		expect(client.session(id)?.limit).toEqual({ resetsAt: RESET, continuesAt: null });
+		expect(notices(client, id).at(-1)).toBe('The limit refused 3 continues in a row, so orfoni sends no more. A message from you starts it again.');
+		await vi.advanceTimersByTimeAsync(1_200_000);
+		expect(continues()).toHaveLength(3);
+
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'go on' }));
+		await hub.hook(id, body('StopFailure-docs-example', claude, { last_assistant_message: HIT, transcript_path: limitTranscript(claude, Date.now() + 3_600_000) }));
+		await untilRealTime(() => (client.session(id)?.limit?.continuesAt ?? null) !== null);
+		expect(client.session(id)?.limit?.continuesAt).toBe(Date.now() + 3_660_000);
+	});
+
+	test('a continue Claude Code does not confirm says so in the chat and is not sent twice', async () => {
+		const client = await startHub();
+		const session = await ready(client);
+		await hitLimit(client, session);
+		await untilContinues(client, session.id, 1);
+		await vi.advanceTimersByTimeAsync(600_000);
+		expect(continues()).toHaveLength(1);
+		expect(notices(client, session.id).at(-1)).toBe('orfoni could not send continue: Claude Code did not confirm the message within 5 s');
+		expect(client.session(session.id)).toMatchObject({ state: 'failed', limit: { resetsAt: RESET, continuesAt: null } });
+		expect(logs).toEqual([`orfoni-hub: sending continue to session ${session.id} after its limit reset failed: Claude Code did not confirm the message within 5 s`]);
+	});
+});
+
 describe('restart', () => {
 	test('known sessions come back working when their tmux session runs and offline when it does not', async () => {
 		const client = await startHub();
@@ -2244,8 +2421,8 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null },
 		]);
 	});
 
@@ -2363,6 +2540,43 @@ describe('read state and the state file', () => {
 		const after = await restart([unread, read, watched].map(({ id }) => `orfoni-${id}`));
 		const states = Object.fromEntries(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => [session.id, session.state]));
 		expect(states).toEqual({ [unread.id]: 'answered', [read.id]: 'idle', [watched.id]: 'idle' });
+	});
+
+	test('a session that waits on a plan limit still does after a restart and gets its continue, unless it moved on while the hub was down, and the setting is kept', async () => {
+		const client = await startHub();
+		const waiting = await ready(client);
+		const moved = await ready(client);
+		const reset = Date.now() + 3_600_000;
+		const stamped = (type: SessionMessage['type'], content: unknown, at: number, stopReason?: string) => ({ ...entry(type, content, stopReason), timestamp: new Date(at).toISOString() });
+		mkdirSync(join(dir, 'transcripts'), { recursive: true });
+		for (const { id, claude } of [waiting, moved]) {
+			const path = join(dir, 'transcripts', `${claude}.jsonl`);
+			writeFileSync(path, `${JSON.stringify({ type: 'assistant', error: 'rate_limit', quotaLimits: { resetsAt: reset / 1000 } })}\n`);
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+			await hub.hook(id, body('StopFailure-docs-example', claude, { transcript_path: path }));
+			await untilRealTime(() => client.session(id)?.limit?.resetsAt === reset);
+		}
+		await client.ok('setPlanSettings', { continueAfterLimit: true });
+		await saved((state) => state.sessions.every((session) => (session.limit as { resetsAt: number } | null)?.resetsAt === reset));
+		const failed = [stamped('user', 'hi', Date.now() - 2000), stamped('assistant', [{ type: 'text', text: "You've hit your 5-hour limit" }], Date.now() - 1000, 'stop_sequence')];
+		transcripts.set(waiting.claude, failed);
+		transcripts.set(moved.claude, [...failed, stamped('user', 'Continue', Date.now() + 30_000), stamped('assistant', [{ type: 'text', text: 'done' }], Date.now() + 40_000, 'end_turn')]);
+
+		const after = await restart([waiting, moved].map(({ id }) => `orfoni-${id}`));
+		const sessions = Object.fromEntries(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => [session.id, session]));
+		expect(sessions[waiting.id]).toMatchObject({ state: 'failed', limit: { resetsAt: reset, continuesAt: reset + 60_000 } });
+		expect(sessions[moved.id]).toMatchObject({ state: 'answered', limit: null });
+		expect(await after.ok('hubStatus', {})).toMatchObject({ automation: { settings: { continueAfterLimit: true } } });
+		await vi.advanceTimersByTimeAsync(reset + 65_000 - Date.now());
+		expect(fake.of('submit')).toEqual([[`orfoni-${waiting.id}`, 'continue']]);
+	});
+
+	test('a setting turned off is still off after a restart', async () => {
+		const client = await startHub();
+		await client.ok('setPlanSettings', { continueAfterLimit: false });
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).plan?.continueAfterLimit === false);
+		const after = await restart([]);
+		expect(await after.ok('hubStatus', {})).toMatchObject({ automation: { settings: { continueAfterLimit: false } } });
 	});
 
 	// The Stop hook of a turn that ends while the hub restarts reaches nobody, so only the transcript knows when that turn ended.
