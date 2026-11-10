@@ -1,6 +1,7 @@
 import { ClaudeSessionId, RequestId, SessionId, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { FakeTransport } from './fake-transport';
+import { Drafts } from './drafts.svelte';
 import { HubClient, isRecent } from './hub-client.svelte';
 import { otherSession } from './testing';
 
@@ -202,13 +203,15 @@ describe('HubClient', () => {
 		expect(client.changes).toEqual([]);
 	});
 
-	test('a removed session leaves the list, its chat, and the selection', async () => {
+	test('a removed session leaves the list, its chat, the selection, and its draft', async () => {
 		await connect();
 		await open(a1, [user('u1', 'hello')]);
+		client.drafts.setText(a1.id, 'half a thought');
 		transport.push({ type: 'sessionRemoved', sessionId: a1.id });
 		expect(client.sessions.has(a1.id)).toBe(false);
 		expect(client.chats.has(a1.id)).toBe(false);
 		expect(client.selected).toBeNull();
+		expect(new Drafts().get(a1.id).text).toBe('');
 	});
 });
 

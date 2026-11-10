@@ -38,6 +38,7 @@ beforeAll(stubDialogs);
 
 beforeEach(() => {
 	stubMedia();
+	localStorage.clear();
 });
 
 afterEach(() => {
@@ -191,6 +192,19 @@ function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType
 	});
 	return { hub, commands };
 }
+
+test('text left in the message box of one session is there again after another session was open', async () => {
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' }), summary('a2', 'idle', { title: 'Upgrade vite' })]);
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	await fireEvent.input(await screen.findByRole('textbox', { name: 'Message' }), { target: { value: 'half a thought' } });
+	await fireEvent.click(screen.getByRole('button', { name: /^Upgrade vite/ }));
+	await screen.findByRole('heading', { level: 1, name: 'Upgrade vite' });
+	expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' }).value).toBe('');
+	await fireEvent.click(screen.getByRole('button', { name: /^Fix the login page/ }));
+	await screen.findByRole('heading', { level: 1, name: 'Fix the login page' });
+	expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' }).value).toBe('half a thought');
+});
 
 // The app shows the hub's notices natively, from Rust, while its window is not in front, so the page shows none itself and no notice comes twice.
 test('in Tauri, the page shows no notification of its own, and a click on one the app showed opens its session', async () => {

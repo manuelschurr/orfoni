@@ -1,15 +1,9 @@
 <script lang="ts">
 	import { DocumentType, ImageType, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_IMAGE_BYTES, MAX_IMAGES, type SessionId, type SlashCommand } from '@orfoni/protocol';
 	import { onMount, tick } from 'svelte';
+	import type { Attached, Attachment } from '../drafts.svelte';
 	import type { HubClient } from '../hub-client.svelte';
 	import { needsYou } from './format';
-
-	type Attachment = { kind: 'image'; type: ImageType } | { kind: 'document'; type: DocumentType };
-	type Attached = Attachment & {
-		name: string;
-		// Read once, for the thumbnail and for sending.
-		dataUrl: string;
-	};
 
 	const KINDS = {
 		image: { most: MAX_IMAGES, bytes: MAX_IMAGE_BYTES, one: 'An image', many: 'images' },
@@ -19,8 +13,9 @@
 	// On a touch screen Enter adds a line, since the keyboard there has no Shift+Enter to reach for, and Send sends.
 	let { client, sessionId, touch = false }: { client: HubClient; sessionId: SessionId; touch?: boolean } = $props();
 	const id = $props.id();
-	let text = $state('');
-	let attachments = $state<Attached[]>([]);
+	// The box shows the session's draft, so what it held is back when the session opens again.
+	const text = $derived(client.drafts.get(sessionId).text);
+	const attachments = $derived(client.drafts.get(sessionId).attachments);
 	let dragging = $state(false);
 	let sending = $state(false);
 	let error = $state<string | null>(null);
@@ -67,7 +62,7 @@
 	});
 
 	function take(command: SlashCommand): void {
-		text = `/${command.name} `;
+		client.drafts.setText(sessionId, `/${command.name} `);
 		box?.focus();
 	}
 
@@ -116,7 +111,7 @@
 		error = reasons.length > 0 ? reasons.join(' ') : null;
 		try {
 			const added = await Promise.all(fitting.map(async ({ file, attachment }) => ({ ...attachment, name: file.name, dataUrl: await read(file) })));
-			attachments = [...attachments, ...added];
+			client.drafts.setAttachments(sessionId, [...attachments, ...added]);
 		} catch (e) {
 			error = (e as Error).message;
 		}
@@ -150,7 +145,7 @@
 	}
 
 	function remove(attachment: Attached): void {
-		attachments = attachments.filter((attached) => attached !== attachment);
+		client.drafts.setAttachments(sessionId, attachments.filter((attached) => attached !== attachment));
 	}
 
 	const data = (attached: Attached) => attached.dataUrl.slice(attached.dataUrl.indexOf(',') + 1);
@@ -168,8 +163,7 @@
 				attached.flatMap((image) => (image.kind === 'image' ? [{ type: image.type, data: data(image) }] : [])),
 				attached.flatMap((document) => (document.kind === 'document' ? [{ type: document.type, name: document.name, data: data(document) }] : [])),
 			);
-			if (text === message) text = '';
-			if (attachments === attached) attachments = [];
+			client.drafts.sent(sessionId, { text: message, attachments: attached });
 		} catch (e) {
 			error = `${(e as Error).message} Your message is still here.`;
 		} finally {
@@ -261,7 +255,7 @@
 		</label>
 		<textarea
 			bind:this={box}
-			bind:value={text}
+			bind:value={() => text, (value) => client.drafts.setText(sessionId, value)}
 			aria-label="Message"
 			aria-describedby={error ? 'composer-error' : undefined}
 			aria-autocomplete="list"

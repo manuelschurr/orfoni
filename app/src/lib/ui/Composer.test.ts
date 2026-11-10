@@ -1,9 +1,11 @@
 import type { SlashCommand } from '@orfoni/protocol';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { tick } from 'svelte';
-import { expect, test } from 'vitest';
+import { beforeEach, expect, test } from 'vitest';
 import { connectedClient, spoken, summary } from '../testing';
 import Composer from './Composer.svelte';
+
+beforeEach(() => localStorage.clear());
 
 function box(): HTMLTextAreaElement {
 	return screen.getByRole('textbox', { name: 'Message' });
@@ -75,6 +77,63 @@ test('a message the hub could not deliver stays in the box, with the reason unde
 	transport.fail('send', 'not_delivered', 'Claude Code did not confirm the message within 5 s');
 	expect(await screen.findByText(/did not confirm/)).toBeTruthy();
 	expect(box().value).toBe('hello');
+});
+
+test('what the box of a session holds is back when the session opens again, each session keeps its own, and the text outlasts the app', async () => {
+	const { client } = await connectedClient([summary('a1'), summary('a2')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.input(box(), { target: { value: 'half a thought' } });
+	cleanup();
+	render(Composer, { client, sessionId: summary('a2').id });
+	expect(box().value).toBe('');
+	await fireEvent.input(box(), { target: { value: 'another one' } });
+	cleanup();
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(box().value).toBe('half a thought');
+	cleanup();
+
+	const restarted = await connectedClient([summary('a1'), summary('a2')]);
+	render(Composer, { client: restarted.client, sessionId: summary('a2').id });
+	expect(box().value).toBe('another one');
+});
+
+test('a sent message and a deleted one are not back when the session opens again', async () => {
+	const { client, transport } = await connectedClient([summary('a1'), summary('a2')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await type('hello');
+	transport.respond('send', {});
+	await waitFor(() => expect(box().value).toBe(''));
+	cleanup();
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(box().value).toBe('');
+	cleanup();
+
+	render(Composer, { client, sessionId: summary('a2').id });
+	await fireEvent.input(box(), { target: { value: 'never mind' } });
+	await fireEvent.input(box(), { target: { value: '' } });
+	cleanup();
+	const restarted = await connectedClient([summary('a2')]);
+	render(Composer, { client: restarted.client, sessionId: summary('a2').id });
+	expect(box().value).toBe('');
+});
+
+test('a message that finishes sending after its session was left and opened again empties the box, and what was typed meanwhile stays', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await type('hello');
+	cleanup();
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(box().value).toBe('hello');
+	transport.respond('send', {});
+	await waitFor(() => expect(box().value).toBe(''));
+
+	await type('and then');
+	cleanup();
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.input(box(), { target: { value: 'and then this' } });
+	transport.respond('send', {});
+	await tick();
+	expect(box().value).toBe('and then this');
 });
 
 const command = (name: string, description: string, aliases: string[] = [], argumentHint = ''): SlashCommand => ({ name, description, argumentHint, aliases });
@@ -384,4 +443,25 @@ test('a message the hub could not deliver keeps its images', async () => {
 	transport.fail('send', 'not_delivered', 'Claude Code did not confirm the message within 5 s');
 	expect(await screen.findByText(/did not confirm/)).toBeTruthy();
 	expect(shown()).toEqual(['shot.png']);
+});
+
+test('attachments are back when the session opens again, until the app closes', async () => {
+	const { client, transport } = await connectedClient([summary('a1')]);
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [image('shot.png', 'png bytes')], types: ['Files'] } });
+	await screen.findByRole('img', { name: 'shot.png' });
+	cleanup();
+	render(Composer, { client, sessionId: summary('a1').id });
+	expect(shown()).toEqual(['shot.png']);
+	await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+	expect(transport.requests('send')).toMatchObject([{ images: [{ type: 'image/png', data: base64('png bytes') }] }]);
+	cleanup();
+
+	render(Composer, { client, sessionId: summary('a1').id });
+	await fireEvent.paste(box(), { clipboardData: { files: [image('later.png')], types: ['Files'] } });
+	await screen.findByRole('img', { name: 'later.png' });
+	cleanup();
+	const restarted = await connectedClient([summary('a1')]);
+	render(Composer, { client: restarted.client, sessionId: summary('a1').id });
+	expect(shown()).toEqual([]);
 });

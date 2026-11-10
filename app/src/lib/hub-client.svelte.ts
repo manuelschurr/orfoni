@@ -22,6 +22,7 @@ import {
 	type SessionId,
 } from '@orfoni/protocol';
 import { z } from 'zod';
+import { Drafts } from './drafts.svelte';
 import type { ConnectionStatus, HubTransport } from './transport';
 
 type Method = ClientRequest['method'];
@@ -198,6 +199,8 @@ export class HubClient {
 	commands = $state.raw(new Map<string, SlashCommand[]>());
 	// Counts the moments a new release may be out, each connection to the hub and each release the hub announces, so the app looks for its update then.
 	releaseHints = $state(0);
+	// What each session's message box holds while it is closed.
+	readonly drafts = new Drafts();
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
@@ -493,6 +496,7 @@ export class HubClient {
 				const chats = new Map(this.chats);
 				chats.delete(sessionId);
 				this.chats = chats;
+				this.drafts.forget(sessionId);
 				if (this.selected === sessionId) this.selected = null;
 				return;
 			}
