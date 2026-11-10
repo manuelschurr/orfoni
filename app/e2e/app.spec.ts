@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -645,4 +645,68 @@ test('an image pasted into the message box goes to Claude with the message', asy
 	await expect(you(page).last()).toContainText(/\[Image #\d+\] What colour is this image\?/, { timeout: 60_000 });
 	await expect(claude(page).last()).toContainText(/green/i, { timeout: REPLY_MS });
 	await expect(page.getByRole('img', { name: 'screenshot.png' })).toHaveCount(0);
+});
+
+// The start time is twelve hours off, so the hub has no exchange of its own while the check runs.
+test('Plan limits takes a start time for the 5-hour window, shows the next start, and turns it off again', async ({ page }) => {
+	const before = ((await hub.request('hubStatus', {})) as HubStatus).automation;
+	if (!before) throw new Error('the hub reports nothing about the plan limits');
+	const later = new Date(Date.now() + 12 * 3600_000);
+	const startWindowAt = later.getHours() * 60 + later.getMinutes();
+	const clock = `${String(later.getHours()).padStart(2, '0')}:${String(later.getMinutes()).padStart(2, '0')}`;
+	const settings = async () => ((await hub.request('hubStatus', {})) as HubStatus).automation?.settings;
+	const dialog = page.getByRole('dialog', { name: 'Plan limits' });
+	const start = dialog.getByRole('checkbox', { name: 'Start the 5-hour window early' });
+	try {
+		await hub.request('setPlanSettings', { startWindowAt: null, continueAfterLimit: true });
+		await page.goto(APP);
+		await page.getByRole('button', { name: 'Plan limits' }).click();
+		await expect(start).not.toBeChecked();
+		await expect(dialog.getByRole('checkbox', { name: 'Continue sessions after a limit' })).toBeChecked();
+		await start.check();
+		await dialog.getByLabel('Start time').fill(clock);
+		await dialog.getByRole('button', { name: 'Save' }).click();
+		await expect(dialog).toBeHidden();
+		expect(await settings()).toEqual({ startWindowAt, continueAfterLimit: true });
+
+		await page.getByRole('button', { name: 'Plan limits' }).click();
+		await expect(dialog.getByLabel('Start time')).toHaveValue(clock);
+		await expect(dialog.getByText('Next start')).toBeVisible();
+		await expect(dialog.getByText(`whose time zone is ${before.timeZone}`)).toBeVisible();
+		await start.uncheck();
+		await dialog.getByRole('button', { name: 'Save' }).click();
+		await expect(dialog).toBeHidden();
+		expect(await settings()).toEqual({ startWindowAt: null, continueAfterLimit: true });
+	} finally {
+		await hub.request('setPlanSettings', before.settings);
+	}
+});
+
+// A turn at a plan limit cannot be had on demand, so the check hands the hub the hook and the transcript Claude Code hands it then, with a reset three hours off.
+test('a session at a plan limit reads Limit reached, and says when the limit resets and when orfoni sends continue in its header and in its row', async ({ page }) => {
+	const before = ((await hub.request('hubStatus', {})) as HubStatus).automation;
+	if (!before) throw new Error('the hub reports nothing about the plan limits');
+	const session = await startReady({ prompt: 'Reply with exactly: ready', title: 'At the limit' });
+	// Claude Code reports its start after the hub has listed the session, and a start takes a limit away.
+	await hub.waitForSession(session.id, (current) => current.state === 'answered', undefined, REPLY_MS);
+	const resetsAt = (Math.floor(Date.now() / 1000) + 3 * 3600) * 1000;
+	const clock = (time: number) => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(time);
+	const transcript = join(mkdtempSync(join(tmpdir(), 'orfoni-limit-')), `${session.claudeSessionId}.jsonl`);
+	writeFileSync(transcript, `${JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, quotaLimits: { status: 'rejected', resetsAt: resetsAt / 1000, rateLimitType: 'five_hour' } })}\n`);
+	const failed = { hook_event_name: 'StopFailure', session_id: session.claudeSessionId, error: 'rate_limit', last_assistant_message: `You've hit your 5-hour limit · resets ${clock(resetsAt)}`, transcript_path: transcript };
+	const socket = join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`, 'orfoni', 'hooks.sock');
+	try {
+		await hub.request('setPlanSettings', { continueAfterLimit: true });
+		execFileSync('curl', ['-sS', '-m', '5', '--unix-socket', socket, '--data-binary', '@-', '-H', 'Content-Type: application/json', '-H', `X-Orfoni-Session: ${session.id}`, 'http://localhost/hook'], { input: JSON.stringify(failed) });
+		await openSession(page, session);
+		await expect(shownState(page, 'Limit reached')).toBeVisible();
+		await expect(page.getByRole('main').getByText(`The limit resets at ${clock(resetsAt)}. orfoni sends continue at ${clock(resetsAt + 60_000)}.`, { exact: true })).toBeVisible();
+		await expect(page.locator(`[data-session="${session.id}"]`)).toContainText(`continues ${clock(resetsAt + 60_000)}`);
+
+		await hub.request('setPlanSettings', { continueAfterLimit: false });
+		await expect(page.getByRole('main').getByText(`The limit resets at ${clock(resetsAt)}.`, { exact: true })).toBeVisible();
+		await expect(page.locator(`[data-session="${session.id}"]`)).not.toContainText('continues');
+	} finally {
+		await hub.request('setPlanSettings', before.settings);
+	}
 });
