@@ -1,4 +1,4 @@
-import { Effort, PermissionMode, withUploadNames, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { Effort, PermissionMode, withUploadNames, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary, type WindowStart } from '@orfoni/protocol';
 
 // The aliases claude takes with --model and /model.
 export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
@@ -53,6 +53,48 @@ export const stateLabel: Record<SessionStateKind, string> = {
 	idle: 'Idle',
 	failed: 'Failed',
 };
+
+// A turn that ran into a plan limit failed, but on nothing that is wrong with the session.
+export function sessionState(session: SessionSummary): string {
+	return session.state === 'failed' && session.limit ? 'Limit reached' : stateLabel[session.state];
+}
+
+const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const dayAndClock = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+// A time within a day of now by its clock alone, as 13:40, and one further off with its weekday, as Thu 12:00.
+export function shortTime(time: number, now: number): string {
+	return Math.abs(time - now) < 24 * 3_600_000 ? clock.format(time) : dayAndClock.format(time);
+}
+
+// The same within a sentence, as in "resets at 13:40" and "resets Thu 12:00".
+export function atTime(time: number, now: number): string {
+	return Math.abs(time - now) < 24 * 3_600_000 ? `at ${clock.format(time)}` : dayAndClock.format(time);
+}
+
+// What a session that ran into a plan limit waits for: the reset, and the continue orfoni sends after it. Null while the hub does not know when the limit resets.
+export function limitNote(limit: NonNullable<SessionSummary['limit']>, now: number): string | null {
+	if (limit.resetsAt === null) return null;
+	const reset = `The limit ${limit.resetsAt > now ? 'resets' : 'reset'} ${atTime(limit.resetsAt, now)}.`;
+	return limit.continuesAt === null ? reset : `${reset} orfoni sends continue ${atTime(limit.continuesAt, now)}.`;
+}
+
+// A time of day in minutes after midnight as a time field holds it, 05:30, and back, or null for what is no time of day.
+export function timeOfDay(minutes: number): string {
+	return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+export function minutesOfDay(time: string): number | null {
+	const parts = /^(\d{1,2}):(\d{2})/.exec(time);
+	const [hour, minute] = parts ? [Number(parts[1]), Number(parts[2])] : [24, 0];
+	return hour < 24 && minute < 60 ? hour * 60 + minute : null;
+}
+
+// How the hub's last start of a window went, with each time as `stamp` writes it.
+export function windowStartNote(last: WindowStart, stamp: (time: number) => string): string {
+	const found = last.resetsAt === null ? null : last.started ? `started a window that resets ${stamp(last.resetsAt)}.` : `a window was running until ${stamp(last.resetsAt)}.`;
+	return `${stamp(last.at)}: ${[found ?? 'failed.', last.problem].filter(Boolean).join(' ')}`;
+}
 
 export function needsYou(state: SessionStateKind): boolean {
 	return state === 'needs_approval' || state === 'needs_answer';

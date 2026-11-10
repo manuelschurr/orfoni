@@ -1,13 +1,13 @@
 <script lang="ts">
 	import type { HubStatus } from '@orfoni/protocol';
 	import type { HubClient } from '../hub-client.svelte';
-	import { bytes } from './format';
+	import { atTime, bytes } from './format';
+	import PlanDialog from './PlanDialog.svelte';
 
 	let { client, onsettings }: { client: HubClient; onsettings?: () => void } = $props();
 	let hub = $state<HubStatus | null>(null);
+	let planShown = $state(false);
 	const usd = new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' });
-	const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-	const dayAndClock = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 	// A window whose reset time has passed has started afresh, and its share is stale until the next status line, so it shows nothing.
 	const windows = $derived.by(() => {
 		const plan = hub?.plan;
@@ -17,7 +17,12 @@
 			{ name: '5-hour limit', window: plan.fiveHour },
 			{ name: 'Weekly limit', window: plan.sevenDay },
 		];
-		return named.flatMap(({ name, window }) => (window && window.resetsAt > now ? [{ name, ...window, soon: window.resetsAt - now < 24 * 3_600_000 }] : []));
+		return named.flatMap(({ name, window }) => (window && window.resetsAt > now ? [{ name, ...window, resets: atTime(window.resetsAt, now) }] : []));
+	});
+	// A start that found no window and could not start one, which the hub tries again or gives up for the day.
+	const startProblem = $derived.by(() => {
+		const last = hub?.automation?.lastWindowStart;
+		return last && last.resetsAt === null ? last.problem : null;
 	});
 
 	$effect(() => {
@@ -70,13 +75,19 @@
 		<p class="stats">
 			<button class="memory" title="Which sessions hold the memory" aria-current={client.memoryShown ? 'page' : undefined} onclick={() => client.showMemory()}>{bytes(hub.memory.availableBytes)} of {bytes(hub.memory.totalBytes)} free on the VPS</button>
 			<span>{hub.summaries.enabled ? `Summaries on, ${usd.format(hub.summaries.spentTodayUsd)} today` : 'Summaries off'}</span>
-			{#each windows as { name, usedPercent, resetsAt, soon } (name)}
-				<span class:warning={usedPercent >= 80}>{name} {Math.round(usedPercent)}% used, resets {soon ? `at ${clock.format(resetsAt)}` : dayAndClock.format(resetsAt)}</span>
+			{#each windows as { name, usedPercent, resets } (name)}
+				<span class:warning={usedPercent >= 80}>{name} {Math.round(usedPercent)}% used, resets {resets}</span>
 			{/each}
+			{#if hub.automation}<button class="link" title="What orfoni does about the plan limits" onclick={() => (planShown = true)}>Plan limits</button>{/if}
 		</p>
 		{#if hub.summaries.problem}<p class="summary-problem" class:failing={hub.summaries.enabled}>{hub.summaries.problem}</p>{/if}
+		{#if startProblem}<p class="summary-problem failing">Starting the 5-hour window failed: {startProblem}</p>{/if}
 	{/if}
 </div>
+{#if planShown && hub?.automation}
+	{@const status = hub}
+	<PlanDialog {client} automation={hub.automation} onsaved={(automation) => (hub = { ...status, automation })} onclose={() => (planShown = false)} />
+{/if}
 
 <style>
 	.status {
@@ -160,8 +171,9 @@
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* Opens the memory screen, and reads as a link so the bar stays quiet. */
-	.memory {
+	/* Each opens a screen or a dialog, and reads as a link so the bar stays quiet. */
+	.memory,
+	.link {
 		padding: 0;
 		border: 0;
 		background: none;
@@ -173,6 +185,7 @@
 		cursor: pointer;
 	}
 
+	.link:hover,
 	.memory:hover,
 	.memory[aria-current='page'] {
 		color: var(--text);

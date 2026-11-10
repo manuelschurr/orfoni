@@ -55,6 +55,22 @@ test('a row shows what the session is about, its task progress, and its memory a
 	expect(within(fix).getByText('1.5 GB')).toBeTruthy();
 });
 
+test('a row that ran into a plan limit reads as that, and shows when orfoni sends continue, unless it sends none', async () => {
+	const soon = Date.now() + 3 * HOUR;
+	const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(soon);
+	const { client } = await connectedClient([
+		summary('s1', 'failed', { title: 'Flash the boards', limit: { resetsAt: soon - 60_000, continuesAt: soon } }),
+		summary('s2', 'failed', { title: 'Sort the photos', limit: { resetsAt: soon - 60_000, continuesAt: null } }),
+		summary('s3', 'failed', { title: 'Build the app' }),
+	]);
+	render(Sidebar, { client, onnew: () => {} });
+	expect(words(row(/Flash the boards/))).toContain(`continues ${clock}`);
+	expect(row(/Flash the boards/).textContent).toContain('Limit reached');
+	expect(row(/Sort the photos/).textContent).not.toContain('continues');
+	expect(row(/Sort the photos/).textContent).toContain('Limit reached');
+	expect(row(/Build the app/).textContent).toContain('Failed');
+});
+
 test('a row with no summary, no tasks, and memory under 1 GB shows only its title, state, and time', async () => {
 	const now = Date.now();
 	const { client } = await connectedClient([

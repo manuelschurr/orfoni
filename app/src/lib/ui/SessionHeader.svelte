@@ -2,7 +2,7 @@
 	import type { SessionSummary } from '@orfoni/protocol';
 	import { tick } from 'svelte';
 	import type { Change, HubClient, Result, Setting } from '../hub-client.svelte';
-	import { bytes, effortChoices, effortLabel, modeChoices, modeLabel, modelChoices, modelLabel, oomKills, sessionTitle, stateLabel, tasksDone, titleFrom, type Choices } from './format';
+	import { bytes, effortChoices, effortLabel, limitNote, modeChoices, modeLabel, modelChoices, modelLabel, oomKills, sessionState, sessionTitle, tasksDone, titleFrom, type Choices } from './format';
 
 	let {
 		client,
@@ -49,6 +49,8 @@
 	const takesInput = $derived(session.state === 'idle' || session.state === 'answered' || session.state === 'failed');
 	// Claude Code compacts a conversation on its own once the context window is nearly full.
 	const contextHigh = $derived(session.context !== null && session.context >= 80);
+	// Read anew with each report of the session, which is when a limit or its continue changes.
+	const limited = $derived(session.limit ? limitNote(session.limit, Date.now()) : null);
 	const changes = $derived(client.changes.filter((change) => change.sessionId === session.id));
 	const restarting = $derived(changes.some((change) => change.phase !== 'unreported'));
 	const notes: Record<Change['phase'], (to: string) => string> = {
@@ -170,9 +172,10 @@
 			</div>
 		{/if}
 		<p class="meta">
-			<span class="state"><span class="dot" data-state={session.state} aria-hidden="true"></span>{stateLabel[session.state]}</span>
+			<span class="state"><span class="dot" data-state={session.state} aria-hidden="true"></span>{sessionState(session)}</span>
 			<span class="folder" title={session.projectDir}>{session.projectDir}</span>
 		</p>
+		{#if limited}<p class="where" role="status">{limited}</p>{/if}
 		{#if session.summary && (!narrow || more)}<p class="where" title={session.summary.status}>{session.summary.status}</p>{/if}
 	</div>
 	{#if narrow && session.taskList?.length}

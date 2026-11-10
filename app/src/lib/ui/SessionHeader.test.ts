@@ -76,6 +76,21 @@ test.each(['idle', 'working'] as const)('while the session is %s, the header sho
 	expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
 });
 
+test('a session that ran into a plan limit says so, with when the limit resets and when orfoni sends continue, until it works again', async () => {
+	const resetsAt = Date.now() + 3 * 3600_000;
+	const clock = (time: number) => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(time);
+	const { report } = await header({ state: 'failed', limit: { resetsAt: null, continuesAt: null } });
+	expect(screen.getByText('Limit reached')).toBeTruthy();
+	expect(screen.queryByRole('status')).toBeNull();
+	report({ limit: { resetsAt, continuesAt: resetsAt + 60_000 } });
+	await vi.waitFor(() => expect(screen.getByRole('status').textContent).toBe(`The limit resets at ${clock(resetsAt)}. orfoni sends continue at ${clock(resetsAt + 60_000)}.`));
+	report({ limit: { resetsAt, continuesAt: null } });
+	await vi.waitFor(() => expect(screen.getByRole('status').textContent).toBe(`The limit resets at ${clock(resetsAt)}.`));
+	report({ state: 'working', limit: null });
+	await vi.waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+	expect(screen.getByText('Working')).toBeTruthy();
+});
+
 test('a session that never created a task, has no summary, and reports no memory, model, or effort shows none of them', async () => {
 	await header({});
 	expect(screen.queryByRole('progressbar')).toBeNull();

@@ -1,10 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, expect, test, vi } from 'vitest';
-import { connectedClient } from '../testing';
+import { connectedClient, stubDialogs } from '../testing';
 import StatusBar from './StatusBar.svelte';
 
 const GB = 1024 ** 3;
+
+stubDialogs();
 
 function hubStatus(availableGb: number, enabled: boolean, spentTodayUsd: number, problem: string | null = null) {
 	return { memory: { availableBytes: availableGb * GB, totalBytes: 11.7 * GB }, summaries: { enabled, spentTodayUsd, problem } };
@@ -105,4 +107,42 @@ test('a hub that has not seen the plan windows, and a window that has started af
 	transport.respond('hubStatus', { ...hubStatus(4.2, false, 0), plan: { fiveHour: { usedPercent: 89, resetsAt: new Date(2026, 9, 29, 15, 30).getTime() }, sevenDay: null } });
 	await settle();
 	expect(screen.queryByText(/limit/)).toBeNull();
+});
+
+const automation = { settings: { continueAfterLimit: true, startWindowAt: null }, timeZone: 'Europe/Berlin', nextWindowStartAt: null, lastWindowStart: null };
+
+test('Plan limits opens what the hub does about the limits, and what is saved there shows when it opens again', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', { ...hubStatus(4.2, false, 0), automation });
+	await settle();
+	await fireEvent.click(screen.getByRole('button', { name: 'Plan limits' }));
+	const start = () => screen.getByRole('checkbox', { name: 'Start the 5-hour window early' }) as HTMLInputElement;
+	expect(start().checked).toBe(false);
+	await fireEvent.click(start());
+	await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+	expect(transport.requests('setPlanSettings')).toEqual([expect.objectContaining({ startWindowAt: 330, continueAfterLimit: true })]);
+	transport.respond('setPlanSettings', { ...automation, settings: { continueAfterLimit: true, startWindowAt: 330 }, nextWindowStartAt: Date.now() + 3600_000 });
+	await settle();
+	expect(screen.queryByRole('dialog')).toBeNull();
+	await fireEvent.click(screen.getByRole('button', { name: 'Plan limits' }));
+	expect(start().checked).toBe(true);
+	expect(screen.getByText('Next start')).toBeTruthy();
+});
+
+test('a hub from before the plan limits offers nothing about them', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	transport.respond('hubStatus', hubStatus(4.2, false, 0));
+	await settle();
+	expect(screen.queryByRole('button', { name: 'Plan limits' })).toBeNull();
+});
+
+test('a start of the window that failed shows why under the figures, and one that found a window running does not', async () => {
+	const { client, transport } = await connectedClient([]);
+	render(StatusBar, { client });
+	const failed = { at: Date.now() - 60_000, started: false, resetsAt: null, problem: 'Claude Code took over 60 s for the exchange' };
+	transport.respond('hubStatus', { ...hubStatus(4.2, false, 0), automation: { ...automation, lastWindowStart: failed } });
+	await settle();
+	expect(screen.getByText('Starting the 5-hour window failed: Claude Code took over 60 s for the exchange')).toBeTruthy();
 });
