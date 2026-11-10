@@ -84,7 +84,7 @@ export const HubStatus = z.object({
 	summaries: z.object({ enabled: z.boolean(), spentTodayUsd: z.number(), problem: z.string().nullable().default(null) }),
 	// The account's plan usage as the latest status line of any session reported it, and null until one has.
 	plan: z.object({ fiveHour: PlanWindow.nullable(), sevenDay: PlanWindow.nullable() }).nullable().default(null),
-	// Null from a hub before 0.3.25, which does nothing about the limits.
+	// Null from a hub before 0.3.26, which does nothing about the limits.
 	automation: PlanAutomation.nullable().default(null),
 });
 export type HubStatus = z.infer<typeof HubStatus>;
