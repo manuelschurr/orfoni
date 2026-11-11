@@ -183,6 +183,24 @@ async fn a_line_written_in_pieces_arrives_whole() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_megabyte_line_in_32_kb_packets_arrives_whole_and_the_next_line_after_it() {
+    let sshd = PrivateSshd::start();
+    let known_hosts = trusted(&sshd).await;
+    let command = r#"i=0; while [ $i -lt 32 ]; do head -c 32768 /dev/zero | tr '\0' a; i=$((i+1)); done; printf '\nnext\n'; sleep 5"#;
+    let connection = Connection::connect(&sshd.settings(command), None, &known_hosts)
+        .await
+        .unwrap();
+    let mut hub = connection.open_hub().await.unwrap();
+
+    let long = timeout(WAIT, hub.next_line()).await.unwrap().unwrap();
+    let next = timeout(WAIT, hub.next_line()).await.unwrap().unwrap();
+
+    assert_eq!(long.len(), 32 * 32768);
+    assert!(long.bytes().all(|byte| byte == b'a'));
+    assert_eq!(next, "next");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hub_command_that_fails_ends_the_stream_with_its_error() {
     let sshd = PrivateSshd::start();
     let known_hosts = trusted(&sshd).await;
