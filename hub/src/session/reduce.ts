@@ -232,7 +232,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 							kind: 'tool',
 							toolUseId: event.toolUseId,
 							name: event.name,
-							input: existing?.input,
+							input: existing?.input ?? event.input,
 							status: 'done',
 							output: event.output,
 						})),

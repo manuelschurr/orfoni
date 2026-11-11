@@ -185,9 +185,9 @@ describe('reduce', () => {
 		});
 	});
 
-	test('tool_end for a tool whose start was missed still adds a tool item', () => {
-		const model = run(started, prompted, hook('tool_end', { toolUseId: 't9', name: 'Read', output: 'text' }, 3));
-		expect(model.chat[1]).toEqual({ kind: 'tool', toolUseId: 't9', name: 'Read', input: undefined, status: 'done', output: 'text' });
+	test('tool_end for a tool whose start was missed still adds a tool item, with the input the end carries', () => {
+		const model = run(started, prompted, hook('tool_end', { toolUseId: 't9', name: 'Read', input: { file_path: '/w/a.txt' }, output: 'text' }, 3));
+		expect(model.chat[1]).toEqual({ kind: 'tool', toolUseId: 't9', name: 'Read', input: { file_path: '/w/a.txt' }, status: 'done', output: 'text' });
 	});
 
 	test('request_opened with an approval appends it, records the request, and needs approval', () => {

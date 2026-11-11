@@ -9,7 +9,7 @@ export type HookEvent =
 	| Event<'prompt', { text: string }>
 	| Event<'assistant_text', { messageId: string; index: number; final: boolean; delta: string }>
 	| Event<'tool_start', { toolUseId: string; name: string; input: unknown; agentId?: string }>
-	| Event<'tool_end', { toolUseId: string; name: string; output: unknown; agentId?: string }>
+	| Event<'tool_end', { toolUseId: string; name: string; input: unknown; output: unknown; agentId?: string }>
 	| Event<'tool_failed', { toolUseId: string; name: string; error: string; interrupted: boolean; agentId?: string }>
 	| Event<'permission_request', { name: string; input: unknown; suggestions: unknown[] }>
 	| Event<'task_created', { taskId: string; subject: string }>
@@ -62,11 +62,12 @@ const schemas = {
 		input: b.tool_input,
 		agentId: b.agent_id,
 	})),
-	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_response: z.unknown(), agent_id: agentId }, (b) => ({
+	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_input: z.unknown(), tool_response: z.unknown(), agent_id: agentId }, (b) => ({
 		type: 'tool_end',
 		claudeSessionId: b.session_id,
 		toolUseId: b.tool_use_id,
 		name: b.tool_name,
+		input: b.tool_input,
 		output: b.tool_response,
 		agentId: b.agent_id,
 	})),

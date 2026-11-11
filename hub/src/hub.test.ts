@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ChatItem, ClaudeSessionId, ClientRequest, HubMessage, HubStatus, OtherSession, PastConversation, SessionId, SessionSummary } from '@orfoni/protocol';
+import { MAX_FILE_BYTES, type ChatItem, type ClaudeSessionId, type ClientRequest, type HubMessage, type HubStatus, type OtherSession, type PastConversation, type SessionId, type SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { documentName, Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
@@ -2240,6 +2240,125 @@ describe('hooks', () => {
 		expect(client.messages.at(-1)).toEqual({ type: 'sessionUpdated', session: expect.objectContaining({ id, claudeSessionId: next, state: 'idle' }) });
 		expect((await client.ok('openSession', { sessionId: id })) as object).toMatchObject({ chat: [] });
 		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(next));
+	});
+});
+
+describe('sent files', () => {
+	const TOOL_USE = 'toolu_014JNaTw7XmbD3GUNEJNA486';
+	const input = (files: string[]) => ({ files, caption: 'spike', status: 'normal', display: 'render' });
+
+	function folder(): string {
+		return join(dir, 'proj');
+	}
+
+	function write(name: string, text: string): string {
+		const path = join(folder(), name);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, text);
+		return path;
+	}
+
+	async function readyIn(client: TestClient) {
+		mkdirSync(folder(), { recursive: true });
+		const session = await start(client, { projectDir: folder() });
+		await hub.hook(session.id, body('SessionStart', session.claude));
+		await vi.advanceTimersByTimeAsync(2000);
+		return session;
+	}
+
+	// The hooks of a call that sends files named relative to the session's folder, as Claude Code 2.1.322 sends them.
+	function preToolUse(claude: string, files: string[], toolUseId = TOOL_USE): Record<string, unknown> {
+		return body('PreToolUse', claude, { tool_name: 'SendUserFile', tool_use_id: toolUseId, tool_input: input(files) });
+	}
+
+	function postToolUse(claude: string, files: string[], toolUseId = TOOL_USE): Record<string, unknown> {
+		const attachments = files.map((name) => {
+			const path = join(folder(), name);
+			return { path, size: existsSync(path) ? statSync(path).size : 0, isImage: name.endsWith('.png'), media_type: 'text/plain', pathValidated: true, file_uuid: randomUUID() };
+		});
+		return body('PostToolUse-SendUserFile', claude, { cwd: folder(), tool_use_id: toolUseId, tool_input: input(files), tool_response: { caption: 'spike', display: 'render', attachments } });
+	}
+
+	const delivered = (paths: string[]) => `${paths.length} files delivered to user.\n${paths.map((path) => `  ${path} → file_uuid: ${randomUUID()}`).join('\n')}`;
+	const stamped = (type: 'user' | 'assistant', content: unknown) => ({ ...entry(type, content), timestamp: new Date(T0 - 60_000).toISOString() });
+
+	// A conversation in which Claude sent files by these paths, as the transcript records it.
+	function sentInTranscript(files: string[], toolUseId = TOOL_USE): SessionMessage[] {
+		return [
+			stamped('user', 'send them'),
+			stamped('assistant', [{ type: 'tool_use', id: toolUseId, name: 'SendUserFile', input: { files, caption: 'from history', status: 'normal' } }]),
+			stamped('user', [{ type: 'tool_result', tool_use_id: toolUseId, content: delivered(files) }]),
+		];
+	}
+
+	function sentOf(chat: ChatItem[], toolUseId = TOOL_USE) {
+		const item = chat.findLast((candidate) => candidate.kind === 'tool' && candidate.toolUseId === toolUseId);
+		return item?.kind === 'tool' ? item.sent : undefined;
+	}
+
+	test('a client sees the files of a SendUserFile call on its tool item, being sent while it runs, then by the path and size Claude Code resolved', async () => {
+		write('icon.png', 'png!');
+		write('sub/report.md', '# hi\n');
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		await hub.hook(id, preToolUse(claude, ['icon.png', 'sub/report.md']));
+		expect(sentOf(client.chat(id))).toEqual({
+			caption: 'spike',
+			render: true,
+			files: [
+				{ name: 'icon.png', path: join(folder(), 'icon.png'), size: null, image: true, state: 'sending' },
+				{ name: 'report.md', path: join(folder(), 'sub/report.md'), size: null, image: false, state: 'sending' },
+			],
+		});
+		await hub.hook(id, postToolUse(claude, ['icon.png', 'sub/report.md']));
+		expect(sentOf(client.chat(id))).toEqual({
+			caption: 'spike',
+			render: true,
+			files: [
+				{ name: 'icon.png', path: join(folder(), 'icon.png'), size: 4, image: true, state: 'original' },
+				{ name: 'report.md', path: join(folder(), 'sub/report.md'), size: 5, image: false, state: 'original' },
+			],
+		});
+	});
+
+	test('a call the hub saw only end still shows its input and its files, and every other tool goes out as it was', async () => {
+		write('a.txt', 'a');
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		await hub.hook(id, postToolUse(claude, ['a.txt']));
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'tool', input: input(['a.txt']), sent: { files: [{ name: 'a.txt', state: 'original' }] } });
+		await hub.hook(id, body('PreToolUse', claude));
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'tool', name: 'Write' });
+		expect(client.chat(id).at(-1)).not.toHaveProperty('sent');
+	});
+
+	test('a call read from the transcript names each file it sent, and says whether that file is there, gone, or too large to open', async () => {
+		const there = write('there.txt', 'hello');
+		const big = write('big.bin', '');
+		truncateSync(big, MAX_FILE_BYTES + 1);
+		const gone = join(folder(), 'gone.txt');
+		transcript = sentInTranscript([there, gone, big]);
+		const client = await startHub();
+		const { id } = await readyIn(client);
+		const opened = (await client.ok('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		expect(sentOf(opened.chat)).toEqual({
+			caption: 'from history',
+			render: false,
+			files: [
+				{ name: 'there.txt', path: there, size: 5, image: false, state: 'original' },
+				{ name: 'gone.txt', path: gone, size: null, image: false, state: 'missing' },
+				{ name: 'big.bin', path: big, size: MAX_FILE_BYTES + 1, image: false, state: 'tooLarge' },
+			],
+		});
+	});
+
+	test('a session outside orfoni shows the files its calls sent', async () => {
+		const there = write('there.txt', 'hello');
+		transcripts.set(OTHER, sentInTranscript([there]));
+		runOther(4321);
+		const client = await startHub();
+		const opened = (await client.ok('openOtherSession', { pid: 4321 })) as { chat: ChatItem[] };
+		expect(sentOf(opened.chat)?.files).toEqual([{ name: 'there.txt', path: there, size: 5, image: false, state: 'original' }]);
 	});
 });
 

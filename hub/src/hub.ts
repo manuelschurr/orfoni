@@ -39,6 +39,7 @@ import { CONTINUE_TEXT, continueAt, limitReset, MAX_CONTINUES } from './limit.js
 import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
+import { show, showLive } from './sent-copies.js';
 import { noticesOf, titleOf } from './session/notices.js';
 import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
@@ -786,7 +787,7 @@ export class Hub {
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
 		this.view(client, session.id);
-		return { session: summary(session), chat: await this.conversation(session) };
+		return { session: summary(session), chat: await show(await this.conversation(session), session.projectDir) };
 	}
 
 	private async conversation(session: Session): Promise<ChatItem[]> {
@@ -834,7 +835,7 @@ export class Hub {
 
 	private async openOther(pid: number): Promise<{ session: OtherSession; chat: ChatItem[] }> {
 		const { session } = await this.other(pid);
-		return { session, chat: normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)) };
+		return { session, chat: await show(normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)), session.projectDir) };
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {
@@ -1282,7 +1283,8 @@ export class Hub {
 		session.model = after;
 		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
-		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item });
+		// The model never holds what the hub says about sent files, only what it sends out.
+		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: showLive(item, session.projectDir) });
 		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.chat), body });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);

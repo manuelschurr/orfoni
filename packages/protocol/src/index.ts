@@ -136,6 +136,30 @@ export const Question = z.object({
 });
 export type Question = z.infer<typeof Question>;
 
+// The largest file the hub keeps a copy of and the app opens, one number for both, so a file the hub would not keep is one the app would not open either.
+export const MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+// What a click on a file Claude sent would open, as the hub knew it when it sent the item. sending: the call still runs. original: the hub has no copy, and the file is on the VPS, as it is now. missing: no copy and no file. tooLarge: over MAX_FILE_BYTES, which the app does not open.
+export const SentFileState = z.enum(['sending', 'original', 'missing', 'tooLarge']);
+export type SentFileState = z.infer<typeof SentFileState>;
+
+export const SentFile = z.object({
+	name: z.string(),
+	// Absolute, as Claude Code resolved it.
+	path: z.string(),
+	// The size of the file a click would open, or null when the hub knows none.
+	size: z.number().int().min(0).nullable(),
+	// A kind of image the app can show inside the card.
+	image: z.boolean(),
+	// A state from a later hub reads as one worth a try.
+	state: SentFileState.catch('original'),
+});
+export type SentFile = z.infer<typeof SentFile>;
+
+// A SendUserFile call as the chat shows it. files[i] is the call's input.files[i], the same length and order.
+export const SentFiles = z.object({ caption: z.string().nullable(), render: z.boolean(), files: z.array(SentFile) });
+export type SentFiles = z.infer<typeof SentFiles>;
+
 export const ChatItem = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('user'), id: z.string(), text: z.string(), at: z.number() }),
 	z.object({ kind: z.literal('assistant'), id: z.string(), text: z.string(), done: z.boolean() }),
@@ -147,6 +171,8 @@ export const ChatItem = z.discriminatedUnion('kind', [
 		input: z.unknown().optional(),
 		status: z.enum(['running', 'done', 'failed']),
 		output: z.unknown().optional(),
+		// The files a SendUserFile call sent, which the hub reads from Claude Code's formats so that the app does not depend on them. An app from before this drops the key, and this app drops one it cannot read rather than the whole line.
+		sent: SentFiles.optional().catch(undefined),
 	}),
 	z.object({
 		kind: z.literal('approval'),

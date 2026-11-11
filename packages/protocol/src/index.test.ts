@@ -134,6 +134,15 @@ test('a tool item without its input round-trips', () => {
 	expect(parseHubMessage(JSON.stringify(message))).toEqual({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'Bash', status: 'done', output: { stdout: 'ok' } } });
 });
 
+// A later hub may change what it says about sent files, which then costs this app the card and never the line.
+test('a tool item keeps the files a call sent as far as this app can read them', () => {
+	const file = { name: 'a.png', path: '/w/a.png', size: 4, image: true, state: 'original' };
+	const line = (sent: unknown) => JSON.stringify({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'SendUserFile', status: 'done', sent } });
+	expect(parseHubMessage(line({ caption: null, render: true, files: [file] }))).toMatchObject({ item: { sent: { caption: null, render: true, files: [file] } } });
+	expect(parseHubMessage(line({ caption: null, render: true, files: [{ ...file, state: 'teleported' }] }))).toMatchObject({ item: { sent: { files: [{ state: 'original' }] } } });
+	expect(parseHubMessage(line({ caption: null, files: 'many' }))).toEqual({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'SendUserFile', status: 'done' } });
+});
+
 test('a notice tells a client what to show about a session, and only kinds the app knows', () => {
 	const notice = { type: 'notice', sessionId: 's', kind: 'approval', title: 'Fix the login page', body: 'Claude needs your approval in proj' };
 	expect(parseHubMessage(JSON.stringify(notice))).toEqual(notice);
