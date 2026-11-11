@@ -1,5 +1,6 @@
 mod background;
 pub mod commands;
+mod downloads;
 mod files;
 pub mod keys;
 pub mod known_hosts;
@@ -37,6 +38,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(navigation_guard())
         .plugin(background::plugin())
+        .plugin(downloads::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -78,6 +80,8 @@ pub fn run() {
             commands::key_create,
             commands::key_import,
             commands::opened_notice,
+            downloads::file_write,
+            downloads::file_finish,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
