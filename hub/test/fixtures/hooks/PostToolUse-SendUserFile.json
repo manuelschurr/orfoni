@@ -1,0 +1,46 @@
+{
+ "session_id": "a4f5f96a-090a-49e7-9288-4c41e4f5e07c",
+ "transcript_path": "/home/user/.claude/projects/-var-tmp-claude-0-orfoni-spike-send/a4f5f96a-090a-49e7-9288-4c41e4f5e07c.jsonl",
+ "cwd": "/var/tmp/claude-0/orfoni-spike-send",
+ "scratchpad_dir": "/var/tmp/claude-0/-var-tmp-claude-0-orfoni-spike-send/a4f5f96a-090a-49e7-9288-4c41e4f5e07c/scratchpad",
+ "prompt_id": "66057aed-0489-48ef-aa0b-add236eac8ba",
+ "permission_mode": "auto",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PostToolUse",
+ "tool_name": "SendUserFile",
+ "tool_input": {
+  "files": [
+   "icon.png",
+   "sub/report.md"
+  ],
+  "caption": "spike",
+  "status": "normal",
+  "display": "render"
+ },
+ "tool_response": {
+  "caption": "spike",
+  "display": "render",
+  "attachments": [
+   {
+    "path": "/var/tmp/claude-0/orfoni-spike-send/icon.png",
+    "size": 2225,
+    "isImage": true,
+    "media_type": "image/png",
+    "pathValidated": true,
+    "file_uuid": "192d3ec4-22ec-4396-a211-37d015d5953a"
+   },
+   {
+    "path": "/var/tmp/claude-0/orfoni-spike-send/sub/report.md",
+    "size": 17,
+    "isImage": false,
+    "media_type": "text/markdown",
+    "pathValidated": true,
+    "file_uuid": "b95c7a7e-20d4-4e25-97eb-52a1e39b152e"
+   }
+  ]
+ },
+ "tool_use_id": "toolu_014JNaTw7XmbD3GUNEJNA486",
+ "duration_ms": 496
+}
