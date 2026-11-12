@@ -386,6 +386,36 @@ describe('HubClient with earlier conversations', () => {
 	});
 });
 
+describe('files', () => {
+	const file = { kind: 'sent', toolUseId: 'toolu_1', index: 0, path: '/w/a.png' } as const;
+	const session = { kind: 'other', pid: 4321 } as const;
+
+	test('reads a piece of a file and lists a folder by what the hub needs to find them', async () => {
+		await connect();
+		const reading = client.readFile(file, 262144);
+		expect(transport.requests('readFile')).toMatchObject([{ file, offset: 262144 }]);
+		const chunk = { size: 262148, version: 'copy-1', data: 'cG5nIQ==' };
+		transport.respond('readFile', chunk);
+		expect(await reading).toEqual(chunk);
+		const listing = client.listFolder(session, 'src');
+		expect(transport.requests('listFolder')).toMatchObject([{ session, path: 'src' }]);
+		const answer = { path: 'src', entries: [{ name: 'main.ts', kind: 'file', size: 11, modifiedAt: 5 }], omitted: 0 };
+		transport.respond('listFolder', answer);
+		expect(await listing).toEqual(answer);
+	});
+
+	test('an older hub, which knows neither request, fails both with bad_message and raises no problem', async () => {
+		await connect();
+		const reading = client.readFile(file, 0);
+		transport.fail('readFile', 'bad_message', 'Invalid discriminator value');
+		await expect(reading).rejects.toMatchObject({ code: 'bad_message' });
+		const listing = client.listFolder(session, '');
+		transport.fail('listFolder', 'bad_message', 'Invalid discriminator value');
+		await expect(listing).rejects.toMatchObject({ code: 'bad_message' });
+		expect(client.problem).toBeNull();
+	});
+});
+
 describe('releases', () => {
 	test('the client asks the hub to hear of releases on each connection, and counts each connection and each announced release as a hint to look for an update', async () => {
 		expect(client.releaseHints).toBe(0);

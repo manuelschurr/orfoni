@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_FILE_BYTES, type ChatItem, type ClaudeSessionId, type ClientRequest, type HubMessage, type HubStatus, type OtherSession, type PastConversation, type SessionId, type SessionSummary } from '@orfoni/protocol';
+import { FILE_CHUNK_BYTES, MAX_FILE_BYTES, MAX_FOLDER_ENTRIES, sentFileRef, type ChatItem, type ClaudeSessionId, type ClientRequest, type FileChunk, type FolderListing, type HubMessage, type HubStatus, type OtherSession, type PastConversation, type SessionId, type SessionSummary } from '@orfoni/protocol';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { documentName, Hub, type HubOptions } from './hub.js';
 import { hookSettings } from './settings.js';
@@ -2243,28 +2243,31 @@ describe('hooks', () => {
 	});
 });
 
+// A session's folder on disk, for the files Claude sends from it and the explorer.
+function folder(): string {
+	return join(dir, 'proj');
+}
+
+function write(name: string, text: string): string {
+	const path = join(folder(), name);
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, text);
+	return path;
+}
+
+async function readyIn(client: TestClient) {
+	mkdirSync(folder(), { recursive: true });
+	const session = await start(client, { projectDir: folder() });
+	await hub.hook(session.id, body('SessionStart', session.claude));
+	await vi.advanceTimersByTimeAsync(2000);
+	return session;
+}
+
+const text = (chunk: unknown) => Buffer.from((chunk as FileChunk).data, 'base64').toString('utf8');
+
 describe('sent files', () => {
 	const TOOL_USE = 'toolu_014JNaTw7XmbD3GUNEJNA486';
 	const input = (files: string[]) => ({ files, caption: 'spike', status: 'normal', display: 'render' });
-
-	function folder(): string {
-		return join(dir, 'proj');
-	}
-
-	function write(name: string, text: string): string {
-		const path = join(folder(), name);
-		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(path, text);
-		return path;
-	}
-
-	async function readyIn(client: TestClient) {
-		mkdirSync(folder(), { recursive: true });
-		const session = await start(client, { projectDir: folder() });
-		await hub.hook(session.id, body('SessionStart', session.claude));
-		await vi.advanceTimersByTimeAsync(2000);
-		return session;
-	}
 
 	// The hooks of a call that sends files named relative to the session's folder, as Claude Code 2.1.322 sends them.
 	function preToolUse(claude: string, files: string[], toolUseId = TOOL_USE): Record<string, unknown> {
@@ -2398,6 +2401,38 @@ describe('sent files', () => {
 		});
 	});
 
+	test("a sent file opens from the hub's copy a piece at a time, after Claude deleted the original", async () => {
+		const sent = 'x'.repeat(FILE_CHUNK_BYTES) + 'and the tail';
+		const path = write('long.txt', sent);
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		await hub.hook(id, postToolUse(claude, ['long.txt']));
+		rmSync(path);
+		const file = sentFileRef(TOOL_USE, 0, sentOf(client.chat(id))!.files[0]!);
+		const first = (await client.ok('readFile', { file, offset: 0 })) as FileChunk;
+		const second = (await client.ok('readFile', { file, offset: FILE_CHUNK_BYTES })) as FileChunk;
+		expect(first.size).toBe(sent.length);
+		expect(second.version).toBe(first.version);
+		expect(text(first) + text(second)).toBe(sent);
+		expect(await client.ok('readFile', { file, offset: sent.length })).toMatchObject({ size: sent.length, data: '' });
+	});
+
+	test('a sent file the hub kept no copy of opens as it is on the VPS now, with a new version when it changes, and says when it is gone', async () => {
+		const path = write('there.txt', 'hello');
+		transcript = sentInTranscript([path]);
+		const client = await startHub();
+		const { id } = await readyIn(client);
+		const opened = (await client.ok('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		const file = sentFileRef(TOOL_USE, 0, sentOf(opened.chat)!.files[0]!);
+		const before = (await client.ok('readFile', { file, offset: 0 })) as FileChunk;
+		expect(text(before)).toBe('hello');
+		writeFileSync(path, 'hello again');
+		const after = (await client.ok('readFile', { file, offset: 0 })) as FileChunk;
+		expect([text(after), after.version === before.version]).toEqual(['hello again', false]);
+		rmSync(path);
+		expect(await client.request('readFile', { file, offset: 0 })).toMatchObject({ ok: false, error: { code: 'not_found', message: expect.stringContaining(path) } });
+	});
+
 	test('a session outside orfoni shows the files its calls sent', async () => {
 		const there = write('there.txt', 'hello');
 		transcripts.set(OTHER, sentInTranscript([there]));
@@ -2405,6 +2440,67 @@ describe('sent files', () => {
 		const client = await startHub();
 		const opened = (await client.ok('openOtherSession', { pid: 4321 })) as { chat: ChatItem[] };
 		expect(sentOf(opened.chat)?.files).toEqual([{ name: 'there.txt', path: there, size: 5, image: false, state: 'original' }]);
+	});
+});
+
+describe('session folder', () => {
+	test('lists a folder of the session: folders, then files, then the rest, each in natural order, with dot entries and links counted as what they lead to inside the folder', async () => {
+		for (const name of ['b', 'a10', 'a2', '.git']) mkdirSync(join(folder(), name), { recursive: true });
+		write('x10.txt', 'ten');
+		write('x9.txt', 'nine!');
+		write('.env', 'A=1');
+		symlinkSync(join(folder(), 'a2'), join(folder(), 'linked'));
+		symlinkSync('/etc', join(folder(), 'outside'));
+		symlinkSync(join(folder(), 'nothing'), join(folder(), 'dangling'));
+		const client = await startHub();
+		const { id } = await readyIn(client);
+		const listing = (await client.ok('listFolder', { session: { kind: 'orfoni', sessionId: id }, path: '' })) as FolderListing;
+		expect(listing.entries.map(({ name, kind, size }) => [name, kind, size])).toEqual([
+			['.git', 'folder', null],
+			['a2', 'folder', null],
+			['a10', 'folder', null],
+			['b', 'folder', null],
+			['linked', 'folder', null],
+			['.env', 'file', 3],
+			['x9.txt', 'file', 5],
+			['x10.txt', 'file', 3],
+			['dangling', 'other', null],
+			['outside', 'other', null],
+		]);
+		expect(listing).toMatchObject({ path: '', omitted: 0 });
+		expect(listing.entries.every(({ modifiedAt }) => typeof modifiedAt === 'number')).toBe(true);
+	});
+
+	test('a file in the folder opens and a subfolder lists, and nothing through a link out of the folder lists or opens', async () => {
+		write('src/main.ts', 'let x = 1;\n');
+		symlinkSync('/etc', join(folder(), 'outside'));
+		const client = await startHub();
+		const { id } = await readyIn(client);
+		const session = { kind: 'orfoni', sessionId: id } as const;
+		expect(text(await client.ok('readFile', { file: { kind: 'folder', session, path: 'src/main.ts' }, offset: 0 }))).toBe('let x = 1;\n');
+		expect(await client.ok('listFolder', { session, path: 'src' })).toMatchObject({ path: 'src', entries: [{ name: 'main.ts', kind: 'file' }] });
+		for (const path of ['outside/passwd', 'outside', 'src']) expect(await client.request('readFile', { file: { kind: 'folder', session, path }, offset: 0 })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+		expect(await client.request('listFolder', { session, path: 'outside' })).toMatchObject({ ok: false, error: { code: 'not_found' } });
+	});
+
+	test('a listing names at most 1000 entries, chosen after sorting, and counts the rest', async () => {
+		mkdirSync(join(folder(), 'zz'), { recursive: true });
+		for (let n = 1; n <= MAX_FOLDER_ENTRIES + 3; n++) writeFileSync(join(folder(), `f${n}`), '');
+		const client = await startHub();
+		const { id } = await readyIn(client);
+		const listing = (await client.ok('listFolder', { session: { kind: 'orfoni', sessionId: id }, path: '' })) as FolderListing;
+		expect(listing.entries).toHaveLength(MAX_FOLDER_ENTRIES);
+		expect([listing.entries[0]?.name, listing.entries.at(-1)?.name, listing.omitted]).toEqual(['zz', `f${MAX_FOLDER_ENTRIES - 1}`, 4]);
+	});
+
+	test('a session outside orfoni lists the folder it started in until it ends', async () => {
+		write('notes.md', 'hi');
+		runOther(4321, { cwd: folder() });
+		const client = await startHub();
+		const session = { kind: 'other', pid: 4321 } as const;
+		expect(await client.ok('listFolder', { session, path: '' })).toMatchObject({ entries: [{ name: 'notes.md', kind: 'file', size: 2 }] });
+		endOther(4321);
+		expect(await client.request('listFolder', { session, path: '' })).toMatchObject({ ok: false, error: { code: 'not_found', message: expect.stringContaining('no longer running') } });
 	});
 });
 

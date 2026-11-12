@@ -11,7 +11,7 @@ import {
 	type ChatItem,
 	type ClientRequest,
 	type Decision,
-	type ErrorCode,
+	type FileRef,
 	type HubMessage,
 	type HubStatus,
 	type ImageType,
@@ -25,6 +25,7 @@ import {
 	type ProjectDir,
 	type RequestId,
 	type RequestOutcome,
+	type SessionRef,
 	type SessionStateKind,
 	type SessionSummary,
 	type SlashCommand,
@@ -32,9 +33,12 @@ import {
 import { z } from 'zod';
 import { parseActivity, type Activity } from './activity.js';
 import { dialogOpensOnNo } from './dialog.js';
+import { readChunk, type FileSource } from './file-read.js';
 import { privateDir, writePrivate } from './files.js';
+import { folderFile, listFolder } from './folder.js';
 import { HookParseError, holdsResponse, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
+import { HubError } from './hub-error.js';
 import { CONTINUE_TEXT, continueAt, limitReset, MAX_CONTINUES } from './limit.js';
 import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
@@ -132,16 +136,6 @@ export interface HubOptions {
 export interface Connection {
 	request(request: ClientRequest): void;
 	close(): void;
-}
-
-class HubError extends Error {
-	constructor(
-		readonly code: ErrorCode,
-		message: string,
-	) {
-		super(message);
-		this.name = 'HubError';
-	}
 }
 
 interface Session {
@@ -576,7 +570,28 @@ export class Hub {
 				return this.continueConversation(request);
 			case 'setPlanSettings':
 				return this.setPlanSettings(request);
+			case 'listFolder':
+				return listFolder(await this.folderOf(request.session), request.path);
+			case 'readFile':
+				return readChunk(await this.fileSource(request.file), request.offset);
+			default: {
+				const unhandled: never = request;
+				throw new HubError('bad_message', `this hub has no method ${(unhandled as ClientRequest).method}`);
+			}
 		}
+	}
+
+	// The folder the session started in, which the explorer shows wherever Claude has gone since.
+	private async folderOf(ref: SessionRef): Promise<string> {
+		if (ref.kind === 'orfoni') return this.session(ref.sessionId).projectDir;
+		const other = (await this.refreshOthers()).find(({ session }) => session.pid === ref.pid);
+		if (!other) throw new HubError('not_found', `Session ${ref.pid} is no longer running, so the hub no longer knows its folder.`);
+		return other.session.projectDir;
+	}
+
+	// Every file a client names comes to bytes here and nowhere else.
+	private async fileSource(ref: FileRef): Promise<FileSource> {
+		return ref.kind === 'sent' ? this.sent.source(ref) : folderFile(await this.folderOf(ref.session), ref.path);
 	}
 
 	private session(id: SessionId): Session {

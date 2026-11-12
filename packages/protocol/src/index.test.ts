@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ClaudeSessionId, HubStatus, MAX_DOCUMENT_BYTES, MAX_IMAGE_BYTES, messageParts, parseClientRequest, parseHubMessage, PastConversation, ProtocolError, SessionSummary, withUploadNames, type HubMessage } from './index.js';
+import { ClaudeSessionId, FILE_CHUNK_BYTES, FileChunk, HubStatus, joinFolderPath, MAX_DOCUMENT_BYTES, MAX_IMAGE_BYTES, messageParts, parseClientRequest, parseHubMessage, PastConversation, ProtocolError, sentFileRef, SessionSummary, withUploadNames, type HubMessage } from './index.js';
 
 function expectBadMessage(line: string) {
 	try {
@@ -93,8 +93,50 @@ describe('parseClientRequest', () => {
 		expectBadMessage('{"id":1,"method":"selfDestruct"}');
 	});
 
+	// Only a symbolic link can then lead out of the session's folder, which the hub checks.
+	test('a file or folder in a session is named by a path inside its folder, without . or .. and not absolute', () => {
+		const orfoni = { kind: 'orfoni', sessionId: 's' };
+		expect(parseClientRequest(JSON.stringify({ id: 9, method: 'listFolder', session: orfoni, path: '' }))).toEqual({ id: 9, method: 'listFolder', session: orfoni, path: '' });
+		expect(parseClientRequest(JSON.stringify({ id: 9, method: 'listFolder', session: { kind: 'other', pid: 4321 }, path: '.claude/agents' }))).toMatchObject({ path: '.claude/agents' });
+		expect(parseClientRequest(JSON.stringify({ id: 9, method: 'readFile', file: { kind: 'folder', session: orfoni, path: 'out/My CV.pdf' }, offset: 262144 }))).toMatchObject({ offset: 262144 });
+		for (const path of ['..', 'a/../../etc', '/etc/passwd', 'a//b', 'a/', './a', 'a\0b']) {
+			expectBadMessage(JSON.stringify({ id: 9, method: 'listFolder', session: orfoni, path }));
+			expectBadMessage(JSON.stringify({ id: 9, method: 'readFile', file: { kind: 'folder', session: orfoni, path }, offset: 0 }));
+		}
+		expectBadMessage(JSON.stringify({ id: 9, method: 'readFile', file: { kind: 'folder', session: orfoni, path: '' }, offset: 0 }));
+		expectBadMessage(JSON.stringify({ id: 9, method: 'readFile', file: { kind: 'folder', session: orfoni, path: 'a.txt' }, offset: -1 }));
+	});
+
+	test('a file Claude sent is named by its call, its place in the call, and the absolute path the hub reported for it', () => {
+		const file = { kind: 'sent', toolUseId: 'toolu_014JNaTw7XmbD3GUNEJNA486', index: 1, path: '/w/My CV.pdf' };
+		expect(parseClientRequest(JSON.stringify({ id: 10, method: 'readFile', file, offset: 0 }))).toEqual({ id: 10, method: 'readFile', file, offset: 0 });
+		expectBadMessage(JSON.stringify({ id: 10, method: 'readFile', file: { ...file, toolUseId: '../../etc' }, offset: 0 }));
+		expectBadMessage(JSON.stringify({ id: 10, method: 'readFile', file: { ...file, path: 'relative.pdf' }, offset: 0 }));
+	});
+
 	test('rejects send without text', () => {
 		expectBadMessage('{"id":1,"method":"send","sessionId":"s"}');
+	});
+});
+
+describe('joinFolderPath', () => {
+	test('names an entry of a folder, and refuses a name that would leave it', () => {
+		expect(joinFolderPath('', 'src')).toBe('src');
+		expect(joinFolderPath('src/lib', '.env')).toBe('src/lib/.env');
+		for (const name of ['', '.', '..', 'a/b']) expect(() => joinFolderPath('src', name)).toThrow();
+	});
+
+	test('the ref of a file Claude sent comes from the item the hub sent', () => {
+		expect(sentFileRef('toolu_1', 2, { name: 'a.png', path: '/w/a.png', size: 4, image: true, state: 'kept' })).toEqual({ kind: 'sent', toolUseId: 'toolu_1', index: 2, path: '/w/a.png' });
+	});
+});
+
+describe('FileChunk', () => {
+	test('a piece of a file is at most 256 KiB, and one past the end is empty', () => {
+		const piece = (bytes: number) => ({ size: 9, version: 'copy-1', data: Buffer.alloc(bytes).toString('base64') });
+		expect(FileChunk.safeParse(piece(FILE_CHUNK_BYTES)).success).toBe(true);
+		expect(FileChunk.safeParse(piece(0)).success).toBe(true);
+		expect(FileChunk.safeParse(piece(FILE_CHUNK_BYTES + 1)).success).toBe(false);
 	});
 });
 

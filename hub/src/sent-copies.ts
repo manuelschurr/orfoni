@@ -1,7 +1,8 @@
 import { chmod, copyFile, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { MAX_FILE_BYTES, ToolUseId, type ChatItem, type SentFile, type SentFileState, type SentFiles } from '@orfoni/protocol';
+import { MAX_FILE_BYTES, ToolUseId, type ChatItem, type SentFile, type SentFileState, type SentFiles, type SentRef } from '@orfoni/protocol';
 import { z } from 'zod';
+import type { FileSource } from './file-read.js';
 import { privateDir, writePrivate } from './files.js';
 import { SEND_USER_FILE, sentCall, type SentCall } from './send-user-file.js';
 
@@ -72,16 +73,21 @@ export class SentCopies {
 				if (!call) return item;
 				if (item.status === 'running') return { ...item, sent: view(item, call, null, undefined) };
 				const record = await this.record(item.toolUseId);
-				const onDisk = await Promise.all(call.files.map(({ path }, index) => sizeOnDisk(this.opens(item.toolUseId, index, record, path))));
+				const onDisk = await Promise.all(call.files.map(({ path }, index) => sizeOnDisk(this.opens(item.toolUseId, index, record, path).path)));
 				return { ...item, sent: view(item, call, record, onDisk) };
 			}),
 		);
 	}
 
-	// Where a click on a call's file opens it: the hub's copy when it kept one, else the file the record names, else the one the call names.
-	private opens(toolUseId: string, index: number, record: CallRecord | null, path: string): string {
+	// The file a click on a sent file opens. Without a record that is the path the ref names, which adds no reach: whoever reaches the hub's socket can run any command over the same SSH login.
+	async source(ref: SentRef): Promise<FileSource> {
+		return this.opens(ref.toolUseId, ref.index, await this.record(ref.toolUseId), ref.path);
+	}
+
+	// The hub's copy when it kept one, else the file the record names, else the one the call names.
+	private opens(toolUseId: string, index: number, record: CallRecord | null, path: string): FileSource {
 		const kept = record?.files[index];
-		return kept?.outcome === 'kept' ? join(this.dir, toolUseId, String(index)) : (kept?.path ?? path);
+		return record !== null && kept?.outcome === 'kept' ? { kind: 'copy', path: join(this.dir, toolUseId, String(index)), keptAt: record.keptAt } : { kind: 'live', path: kept?.path ?? path };
 	}
 
 	private async copy(toolUseId: string, call: SentCall): Promise<void> {

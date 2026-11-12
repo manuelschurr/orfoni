@@ -1,5 +1,7 @@
 import {
 	Effort,
+	FileChunk,
+	FolderListing,
 	HubStatus,
 	ChatItem,
 	MemoryReport,
@@ -14,12 +16,14 @@ import {
 	type ClientRequest,
 	type Decision,
 	type ErrorCode,
+	type FileRef,
 	type HubMessage,
 	type MessageDocument,
 	type MessageImage,
 	type RequestId,
 	type RequestOutcome,
 	type SessionId,
+	type SessionRef,
 } from '@orfoni/protocol';
 import { z } from 'zod';
 import { Drafts } from './drafts.svelte';
@@ -55,6 +59,8 @@ const results = {
 	watchReleases: done,
 	announceRelease: z.object({ told: z.number() }),
 	setPlanSettings: PlanAutomation,
+	listFolder: FolderListing,
+	readFile: FileChunk,
 } satisfies { [M in Method]: z.ZodType };
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 
@@ -329,6 +335,15 @@ export class HubClient {
 
 	async listProjectDirs(): Promise<ProjectDir[]> {
 		return (await this.request('listProjectDirs', {})).dirs;
+	}
+
+	// A hub older than this app knows neither of these and fails them with bad_message.
+	readFile(file: FileRef, offset: number): Promise<FileChunk> {
+		return this.request('readFile', { file, offset });
+	}
+
+	listFolder(session: SessionRef, path: string): Promise<FolderListing> {
+		return this.request('listFolder', { session, path });
 	}
 
 	loadCommands(projectDir: string): void {

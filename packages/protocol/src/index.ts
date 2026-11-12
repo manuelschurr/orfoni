@@ -277,6 +277,61 @@ export function withUploadNames(text: string): string {
 		.join('');
 }
 
+// A file goes from the VPS to a device in pieces of at most this many bytes, one readFile request each, so a download holds up the other messages on the line by a piece or two at a time.
+export const FILE_CHUNK_BYTES = 256 * 1024;
+// A folder listing names at most this many entries and counts the rest.
+export const MAX_FOLDER_ENTRIES = 1000;
+
+// A session the app shows: one of orfoni's own, or one outside orfoni, which has no orfoni ID and is known by its process.
+export const SessionRef = z.discriminatedUnion('kind', [z.object({ kind: z.literal('orfoni'), sessionId: SessionId }), z.object({ kind: z.literal('other'), pid: z.number().int() })]);
+export type SessionRef = z.infer<typeof SessionRef>;
+
+// A place inside a session's folder: names joined by /, none of them empty, . or .., so only a symbolic link can lead out, which the hub checks. The empty path is the folder itself.
+export function isFolderPath(path: string): boolean {
+	return path === '' || path.split('/').every((name) => name !== '' && name !== '.' && name !== '..' && !name.includes('\0'));
+}
+
+// The explorer goes down a folder with this, so the app and the hub share one rule for what a folder path is.
+export function joinFolderPath(folder: string, name: string): string {
+	const path = folder === '' ? name : `${folder}/${name}`;
+	if (name === '' || name.includes('/') || !isFolderPath(path)) throw new Error(`${JSON.stringify(name)} is not the name of an entry in a folder`);
+	return path;
+}
+
+export const FolderPath = z.string().max(4096).refine(isFolderPath, { message: 'a folder path is names joined by /, without . or ..' });
+
+// What a client names when it asks for a file's bytes.
+export const FileRef = z.discriminatedUnion('kind', [
+	// A file Claude sent: its call, its place in the call's files, and the path the hub reported for it, which the hub reads only when it kept no copy.
+	z.object({ kind: z.literal('sent'), toolUseId: ToolUseId, index: z.number().int().min(0).max(999), path: z.string().max(4096).regex(/^\/[^\0]*$/) }),
+	// A file in a session's folder.
+	z.object({ kind: z.literal('folder'), session: SessionRef, path: FolderPath.refine((path) => path !== '', { message: 'name a file, not the folder itself' }) }),
+]);
+export type FileRef = z.infer<typeof FileRef>;
+export type SentRef = Extract<FileRef, { kind: 'sent' }>;
+
+// The app never builds the ref of a sent file by hand, so it always names the file the hub described.
+export function sentFileRef(toolUseId: string, index: number, file: SentFile): SentRef {
+	return { kind: 'sent', toolUseId, index, path: file.path };
+}
+
+export const FolderEntry = z.object({
+	name: z.string(),
+	// A symbolic link counts as what it leads to inside the folder, and as other when it leads out or nowhere.
+	kind: z.enum(['folder', 'file', 'other']).catch('other'),
+	size: z.number().int().min(0).nullable(),
+	modifiedAt: z.number().nullable(),
+});
+export type FolderEntry = z.infer<typeof FolderEntry>;
+
+// Folders first, then files, then the rest, each in natural name order (a2 before a10), dot entries among them. `omitted` counts the entries past MAX_FOLDER_ENTRIES.
+export const FolderListing = z.object({ path: z.string(), entries: z.array(FolderEntry), omitted: z.number().int().min(0) });
+export type FolderListing = z.infer<typeof FolderListing>;
+
+// One piece of a file from the offset asked for. `size` is that of the whole file now. `version` changes whenever the bytes may have, and never for the hub's copy of a sent file, so a client that sees it change starts again.
+export const FileChunk = z.object({ size: z.number().int().min(0), version: z.string().min(1), data: z.base64().refine((data) => base64Bytes(data) <= FILE_CHUNK_BYTES, { message: 'a piece of a file is at most 256 KiB' }) });
+export type FileChunk = z.infer<typeof FileChunk>;
+
 export const ClientRequest = z.discriminatedUnion('method', [
 	z.object({ id, method: z.literal('listSessions') }),
 	z.object({
@@ -332,6 +387,9 @@ export const ClientRequest = z.discriminatedUnion('method', [
 		effort: Effort.optional(),
 		permissionMode: PermissionMode.optional(),
 	}),
+	// A hub before these answers bad_message, which the app reads as a hub too old to send files.
+	z.object({ id, method: z.literal('listFolder'), session: SessionRef, path: FolderPath }),
+	z.object({ id, method: z.literal('readFile'), file: FileRef, offset: z.number().int().min(0) }),
 ]);
 export type ClientRequest = z.infer<typeof ClientRequest>;
 
