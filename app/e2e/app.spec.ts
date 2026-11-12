@@ -1,9 +1,10 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { Effort, HubStatus, OtherSession, PermissionMode, SessionSummary } from '@orfoni/protocol';
 import { BRIDGE, Hub, newProjectDir, TOKEN } from './hub';
 import { OutsideSession } from './outside';
@@ -23,8 +24,7 @@ test.afterEach(async () => {
 	hub.close();
 });
 
-async function startReady(params: { prompt?: string; title?: string; effort?: Effort; permissionMode?: PermissionMode } = {}): Promise<SessionSummary & { dir: string }> {
-	const dir = newProjectDir();
+async function startReady(params: { prompt?: string; title?: string; effort?: Effort; permissionMode?: PermissionMode } = {}, dir = newProjectDir()): Promise<SessionSummary & { dir: string }> {
 	const { session, needsTrust } = await hub.start({ projectDir: dir, ...params });
 	if (needsTrust) await acceptTrustPrompt(session.id);
 	return { ...session, dir };
@@ -45,6 +45,17 @@ function claude(page: Page) {
 
 function shownState(page: Page, label: string) {
 	return page.getByRole('main').getByText(label, { exact: true });
+}
+
+// The browser build hands a file it opens to the browser as a download.
+async function download(page: Page, open: Locator): Promise<{ name: string; bytes: Buffer }> {
+	const [file] = await Promise.all([page.waitForEvent('download'), open.click()]);
+	return { name: file.suggestedFilename(), bytes: readFileSync(await file.path()) };
+}
+
+// Pictures of the views for a person to look over, kept with the run's other output.
+async function snap(page: Page, name: string): Promise<void> {
+	await page.screenshot({ path: test.info().outputPath(name) });
 }
 
 // Claude Code's own record of a session's task list, in the order it numbered the tasks.
@@ -708,5 +719,109 @@ test('a session at a plan limit reads Limit reached, and says when the limit res
 		await expect(page.locator(`[data-session="${session.id}"]`)).not.toContainText('continues');
 	} finally {
 		await hub.request('setPlanSettings', before.settings);
+	}
+});
+
+// Claude Code offers SendUserFile only while Remote Control is connected, so this folder turns it on, and the session lists on claude.ai while it runs.
+test('the files Claude sends show as one card with the caption and a thumbnail, and one opens as a download after it is gone from the folder', async ({ page }) => {
+	const tag = randomUUID().slice(0, 8);
+	const dir = newProjectDir();
+	writeFileSync(`${dir}/.claude/settings.local.json`, '{ "remoteControlAtStartup": true }\n');
+	const png = fileURLToPath(new URL('../src-tauri/icons/128x128.png', import.meta.url));
+	copyFileSync(png, join(dir, 'icon.png'));
+	const session = await startReady(
+		{
+			permissionMode: 'auto',
+			prompt: `Use the Write tool to create note.txt containing exactly: kept-${tag}. Then call the SendUserFile tool once, with files set to ["note.txt", "icon.png"], caption set to "Your note and the icon", and display set to "render". Then reply with exactly: sent-${tag}`,
+		},
+		dir,
+	);
+	await openSession(page, session);
+	const card = page.locator('[data-kind="sent"]').getByRole('article', { name: 'Claude sent you 2 files' });
+	await expect(card).toBeVisible({ timeout: REPLY_MS });
+	await expect(claude(page).last()).toContainText(`sent-${tag}`, { timeout: REPLY_MS });
+	await expect(card.getByText('Your note and the icon', { exact: true })).toBeVisible();
+	const original = readFileSync(join(dir, 'note.txt'));
+	expect(original.toString('utf8')).toContain(`kept-${tag}`);
+	const note = card.getByRole('button', { name: 'Open note.txt' });
+	await expect(note).toContainText(`${original.length} bytes`);
+	await expect(card.getByRole('button', { name: 'Open icon.png' })).toContainText(`${Math.round(statSync(png).size / 1024)} KB`);
+	const thumbnail = card.getByRole('img', { name: 'icon.png' });
+	await expect(thumbnail).toBeVisible();
+	expect(await thumbnail.evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight])).toEqual([128, 128]);
+
+	rmSync(join(dir, 'note.txt'));
+	expect(await download(page, note)).toEqual({ name: 'note.txt', bytes: original });
+	await expect(card.getByText('Downloaded note.txt.', { exact: true })).toBeVisible();
+	await card.scrollIntoViewIfNeeded();
+	await snap(page, 'desktop-card.png');
+
+	await page.setViewportSize({ width: 412, height: 915 });
+	await card.scrollIntoViewIfNeeded();
+	const box = await card.boundingBox();
+	expect(box?.x).toBeGreaterThanOrEqual(0);
+	expect((box?.x ?? 0) + (box?.width ?? Infinity)).toBeLessThanOrEqual(412);
+	expect(await page.evaluate(() => document.scrollingElement?.scrollWidth)).toBe(412);
+	await snap(page, 'phone-card.png');
+});
+
+test('the Files button opens the session folder beside the chat, a file there downloads, a folder opens and its path leads back, and the files close again', async ({ page }) => {
+	const dir = newProjectDir();
+	const readme = Buffer.from(`files check ${randomUUID()}\n`);
+	writeFileSync(join(dir, 'readme.txt'), readme);
+	mkdirSync(join(dir, 'docs'));
+	writeFileSync(join(dir, 'docs', 'inner.txt'), 'inside\n');
+	const session = await startReady({ title: 'files check' }, dir);
+	await openSession(page, session);
+	const button = page.getByRole('main').getByRole('button', { name: 'Files', exact: true });
+	await expect(button).toHaveAttribute('aria-pressed', 'false');
+	await button.click();
+	await expect(button).toHaveAttribute('aria-pressed', 'true');
+	const panel = page.getByRole('complementary', { name: 'Files' });
+	await expect(panel.getByRole('heading', { name: `Files in ${basename(dir)}` })).toBeVisible();
+	await expect(panel.getByRole('button', { name: 'Open the folder .claude' })).toBeVisible();
+	const file = panel.getByRole('button', { name: 'Open readme.txt' });
+	await expect(file).toContainText(`${readme.length} bytes`);
+	expect(await download(page, file)).toEqual({ name: 'readme.txt', bytes: readme });
+	await expect(panel.getByText('Downloaded readme.txt.', { exact: true })).toBeVisible();
+	await snap(page, 'desktop-files.png');
+
+	await panel.getByRole('button', { name: 'Open the folder docs' }).click();
+	const path = panel.getByRole('navigation', { name: 'Folder path' });
+	await expect(path.getByRole('button', { name: 'docs', exact: true })).toHaveAttribute('aria-current', 'location');
+	await expect(panel.getByRole('button', { name: 'Open inner.txt' })).toBeVisible();
+	await expect(file).toHaveCount(0);
+	await path.getByRole('button', { name: basename(dir), exact: true }).click();
+	await expect(file).toBeVisible();
+	await expect(panel.getByRole('button', { name: 'Open inner.txt' })).toHaveCount(0);
+
+	await panel.getByRole('button', { name: 'Close the files' }).click();
+	await expect(panel).toHaveCount(0);
+	await expect(button).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('on a phone, Files under More opens the session folder as a sheet over the chat, and going back closes it', async ({ browser }) => {
+	const dir = newProjectDir();
+	writeFileSync(join(dir, 'readme.txt'), 'on the phone\n');
+	const session = await startReady({ title: 'phone files check' }, dir);
+	const phone = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 412, height: 915 } });
+	try {
+		const page = await phone.newPage();
+		await page.goto(`http://127.0.0.1:5173${APP}`);
+		await page.locator(`[data-session="${session.id}"]`).tap();
+		const main = page.getByRole('main');
+		await main.getByRole('button', { name: 'More' }).tap();
+		await main.getByRole('button', { name: 'Files', exact: true }).tap();
+		const sheet = page.getByRole('dialog', { name: `Files in ${basename(dir)}` });
+		await expect(sheet.getByRole('button', { name: 'Open readme.txt' })).toBeVisible();
+		const box = await sheet.boundingBox();
+		expect(box?.x).toBeGreaterThanOrEqual(0);
+		expect((box?.x ?? 0) + (box?.width ?? Infinity)).toBeLessThanOrEqual(412);
+		await snap(page, 'phone-files.png');
+		await page.goBack();
+		await expect(sheet).toHaveCount(0);
+		await expect(main.getByRole('heading', { level: 1 })).toHaveText('phone files check');
+	} finally {
+		await phone.close();
 	}
 });
