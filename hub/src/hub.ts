@@ -234,11 +234,11 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push, limit: model.limit && { resetsAt: model.limit.resetsAt, continuesAt: model.limit.continueAt } };
+	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push, limit: model.limit && { resetsAt: model.limit.resetsAt, continuesAt: model.limit.continueAt }, apiError: model.apiError && { continuesAt: model.apiError.continueAt } };
 }
 
-const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push', 'limit'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt', 'limit'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -257,11 +257,15 @@ function expectsTmux(claude: ClaudeProcess, listedAt: number): boolean {
 	return claude.kind === 'running' || (claude.kind === 'launching' && claude.createdAt !== null && claude.createdAt < listedAt);
 }
 
+// What a failed turn left that the hub continues after.
+type Halt = Pick<SessionModel, 'limit' | 'apiError'>;
+const NO_HALT: Halt = { limit: null, apiError: null };
+
 interface Restored {
 	state: SessionStateKind;
 	lastTurnEndedAt: number | null;
 	lastActiveAt: number;
-	limit: SessionModel['limit'];
+	halt: Halt;
 }
 
 // A state file from before lastActiveAt has only the end of the last turn you started.
@@ -270,19 +274,20 @@ function storedActivity({ lastActiveAt, lastTurnEndedAt, createdAt }: StoredSess
 }
 
 async function stateAfterRestart(options: HubOptions, stored: StoredSession): Promise<Restored> {
-	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt, limit } = stored;
+	const { claudeSessionId, projectDir, lastTurnEndedAt, lastViewedAt, limit, apiError } = stored;
 	try {
 		const history = await options.readHistory(claudeSessionId, projectDir);
 		// What happened while the hub was down reached nobody through the hooks, so the transcript is the only record of it.
 		const lastActiveAt = Math.max(storedActivity(stored), lastEntryAt(history) ?? 0);
-		// The turn that ran into a limit is still the transcript's last, so the session stands where it left it and the planned continue still holds.
-		if (limit !== null && (lastEntryAt(history) ?? 0) <= limit.at) return { state: 'failed', lastTurnEndedAt, lastActiveAt, limit };
-		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt, lastActiveAt, limit: null };
+		// The turn that ran into a limit or an API error is still the transcript's last, so the session stands where it left it and the planned continue still holds.
+		const failedAt = (limit ?? apiError)?.at;
+		if (failedAt !== undefined && (lastEntryAt(history) ?? 0) <= failedAt) return { state: 'failed', lastTurnEndedAt, lastActiveAt, halt: { limit, apiError } };
+		if (!turnEnded(history)) return { state: 'working', lastTurnEndedAt, lastActiveAt, halt: NO_HALT };
 		const endedAt = Math.max(lastTurnEndedAt ?? 0, lastEntryAt(history) ?? 0) || null;
-		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt, lastActiveAt, limit: null };
+		return { state: unread({ lastTurnEndedAt: endedAt, lastViewedAt }) ? 'answered' : 'idle', lastTurnEndedAt: endedAt, lastActiveAt, halt: NO_HALT };
 	} catch (error) {
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
-		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored), limit: null };
+		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored), halt: NO_HALT };
 	}
 }
 
@@ -352,7 +357,7 @@ export class Hub {
 	private readonly activityCheck = setInterval(() => void this.checkActivity(), ACTIVITY_CHECK_INTERVAL_MS);
 	private checkingActivity = false;
 	private readonly registryCheck = setInterval(() => void this.refreshOthers(), REGISTRY_CHECK_INTERVAL_MS);
-	private readonly limitCheck = setInterval(() => void this.continueAfterLimits(), LIMIT_CHECK_INTERVAL_MS);
+	private readonly limitCheck = setInterval(() => void this.sendDueContinues(), LIMIT_CHECK_INTERVAL_MS);
 	private continuing = false;
 	private readonly windowCheck = setInterval(() => void this.checkWindowStart(), WINDOW_CHECK_INTERVAL_MS);
 	private startingWindow = false;
@@ -396,14 +401,14 @@ export class Hub {
 		const hub = new Hub(options, state.summaries, state.plan);
 		const restored = await Promise.all(
 			state.sessions.map((stored): Promise<Restored> | Restored =>
-				running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline', lastTurnEndedAt: stored.lastTurnEndedAt, lastActiveAt: storedActivity(stored), limit: null },
+				running.has(tmuxName(stored.id)) ? stateAfterRestart(options, stored) : { state: 'offline', lastTurnEndedAt: stored.lastTurnEndedAt, lastActiveAt: storedActivity(stored), halt: NO_HALT },
 			),
 		);
 		const taskFiles = await Promise.all(state.sessions.map((stored) => readTaskFiles(options.claudeTasksDir, stored.claudeSessionId)));
 		const now = Date.now();
 		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
-			const { state: kind, lastTurnEndedAt, lastActiveAt, limit } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt, limit: null };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind, limit };
+			const { state: kind, lastTurnEndedAt, lastActiveAt, halt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt, halt: NO_HALT };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind, ...halt };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
@@ -1213,19 +1218,19 @@ export class Hub {
 		});
 	}
 
-	// One session after the other, so the sessions a limit stopped together do not all start again in the same second.
-	private async continueAfterLimits(): Promise<void> {
+	// One session after the other, so the sessions a limit or an outage stopped together do not all start again in the same second.
+	private async sendDueContinues(): Promise<void> {
 		if (this.continuing) return;
 		this.continuing = true;
 		try {
 			for (const session of [...this.sessions.values()]) {
-				const due = session.model.limit?.continueAt ?? null;
+				const due = session.model.limit?.continueAt ?? session.model.apiError?.continueAt ?? null;
 				if (due === null || Date.now() < due || this.sessions.get(session.id) !== session) continue;
 				this.apply(session, { kind: 'continuing', at: Date.now() });
 				try {
 					await this.send(session, CONTINUE_TEXT);
 				} catch (error) {
-					this.options.log(`orfoni-hub: sending continue to session ${session.id} after its limit reset failed: ${(error as Error).message}`);
+					this.options.log(`orfoni-hub: sending continue to session ${session.id} failed: ${(error as Error).message}`);
 					this.apply(session, { kind: 'continue_dropped', note: `orfoni could not send continue: ${(error as Error).message}`, at: Date.now() });
 				}
 			}
@@ -1339,6 +1344,7 @@ export class Hub {
 						lastViewedAt: model.lastViewedAt,
 						lastActiveAt: model.lastActiveAt,
 						limit: model.limit,
+						apiError: model.apiError,
 					})),
 					summaries: this.summarizer.budget,
 					plan: { ...this.planSettings, lastWindowStart: this.lastWindowStart },

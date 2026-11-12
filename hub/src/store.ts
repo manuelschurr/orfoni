@@ -23,8 +23,11 @@ const StoredSessionV2 = StoredSessionV1.extend({
 // The plan limit a session's last turn ran into, so that a continue planned before a restart is still sent after it.
 const StoredLimit = z.object({ at: z.number(), resetsAt: z.number().nullable(), continueAt: z.number().nullable() });
 
-// A file from before lastActiveAt has none, and the session then counts as active when its last turn ended. One from before the limit has no session that waits on one.
-const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null), limit: StoredLimit.nullable().default(null) });
+// The API error a session's last turn ended on, for the same reason.
+const StoredApiError = z.object({ at: z.number(), continueAt: z.number().nullable() });
+
+// A file from before lastActiveAt has none, and the session then counts as active when its last turn ended. One from before the limit or the API error has no session that waits on one.
+const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null), limit: StoredLimit.nullable().default(null), apiError: StoredApiError.nullable().default(null) });
 export type StoredSession = z.infer<typeof StoredSession>;
 
 // What the hub does about the plan's limits, and how its last start of a window went, with when it tries again on the same day. Each setting has a default of its own, so a file from before a setting takes that setting's default.
@@ -51,6 +54,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 			taskList: Object.entries(tasks).map(([id, done]) => ({ id, subject: unnamedTask(id), status: done ? 'completed' : 'pending', activeForm: null })),
 			lastActiveAt: null,
 			limit: null,
+			apiError: null,
 		})),
 		summaries,
 		plan: defaultPlan(),
@@ -61,7 +65,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 const HubStateV1 = z.object({ version: z.literal(1), sessions: z.array(StoredSessionV1) }).transform(
 	({ sessions }): HubState => ({
 		version: 3,
-		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null })),
+		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null })),
 		summaries: null,
 		plan: defaultPlan(),
 	}),

@@ -27,6 +27,7 @@ const state: HubState = {
 			lastViewedAt: 1450,
 			lastActiveAt: 1420,
 			limit: { at: 1420, resetsAt: 9000, continueAt: 9060 },
+			apiError: null,
 		},
 		{
 			id: SessionId.parse('s-2'),
@@ -40,6 +41,7 @@ const state: HubState = {
 			lastViewedAt: null,
 			lastActiveAt: null,
 			limit: null,
+			apiError: { at: 2100, continueAt: 2130 },
 		},
 	],
 	summaries: { day: '2026-10-27', requests: 12, spentUsd: 0.0042 },
@@ -113,7 +115,7 @@ describe('store', () => {
 		const loaded = await loadState(path, (line) => logged.push(line));
 		expect(loaded).toEqual({
 			version: 3,
-			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null })),
+			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null })),
 			summaries: null,
 			plan,
 		});
@@ -140,8 +142,9 @@ describe('store', () => {
 					],
 					lastActiveAt: null,
 					limit: null,
+					apiError: null,
 				},
-				{ ...second, taskList: [], lastActiveAt: null, limit: null },
+				{ ...second, taskList: [], lastActiveAt: null, limit: null, apiError: null },
 			],
 			summaries: beforeTaskLists.summaries,
 			plan,
@@ -161,12 +164,20 @@ describe('store', () => {
 
 	test('a version 3 file from before the plan limits loads with no session waiting on a limit and each setting at its default, without a migration', async () => {
 		const path = join(scratch(), 'state.json');
-		const { plan: _, ...before } = { ...state, sessions: state.sessions.map(({ limit: _, ...session }) => session) };
+		const { plan: _, ...before } = { ...state, sessions: state.sessions.map(({ limit: _, apiError: __, ...session }) => session) };
 		writeFileSync(path, JSON.stringify(before));
 		const logged: string[] = [];
-		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, limit: null })), plan });
+		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, limit: null, apiError: null })), plan });
 		writeFileSync(path, JSON.stringify({ ...before, plan: { continueAfterLimit: false } }));
 		expect((await loadState(path, (line) => logged.push(line))).plan).toEqual({ ...plan, continueAfterLimit: false });
+		expect(logged).toEqual([]);
+	});
+
+	test('a version 3 file from before API errors were kept loads with no session waiting on one, without a migration', async () => {
+		const path = join(scratch(), 'state.json');
+		writeFileSync(path, JSON.stringify({ ...state, sessions: state.sessions.map(({ apiError: _, ...session }) => session) }));
+		const logged: string[] = [];
+		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, apiError: null })) });
 		expect(logged).toEqual([]);
 	});
 

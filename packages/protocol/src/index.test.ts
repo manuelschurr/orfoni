@@ -194,7 +194,7 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
@@ -213,6 +213,7 @@ describe('milestone 3 fields', () => {
 			turnFrom: 'task',
 			push: { message: 'Flashing done, node 5 failed.', at: 3 },
 			limit: { resetsAt: 1794268800000, continuesAt: null },
+			apiError: { continuesAt: 1794268830000 },
 		};
 		expect(parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session }))).toEqual({ type: 'sessionUpdated', session });
 	});

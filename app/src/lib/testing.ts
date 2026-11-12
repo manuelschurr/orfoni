@@ -39,6 +39,7 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 		turnFrom: null,
 		push: null,
 		limit: null,
+		apiError: null,
 		...changes,
 	};
 }

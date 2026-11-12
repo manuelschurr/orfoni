@@ -367,6 +367,45 @@ describe('reduce', () => {
 		});
 	});
 
+	describe('an API error', () => {
+		const LOST = 'API Error: Connection lost mid-response. The response above may be incomplete.';
+		const lost = (at: number) => hook('stop_failure', { error: 'server_error', lastAssistantMessage: LOST, transcriptPath: null }, at);
+		const continuing = (at: number): SessionInput => ({ kind: 'continuing', at });
+		const sent = (at: number) => hook('prompt', { text: 'continue' }, at);
+		const notices = (model: SessionModel) => model.chat.flatMap((item) => (item.kind === 'notice' ? [item.text] : []));
+
+		test('a turn that ends on an error a continue gets past plans a continue half a minute on, and one on any other error plans none', () => {
+			expect(run(started, prompted, lost(3))).toMatchObject({ state: 'failed', limit: null, apiError: { at: 3, continueAt: 30_003 } });
+			expect(run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 3)).apiError).toEqual({ at: 3, continueAt: 30_003 });
+			for (const error of ['rate_limit', 'authentication_failed', 'billing_error', 'invalid_request', 'max_output_tokens', 'unknown']) {
+				expect(run(started, prompted, hook('stop_failure', { error, lastAssistantMessage: null, transcriptPath: null }, 3)).apiError).toBeNull();
+			}
+			expect(notices(run(started, prompted, lost(3)))).toEqual([LOST]);
+		});
+
+		test('the API error goes when the session moves on, and a limit after it takes its place', () => {
+			const moves: SessionInput[] = [hook('prompt', { text: 'go on' }, 5), { kind: 'interrupted', at: 5 }, hook('session_start', { source: 'clear' }, 5, second), { kind: 'pane_exited', at: 5 }];
+			for (const move of moves) expect(run(started, prompted, lost(3), move).apiError).toBeNull();
+			expect(run(started, prompted, lost(3), { kind: 'view_changed', viewing: true, at: 5 }).apiError).toEqual({ at: 3, continueAt: 30_003 });
+			const limited = run(started, prompted, lost(3), continuing(30_003), sent(30_004), hook('stop_failure', { error: 'rate_limit', lastAssistantMessage: null, transcriptPath: null }, 30_005));
+			expect(limited).toMatchObject({ apiError: null, limit: { at: 30_005 }, continues: 1 });
+		});
+
+		test('the hub sending continue says so in the chat, and each continue that fails again waits longer, until the third, after which the hub sends no more', () => {
+			const first = run(started, prompted, lost(3), continuing(30_003));
+			expect(first).toMatchObject({ state: 'failed', apiError: { at: 3, continueAt: null }, continues: 1, continuing: true });
+			expect(notices(first).at(-1)).toBe('orfoni sends continue after the API error.');
+			const second = run(started, prompted, lost(3), continuing(30_003), sent(30_004), lost(40_000));
+			expect(second.apiError).toEqual({ at: 40_000, continueAt: 160_000 });
+			const third = run(started, prompted, lost(3), continuing(30_003), sent(30_004), lost(40_000), continuing(160_000), sent(160_001), lost(170_000));
+			expect(third.apiError).toEqual({ at: 170_000, continueAt: 770_000 });
+			const gaveUp = run(started, prompted, lost(3), continuing(30_003), sent(30_004), lost(40_000), continuing(160_000), sent(160_001), lost(170_000), continuing(770_000), sent(770_001), lost(780_000));
+			expect(gaveUp).toMatchObject({ state: 'failed', apiError: { at: 780_000, continueAt: null }, continues: 3 });
+			expect(notices(gaveUp).at(-1)).toBe('The API failed on 3 continues in a row, so orfoni sends no more. A message from you starts it again.');
+			expect(run(started, prompted, lost(3), continuing(30_003), sent(30_004), hook('tool_start', { toolUseId: 't1', name: 'Bash', input: {} }, 30_010), lost(40_000)).apiError).toEqual({ at: 40_000, continueAt: 70_000 });
+		});
+	});
+
 	test('a prompt after a failure starts working again', () => {
 		const model = run(started, prompted, hook('stop_failure', { error: 'overloaded', lastAssistantMessage: null, transcriptPath: null }, 3), hook('prompt', { text: 'retry' }, 4));
 		expect(model.state).toBe('working');

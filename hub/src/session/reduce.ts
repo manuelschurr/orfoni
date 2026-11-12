@@ -6,6 +6,7 @@ import type { HookEvent } from '../hooks/events.js';
 import type { PaneMemory } from '../memory.js';
 import type { StatusLine } from '../status-line.js';
 import type { Summary } from '../summaries.js';
+import { continueAfterError, passes } from '../limit.js';
 import { peerMessages } from '../peer-message.js';
 import { taskNotice } from '../task-notification.js';
 import { sameTaskList, trackTasks, type PendingTaskCall } from './tasks.js';
@@ -36,7 +37,9 @@ export interface SessionModel {
 	lastActiveAt: number;
 	// The plan limit the last turn ran into, for as long as the session stands where that left it: when the turn failed, when the limit resets, once the hub has read that from the transcript, and when the hub sends continue, if it does.
 	limit: { at: number; resetsAt: number | null; continueAt: number | null } | null;
-	// The continues the hub sent after a limit without Claude getting anywhere since.
+	// The API error the last turn ended on, when a continue gets past it, for as long as the session stands where that left it: when the turn failed, and when the hub sends continue, if it does.
+	apiError: { at: number; continueAt: number | null } | null;
+	// The continues the hub sent after a limit or an API error without Claude getting anywhere since.
 	continues: number;
 	// The hub is sending continue, so the next message is its own and not one from you.
 	continuing: boolean;
@@ -69,7 +72,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: at, limit: null, continues: 0, continuing: false };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: at, limit: null, apiError: null, continues: 0, continuing: false };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -124,6 +127,15 @@ function noticed(model: SessionModel, text: string, at: number): SessionModel {
 	return { ...model, chat: [...model.chat, { kind: 'notice', id: `notice-${randomUUID()}`, text, at }] };
 }
 
+// Claude Code reports a plan limit as a rate limit, and the hub then reads from the transcript when it resets. An API error that passes needs nothing read, so its continue is planned here.
+function failedOn(model: SessionModel, error: string, at: number): SessionModel {
+	const limit = error === 'rate_limit' ? { at, resetsAt: null, continueAt: null } : null;
+	if (!passes(error)) return { ...model, limit, apiError: null };
+	const continueAt = continueAfterError(model.continues, at);
+	const planned = { ...model, limit, apiError: { at, continueAt } };
+	return continueAt === null ? noticed(planned, `The API failed on ${model.continues} continues in a row, so orfoni sends no more. A message from you starts it again.`, at) : planned;
+}
+
 // Only a reply from the model calls a tool or ends a turn, so either shows that a continue got Claude somewhere.
 function gotSomewhere(model: SessionModel): SessionModel {
 	return model.continues === 0 ? model : { ...model, continues: 0 };
@@ -174,8 +186,8 @@ function promptItems(text: string, at: number): ChatItem[] {
 export function reduce(model: SessionModel, input: SessionInput): SessionModel {
 	const stepped = step(model, input);
 	const live = liveActivity(input.kind === 'hook' ? withTasks(stepped, input.event) : stepped);
-	// A limit stands only while the session stands where the failed turn left it.
-	const next = live.limit !== null && live.state !== 'failed' ? { ...live, limit: null } : live;
+	// A limit or an API error stands only while the session stands where the failed turn left it.
+	const next = (live.limit !== null || live.apiError !== null) && live.state !== 'failed' ? { ...live, limit: null, apiError: null } : live;
 	if (next.chat === model.chat) return next;
 	const chatStartedAt = next.chat.length === 0 ? null : model.chat.length === 0 ? input.at : model.chatStartedAt;
 	return { ...next, chatStartedAt };
@@ -252,9 +264,8 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					};
 				case 'stop':
 					return endTurn(gotSomewhere(active(model, at)), at);
-				// Claude Code reports a plan limit as a rate limit, and the hub then reads from the transcript when it resets.
 				case 'stop_failure':
-					return enter({ ...noticed(active(model, at), event.lastAssistantMessage ?? event.error, at), limit: event.error === 'rate_limit' ? { at, resetsAt: null, continueAt: null } : null }, 'failed', at);
+					return enter(failedOn(noticed(active(model, at), event.lastAssistantMessage ?? event.error, at), event.error, at), 'failed', at);
 				case 'session_end':
 					return endsSession(event) ? goOffline(model, at) : model;
 				case 'notification':
@@ -303,9 +314,12 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			const planned = { ...model, limit: { ...model.limit, resetsAt: input.resetsAt, continueAt: input.continueAt } };
 			return input.note === undefined ? planned : noticed(planned, input.note, at);
 		}
-		case 'continuing':
-			if (model.limit === null) return model;
-			return noticed({ ...model, limit: { ...model.limit, continueAt: null }, continues: model.continues + 1, continuing: true }, 'The limit has reset, so orfoni sends continue.', at);
+		case 'continuing': {
+			const counted = { ...model, continues: model.continues + 1, continuing: true };
+			if (model.limit !== null) return noticed({ ...counted, limit: { ...model.limit, continueAt: null } }, 'The limit has reset, so orfoni sends continue.', at);
+			if (model.apiError !== null) return noticed({ ...counted, apiError: { ...model.apiError, continueAt: null } }, 'orfoni sends continue after the API error.', at);
+			return model;
+		}
 		case 'continue_dropped':
 			return noticed({ ...model, continuing: false }, input.note, at);
 	}

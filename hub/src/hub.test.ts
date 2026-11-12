@@ -330,7 +330,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null, limit: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null, limit: null, apiError: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1926,7 +1926,7 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null, limit: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null, limit: null, apiError: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
@@ -2569,11 +2569,11 @@ describe('plan limits', () => {
 		expect(continues()).toEqual([[`orfoni-${first.id}`, 'continue'], [`orfoni-${second.id}`, 'continue']]);
 	});
 
-	test('a turn that failed on another error, or on a rate limit whose transcript names no reset, gets no continue', async () => {
+	test('a turn that failed on an error no continue gets past, or on a rate limit whose transcript names no reset, gets no continue', async () => {
 		const client = await startHub();
-		const overloaded = await ready(client);
-		await hub.hook(overloaded.id, body('UserPromptSubmit', overloaded.claude, { prompt: 'hi' }));
-		await hub.hook(overloaded.id, body('StopFailure-docs-example', overloaded.claude, { error: 'overloaded', transcript_path: limitTranscript(overloaded.claude) }));
+		const refused = await ready(client);
+		await hub.hook(refused.id, body('UserPromptSubmit', refused.claude, { prompt: 'hi' }));
+		await hub.hook(refused.id, body('StopFailure-docs-example', refused.claude, { error: 'invalid_request', transcript_path: limitTranscript(refused.claude) }));
 		const unnamed = await ready(client);
 		await hitLimit(client, unnamed, null);
 		const missing = await ready(client);
@@ -2584,7 +2584,7 @@ describe('plan limits', () => {
 		await hub.hook(foreign.id, body('UserPromptSubmit', foreign.claude, { prompt: 'hi' }));
 		await hub.hook(foreign.id, body('StopFailure-docs-example', foreign.claude, { transcript_path: limitTranscript(unnamed.claude) }));
 		await step(3000);
-		expect(client.session(overloaded.id)).toMatchObject({ state: 'failed', limit: null });
+		expect(client.session(refused.id)).toMatchObject({ state: 'failed', limit: null, apiError: null });
 		for (const { id } of [unnamed, missing, foreign]) expect(client.session(id)).toMatchObject({ state: 'failed', limit: { resetsAt: null, continuesAt: null } });
 		await step(RESET + 600_000 - Date.now());
 		expect(continues()).toEqual([]);
@@ -2675,7 +2675,105 @@ describe('plan limits', () => {
 		expect(continues()).toHaveLength(1);
 		expect(notices(client, session.id).at(-1)).toBe('orfoni could not send continue: Claude Code did not confirm the message within 5 s');
 		expect(client.session(session.id)).toMatchObject({ state: 'failed', limit: { resetsAt: RESET, continuesAt: null } });
-		expect(logs).toEqual([`orfoni-hub: sending continue to session ${session.id} after its limit reset failed: Claude Code did not confirm the message within 5 s`]);
+		expect(logs).toEqual([`orfoni-hub: sending continue to session ${session.id} failed: Claude Code did not confirm the message within 5 s`]);
+	});
+});
+
+describe('API errors', () => {
+	const LOST = 'API Error: Connection lost mid-response. The response above may be incomplete.';
+	const continues = () => fake.of('submit').filter(([, text]) => text === 'continue');
+	const notices = (client: TestClient, id: SessionId) => client.chat(id).flatMap((item) => (item.kind === 'notice' ? [item.text] : []));
+	const failedNotices = (client: TestClient) => client.messages.filter((message) => message.type === 'notice' && message.kind === 'failed');
+
+	async function fail(id: SessionId, claude: ClaudeSessionId, prompt = 'hi', error = 'server_error'): Promise<void> {
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt }));
+		await hub.hook(id, body('StopFailure-docs-example', claude, { error, error_details: 'ECONNRESET', last_assistant_message: LOST }));
+	}
+
+	// The hub looks every five seconds for a continue that is due, so the clock stops at the moment it is sent.
+	async function untilContinues(client: TestClient, id: SessionId, sent: number): Promise<void> {
+		const due = client.session(id)?.apiError?.continuesAt;
+		if (due === null || due === undefined) throw new Error('no continue is planned');
+		if (due > Date.now()) await vi.advanceTimersByTimeAsync(due - Date.now());
+		await stepUntil(() => continues().length === sent, 10_000);
+	}
+
+	test('a turn that ended on a lost connection gets continue half a minute later, with no notice that it failed, and works again', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await fail(id, claude);
+		const failedAt = Date.now();
+		expect(client.session(id)).toMatchObject({ state: 'failed', limit: null, apiError: { continuesAt: failedAt + 30_000 } });
+		expect(notices(client, id)).toEqual([LOST]);
+		expect(failedNotices(client)).toEqual([]);
+
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(continues()).toEqual([]);
+		await untilContinues(client, id, 1);
+		expect(Date.now()).toBeLessThan(failedAt + 36_000);
+		expect(continues()).toEqual([[`orfoni-${id}`, 'continue']]);
+		expect(notices(client, id)).toEqual([LOST, 'orfoni sends continue after the API error.']);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'continue' }));
+		expect(client.session(id)).toMatchObject({ state: 'working', apiError: null });
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'user', text: 'continue' });
+
+		await vi.advanceTimersByTimeAsync(1_200_000);
+		expect(continues()).toHaveLength(1);
+		expect(logs).toEqual([]);
+	});
+
+	test('an overloaded API gets continue too, and an error no continue gets past gets none and a notice as before', async () => {
+		const client = await startHub();
+		const overloaded = await ready(client);
+		await fail(overloaded.id, overloaded.claude, 'hi', 'overloaded');
+		const others = await Promise.all(['authentication_failed', 'billing_error', 'invalid_request', 'unknown'].map(async (error) => {
+			const session = await ready(client);
+			await fail(session.id, session.claude, 'hi', error);
+			return session;
+		}));
+		for (const { id } of others) expect(client.session(id)).toMatchObject({ state: 'failed', apiError: null });
+		expect(failedNotices(client)).toHaveLength(others.length);
+		await untilContinues(client, overloaded.id, 1);
+		await vi.advanceTimersByTimeAsync(1_200_000);
+		expect(continues()).toEqual([[`orfoni-${overloaded.id}`, 'continue']]);
+	});
+
+	test('a continue that fails again is sent again two minutes later, then ten, and after the third the hub says so, tells the apps, and sends no more until you write', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await fail(id, claude);
+		await untilContinues(client, id, 1);
+		await fail(id, claude, 'continue');
+		expect(client.session(id)?.apiError?.continuesAt).toBe(Date.now() + 120_000);
+		await untilContinues(client, id, 2);
+		await fail(id, claude, 'continue');
+		expect(client.session(id)?.apiError?.continuesAt).toBe(Date.now() + 600_000);
+		await untilContinues(client, id, 3);
+		expect(failedNotices(client)).toEqual([]);
+		await fail(id, claude, 'continue');
+		expect(client.session(id)).toMatchObject({ state: 'failed', apiError: { continuesAt: null } });
+		expect(notices(client, id).at(-1)).toBe('The API failed on 3 continues in a row, so orfoni sends no more. A message from you starts it again.');
+		expect(failedNotices(client)).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(3_600_000);
+		expect(continues()).toHaveLength(3);
+
+		await fail(id, claude, 'go on');
+		expect(client.session(id)?.apiError?.continuesAt).toBe(Date.now() + 30_000);
+	});
+
+	test('a message from you, or stopping the session, before the continue leaves nothing to continue', async () => {
+		const client = await startHub();
+		const messaged = await ready(client);
+		const stopped = await ready(client);
+		await fail(messaged.id, messaged.claude);
+		await fail(stopped.id, stopped.claude);
+		await hub.hook(messaged.id, body('UserPromptSubmit', messaged.claude, { prompt: 'never mind, do this instead' }));
+		await hub.hook(messaged.id, body('Stop', messaged.claude));
+		await client.ok('stopSession', { sessionId: stopped.id });
+		expect(client.session(messaged.id)?.apiError).toBeNull();
+		expect(client.session(stopped.id)).toMatchObject({ state: 'offline', apiError: null });
+		await vi.advanceTimersByTimeAsync(1_200_000);
+		expect(continues()).toEqual([]);
 	});
 });
 
@@ -2800,8 +2898,8 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null },
+			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
+			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
 		]);
 	});
 
@@ -2947,6 +3045,28 @@ describe('read state and the state file', () => {
 		expect(sessions[moved.id]).toMatchObject({ state: 'answered', limit: null });
 		expect(await after.ok('hubStatus', {})).toMatchObject({ automation: { settings: { continueAfterLimit: true } } });
 		await vi.advanceTimersByTimeAsync(reset + 65_000 - Date.now());
+		expect(fake.of('submit')).toEqual([[`orfoni-${waiting.id}`, 'continue']]);
+	});
+
+	test('a session that waits on a continue after an API error still gets it after a restart, unless it moved on while the hub was down', async () => {
+		const client = await startHub();
+		const waiting = await ready(client);
+		const moved = await ready(client);
+		const stamped = (type: SessionMessage['type'], content: unknown, at: number, stopReason?: string) => ({ ...entry(type, content, stopReason), timestamp: new Date(at).toISOString() });
+		for (const { id, claude } of [waiting, moved]) {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+			await hub.hook(id, body('StopFailure-docs-example', claude, { error: 'server_error', last_assistant_message: 'API Error: Connection lost mid-response.' }));
+		}
+		await saved((state) => state.sessions.every((session) => session.apiError !== null));
+		const failed = [stamped('user', 'hi', Date.now() - 2000), stamped('assistant', [{ type: 'text', text: 'API Error: Connection lost mid-response.' }], Date.now() - 1000, 'stop_sequence')];
+		transcripts.set(waiting.claude, failed);
+		transcripts.set(moved.claude, [...failed, stamped('user', 'Try again', Date.now() + 10_000), stamped('assistant', [{ type: 'text', text: 'done' }], Date.now() + 20_000, 'end_turn')]);
+
+		const after = await restart([waiting, moved].map(({ id }) => `orfoni-${id}`));
+		const sessions = Object.fromEntries(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => [session.id, session]));
+		expect(sessions[waiting.id]).toMatchObject({ state: 'failed', apiError: { continuesAt: expect.any(Number) } });
+		expect(sessions[moved.id]).toMatchObject({ state: 'answered', apiError: null });
+		await vi.advanceTimersByTimeAsync(10_000);
 		expect(fake.of('submit')).toEqual([[`orfoni-${waiting.id}`, 'continue']]);
 	});
 

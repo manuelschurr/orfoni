@@ -69,3 +69,18 @@ export function continueAt({ enabled, resetsAt, continues, now }: { enabled: boo
 	if (!enabled || resetsAt === null || continues >= MAX_CONTINUES) return null;
 	return Math.max(resetsAt + RESET_MARGIN_MS, continues > 0 ? now + RETRY_MS : 0);
 }
+
+// The errors Claude Code ends a turn on when the API failed and not the request, such as a connection lost mid-response, so the same request goes through a moment later. Claude Code has already retried a request the API refused, so the hub waits longer after each continue that failed again.
+const PASSING_ERRORS = new Set(['server_error', 'overloaded']);
+// One wait for each of the MAX_CONTINUES continues, and the first leaves you time to stop the session.
+const ERROR_WAITS_MS: readonly number[] = [30_000, 2 * 60_000, 10 * 60_000];
+
+export function passes(error: string): boolean {
+	return PASSING_ERRORS.has(error);
+}
+
+// When the hub sends continue to a session whose turn ended on an API error that passes, or null once the continues before got Claude nowhere.
+export function continueAfterError(continues: number, failedAt: number): number | null {
+	const wait = ERROR_WAITS_MS[continues];
+	return wait === undefined ? null : failedAt + wait;
+}

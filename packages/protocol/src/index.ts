@@ -50,6 +50,8 @@ export const SessionSummary = z.object({
 	push: z.object({ message: z.string(), at: z.number() }).nullable().default(null),
 	// The plan limit the session's last turn ran into, while it stands where that left it: when the limit resets, and when the hub sends continue. Each is null when the hub does not know it or does not plan to.
 	limit: z.object({ resetsAt: z.number().nullable(), continuesAt: z.number().nullable() }).nullable().default(null),
+	// The API error the session's last turn ended on, such as a connection lost mid-response, while it stands where that left it, and when the hub sends continue, null once it sends no more. Only errors a continue gets past count, and an older hub reports none.
+	apiError: z.object({ continuesAt: z.number().nullable() }).nullable().default(null),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 

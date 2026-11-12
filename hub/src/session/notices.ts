@@ -15,8 +15,9 @@ function stateNews(before: SessionModel, after: SessionModel): Exclude<NoticeKin
 			return 'approval';
 		case 'needs_answer':
 			return 'question';
+		// A failure that orfoni sends continue after needs nothing from you until orfoni gives up.
 		case 'failed':
-			return 'failed';
+			return (after.apiError?.continueAt ?? null) === null ? 'failed' : null;
 		// Claude Code's own signal that you should hear about a turn a background task started is a push, so its end is not news by itself.
 		case 'idle':
 		case 'answered':
