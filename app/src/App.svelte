@@ -51,7 +51,6 @@
 	let lowMemory = $state<{ id: SessionId; memory: HubStatus['memory'] }[]>([]);
 	let terminals = $state<OpenTerminal[]>([]);
 	let shownTerminal = $state<string | null>(null);
-	let composer: Composer | undefined = $state();
 	const panels: Record<string, TerminalPanel> = $state({});
 	const session = $derived(client?.selected ? client.sessions.get(client.selected) : undefined);
 	const trustHint = $derived(session !== undefined && untrusted.includes(session.id) && (client?.chats.get(session.id)?.length ?? 0) === 0);
@@ -198,15 +197,9 @@
 	function shell(current: SessionSummary, target: string): void {
 		openTerminal(target, `Shell ${target.split('-sh').pop()} in ${folderName(current.projectDir)}`);
 	}
-
-	function switchPane(event: KeyboardEvent): void {
-		if (event.key !== 'F6' || !shownTerminal) return;
-		event.preventDefault();
-		panels[shownTerminal]?.focus();
-	}
 </script>
 
-<svelte:window onkeydown={switchPane} onpopstate={popped} />
+<svelte:window onpopstate={popped} />
 
 {#snippet files(hub: HubClient, where: SessionRef, folder: string)}
 	{#if narrow.current}
@@ -263,7 +256,7 @@
 									{/if}
 								{/snippet}
 							</ChatView>
-							<Composer bind:this={composer} {client} sessionId={session.id} touch={touch.current} />
+							<Composer {client} sessionId={session.id} touch={touch.current} />
 						</div>
 						{#if session.taskList?.length && narrow.current}
 							<TaskSheet tasks={session.taskList} open={overlay === 'tasks'} onclose={() => (front = null)} />
@@ -311,11 +304,10 @@
 							</button>
 						</div>
 					{/each}
-					{#if !narrow.current}<span class="hint">F6 switches between the terminal and the message box</span>{/if}
 				</div>
 				{#each terminals as terminal (terminal.target)}
 					<div class="panel" role="tabpanel" hidden={shownTerminal !== terminal.target}>
-						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} touch={touch.current} onleave={() => composer?.focus()} />
+						<TerminalPanel bind:this={panels[terminal.target]} transport={terminalTransport} target={terminal.target} label={terminal.label} touch={touch.current} />
 					</div>
 				{/each}
 			</aside>
@@ -505,14 +497,6 @@
 		stroke: currentColor;
 		stroke-width: 1.8;
 		stroke-linecap: round;
-	}
-
-	.hint {
-		align-self: center;
-		margin-left: auto;
-		padding: 0 0.5rem;
-		color: #85827a;
-		font-size: 0.75rem;
 	}
 
 	.panel {

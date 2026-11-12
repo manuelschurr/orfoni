@@ -54,8 +54,7 @@
 		target,
 		label = target,
 		touch = false,
-		onleave,
-	}: { transport: TerminalTransport; target: string; label?: string; touch?: boolean; onleave?: () => void } = $props();
+	}: { transport: TerminalTransport; target: string; label?: string; touch?: boolean } = $props();
 	let container: HTMLDivElement;
 	let phase = $state<'opening' | 'open' | 'closed' | 'failed'>('opening');
 	let error = $state<string | null>(null);
@@ -79,13 +78,6 @@
 		term.loadAddon(fit);
 		term.loadAddon(new Unicode11Addon());
 		term.unicode.activeVersion = '11';
-		// F6 leaves the terminal, which otherwise keeps Tab and Shift+Tab for the program inside it.
-		term.attachCustomKeyEventHandler((event) => {
-			if (event.key !== 'F6') return true;
-			event.preventDefault();
-			if (event.type === 'keydown') onleave?.();
-			return false;
-		});
 		term.open(container);
 		try {
 			const webgl = new WebglAddon();

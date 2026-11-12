@@ -185,6 +185,12 @@ test('pressing a key keeps the focus in the terminal, so the phone keyboard stay
 	expect(document.activeElement).toBe(textarea(panel));
 });
 
+test('F6 goes to the program in the terminal, which is Sort by in htop', async () => {
+	const { written, panel } = await openPanel(false);
+	await fireEvent.keyDown(textarea(panel), { key: 'F6', code: 'F6', keyCode: 117 });
+	expect(written).toEqual(['\x1b[17~']);
+});
+
 test('on a touch screen the terminal opens without taking the focus, so the phone keyboard stays closed until a tap on the terminal', async () => {
 	const { panel } = await openPanel(true);
 	expect(document.activeElement).not.toBe(textarea(panel));
