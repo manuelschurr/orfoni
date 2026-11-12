@@ -50,7 +50,7 @@ function runStatusLine(path: string, original: string | null, input: string): Pr
 	});
 }
 
-function runHookCommand(path: string, hook: 'Stop' | 'PermissionRequest', body: object): Promise<string> {
+function runHookCommand(path: string, hook: 'Stop' | 'PermissionRequest' | 'PostToolUse', body: object): Promise<string> {
 	const entry = (hookSettings(path, null, '/uploads') as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks[hook]![0]!.hooks[0]!;
 	return new Promise((resolve, reject) => {
 		const child = execFile('/bin/sh', ['-c', entry.command], { env: { ...process.env, ORFONI_SESSION: 'session-1' } }, (error, stdout) =>
@@ -107,6 +107,27 @@ describe('hook server', () => {
 		answer(decision);
 		await done;
 		expect(JSON.parse(printed!)).toEqual(decision);
+	});
+
+	test('the PostToolUse of a file Claude sends is held until the hub has acted on it, so Claude goes on only once the hub has its copy', async () => {
+		let answer: (response: HookResponse) => void = () => {};
+		const path = await serve(() => new Promise((resolve) => (answer = resolve)));
+		let printed: string | undefined;
+		const body = { hook_event_name: 'PostToolUse', session_id: 'c1', tool_name: 'SendUserFile', tool_use_id: 't1', tool_input: { files: ['a.png'] }, tool_response: {} };
+		const done = runHookCommand(path, 'PostToolUse', body).then((stdout) => (printed = stdout));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(calls).toMatchObject([{ header: 'session-1', body }]);
+		expect(printed).toBeUndefined();
+		answer({});
+		await done;
+		expect(JSON.parse(printed!)).toEqual({});
+	});
+
+	test("a subagent's file send and every other tool's PostToolUse get their empty answer at once", async () => {
+		const path = await serve(never);
+		const send = { hook_event_name: 'PostToolUse', session_id: 'c1', tool_name: 'SendUserFile', tool_use_id: 't1', tool_input: { files: ['a.png'] }, tool_response: {} };
+		expect(await runHookCommand(path, 'PostToolUse', { ...send, agent_id: 'agent-7' })).toBe('');
+		expect(await runHookCommand(path, 'PostToolUse', { ...send, tool_name: 'Write' })).toBe('');
 	});
 
 	test('killing the curl of a held PermissionRequest, as Claude Code does on a terminal No or Escape, tells the hub the connection closed', async () => {

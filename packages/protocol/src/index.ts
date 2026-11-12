@@ -139,8 +139,11 @@ export type Question = z.infer<typeof Question>;
 // The largest file the hub keeps a copy of and the app opens, one number for both, so a file the hub would not keep is one the app would not open either.
 export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
-// What a click on a file Claude sent would open, as the hub knew it when it sent the item. sending: the call still runs. original: the hub has no copy, and the file is on the VPS, as it is now. missing: no copy and no file. tooLarge: over MAX_FILE_BYTES, which the app does not open.
-export const SentFileState = z.enum(['sending', 'original', 'missing', 'tooLarge']);
+// Claude Code's tool use IDs, such as toolu_014JNaTw7XmbD3GUNEJNA486. The hub names a folder after one, so nothing else passes.
+export const ToolUseId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+
+// What a click on a file Claude sent would open, as the hub knew it when it sent the item. sending: the call still runs. kept: the copy the hub made when Claude sent it. original: the hub has no copy, and the file is on the VPS, as it is now. missing: no copy and no file. tooLarge: over MAX_FILE_BYTES, which the hub keeps no copy of and the app does not open.
+export const SentFileState = z.enum(['sending', 'kept', 'original', 'missing', 'tooLarge']);
 export type SentFileState = z.infer<typeof SentFileState>;
 
 export const SentFile = z.object({

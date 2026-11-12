@@ -68,13 +68,14 @@ describe('parseHookEvent', () => {
 		});
 	});
 
-	test('PostToolUse gives tool_end with the tool input and the tool response as output', () => {
+	test('PostToolUse gives tool_end with the tool input, the working directory, and the tool response as output', () => {
 		expect(parseHookEvent('PostToolUse', fixture('PostToolUse'))).toEqual({
 			type: 'tool_end',
 			claudeSessionId: planSession,
 			toolUseId: 'toolu_01MHahXwmuBpNF9kekcYPmZe',
 			name: 'Write',
 			input: { file_path: '/home/user/.claude/plans/plan-how-to-create-wiggly-scone.md', content: planText },
+			cwd: '/var/tmp/claude-0/orfoni-spike-q',
 			output: {
 				type: 'create',
 				filePath: '/home/user/.claude/plans/plan-how-to-create-wiggly-scone.md',

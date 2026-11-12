@@ -1,5 +1,6 @@
 import { ClaudeSessionId } from '@orfoni/protocol';
 import { z } from 'zod';
+import { SEND_USER_FILE } from '../send-user-file.js';
 
 type Event<T extends string, F> = { type: T; claudeSessionId: ClaudeSessionId } & F;
 
@@ -9,7 +10,7 @@ export type HookEvent =
 	| Event<'prompt', { text: string }>
 	| Event<'assistant_text', { messageId: string; index: number; final: boolean; delta: string }>
 	| Event<'tool_start', { toolUseId: string; name: string; input: unknown; agentId?: string }>
-	| Event<'tool_end', { toolUseId: string; name: string; input: unknown; output: unknown; agentId?: string }>
+	| Event<'tool_end', { toolUseId: string; name: string; input: unknown; output: unknown; cwd: string | null; agentId?: string }>
 	| Event<'tool_failed', { toolUseId: string; name: string; error: string; interrupted: boolean; agentId?: string }>
 	| Event<'permission_request', { name: string; input: unknown; suggestions: unknown[] }>
 	| Event<'task_created', { taskId: string; subject: string }>
@@ -62,13 +63,14 @@ const schemas = {
 		input: b.tool_input,
 		agentId: b.agent_id,
 	})),
-	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_input: z.unknown(), tool_response: z.unknown(), agent_id: agentId }, (b) => ({
+	PostToolUse: hook({ tool_use_id: z.string(), tool_name: z.string(), tool_input: z.unknown(), tool_response: z.unknown(), cwd: z.string().optional(), agent_id: agentId }, (b) => ({
 		type: 'tool_end',
 		claudeSessionId: b.session_id,
 		toolUseId: b.tool_use_id,
 		name: b.tool_name,
 		input: b.tool_input,
 		output: b.tool_response,
+		cwd: b.cwd ?? null,
 		agentId: b.agent_id,
 	})),
 	PostToolUseFailure: hook(
@@ -128,6 +130,13 @@ function isHookName(name: string): name is HookName {
 
 export function hookName(body: unknown): string {
 	return typeof body === 'object' && body !== null && 'hook_event_name' in body && typeof body.hook_event_name === 'string' ? body.hook_event_name : '';
+}
+
+const KeepsCopy = z.object({ hook_event_name: z.literal('PostToolUse'), tool_name: z.literal(SEND_USER_FILE), agent_id: z.never().optional() });
+
+// The hooks whose answer waits until the hub has acted on them: a request until it is decided, and the end of a call of the main conversation that sent files until the hub has its copies, so Claude cannot change a file before the hub has it.
+export function holdsResponse(body: unknown): boolean {
+	return hookName(body) === 'PermissionRequest' || KeepsCopy.safeParse(body).success;
 }
 
 export function parseHookEvent(hookName: string, body: unknown): HookEvent {

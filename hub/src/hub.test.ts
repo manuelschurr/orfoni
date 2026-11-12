@@ -2296,7 +2296,11 @@ describe('sent files', () => {
 		return item?.kind === 'tool' ? item.sent : undefined;
 	}
 
-	test('a client sees the files of a SendUserFile call on its tool item, being sent while it runs, then by the path and size Claude Code resolved', async () => {
+	function states(chat: ChatItem[], toolUseId = TOOL_USE): string[][] {
+		return chat.flatMap((item) => (item.kind === 'tool' && item.toolUseId === toolUseId && item.sent ? [item.sent.files.map((file) => file.state)] : []));
+	}
+
+	test('a client sees the files of a SendUserFile call on its tool item, being sent while it runs, then kept by the hub under the path and size Claude Code resolved', async () => {
 		write('icon.png', 'png!');
 		write('sub/report.md', '# hi\n');
 		const client = await startHub();
@@ -2310,15 +2314,57 @@ describe('sent files', () => {
 				{ name: 'report.md', path: join(folder(), 'sub/report.md'), size: null, image: false, state: 'sending' },
 			],
 		});
-		await hub.hook(id, postToolUse(claude, ['icon.png', 'sub/report.md']));
+		expect(await hub.hook(id, postToolUse(claude, ['icon.png', 'sub/report.md']))).toEqual({});
 		expect(sentOf(client.chat(id))).toEqual({
 			caption: 'spike',
 			render: true,
 			files: [
-				{ name: 'icon.png', path: join(folder(), 'icon.png'), size: 4, image: true, state: 'original' },
-				{ name: 'report.md', path: join(folder(), 'sub/report.md'), size: 5, image: false, state: 'original' },
+				{ name: 'icon.png', path: join(folder(), 'icon.png'), size: 4, image: true, state: 'kept' },
+				{ name: 'report.md', path: join(folder(), 'sub/report.md'), size: 5, image: false, state: 'kept' },
 			],
 		});
+		expect(states(client.chat(id))).toEqual([
+			['sending', 'sending'],
+			['kept', 'kept'],
+		]);
+	});
+
+	test('a card rebuilt after a hub restart still finds the copy the hub kept, after Claude deleted the file', async () => {
+		const sent = write('report.md', '# the report as sent\n');
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		await hub.hook(id, preToolUse(claude, ['report.md']));
+		await hub.hook(id, postToolUse(claude, ['report.md']));
+		rmSync(sent);
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(id));
+		hub.close();
+		transcript = sentInTranscript([sent]);
+
+		const after = await startHub(fakeTmux([`orfoni-${id}`]));
+		const opened = (await after.ok('openSession', { sessionId: id })) as { chat: ChatItem[] };
+		expect(sentOf(opened.chat)?.files).toEqual([{ name: 'report.md', path: sent, size: 21, image: false, state: 'kept' }]);
+	});
+
+	test('a file the hub cannot copy reads as gone and one over 100 MB as too large, and the hook is answered all the same', async () => {
+		truncateSync(write('big.bin', ''), MAX_FILE_BYTES + 1);
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		expect(await hub.hook(id, postToolUse(claude, ['gone.txt', 'big.bin']))).toEqual({});
+		expect(sentOf(client.chat(id))?.files).toMatchObject([
+			{ name: 'gone.txt', size: null, state: 'missing' },
+			{ name: 'big.bin', size: MAX_FILE_BYTES + 1, state: 'tooLarge' },
+		]);
+		expect(readdirSync(join(dir, 'sent', TOOL_USE)).sort()).toEqual(['call.json']);
+	});
+
+	test('a second PostToolUse of the same call keeps the copy of the first', async () => {
+		const path = write('a.txt', 'first');
+		const client = await startHub();
+		const { id, claude } = await readyIn(client);
+		await hub.hook(id, postToolUse(claude, ['a.txt']));
+		writeFileSync(path, 'second and longer');
+		await hub.hook(id, postToolUse(claude, ['a.txt']));
+		expect(sentOf(client.chat(id))?.files).toMatchObject([{ size: 5, state: 'kept' }]);
 	});
 
 	test('a call the hub saw only end still shows its input and its files, and every other tool goes out as it was', async () => {
@@ -2326,7 +2372,7 @@ describe('sent files', () => {
 		const client = await startHub();
 		const { id, claude } = await readyIn(client);
 		await hub.hook(id, postToolUse(claude, ['a.txt']));
-		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'tool', input: input(['a.txt']), sent: { files: [{ name: 'a.txt', state: 'original' }] } });
+		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'tool', input: input(['a.txt']), sent: { files: [{ name: 'a.txt', state: 'kept' }] } });
 		await hub.hook(id, body('PreToolUse', claude));
 		expect(client.chat(id).at(-1)).toMatchObject({ kind: 'tool', name: 'Write' });
 		expect(client.chat(id).at(-1)).not.toHaveProperty('sent');

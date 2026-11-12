@@ -33,13 +33,14 @@ import { z } from 'zod';
 import { parseActivity, type Activity } from './activity.js';
 import { dialogOpensOnNo } from './dialog.js';
 import { privateDir, writePrivate } from './files.js';
-import { HookParseError, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
+import { HookParseError, holdsResponse, hookName, parseHookEvent, type HookEvent } from './hooks/events.js';
 import { joinHistory, lastEntryAt, normalizeHistory, turnEnded } from './history.js';
 import { CONTINUE_TEXT, continueAt, limitReset, MAX_CONTINUES } from './limit.js';
 import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
-import { show, showLive } from './sent-copies.js';
+import { sentCall } from './send-user-file.js';
+import { SentCopies } from './sent-copies.js';
 import { noticesOf, titleOf } from './session/notices.js';
 import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
@@ -363,6 +364,7 @@ export class Hub {
 	private planSettings: PlanSettings;
 	private lastWindowStart: StoredPlan['lastWindowStart'];
 	private readonly registry: Registry;
+	private readonly sent: SentCopies;
 	private shownOthers: OtherSession[] = [];
 	// The conversations a port or a continue is starting an orfoni session on right now.
 	private readonly claiming = new Set<ClaudeSessionId>();
@@ -379,6 +381,7 @@ export class Hub {
 		this.planSettings = planSettings;
 		this.lastWindowStart = lastWindowStart;
 		this.registry = new Registry(options.claudeSessionsDir, options.systemRoot, options.log);
+		this.sent = new SentCopies(join(options.stateDir, 'sent'), options.log);
 		this.summarizer = new Summarizer({
 			...options.summaries,
 			input: (sessionId) => this.summaryInput(sessionId),
@@ -456,6 +459,12 @@ export class Hub {
 		const mode = HookPermissionMode.safeParse(body);
 		if (mode.success) this.apply(session, { kind: 'permission_mode', mode: mode.data.permission_mode, at: Date.now() });
 		if (event.type === 'permission_request') return this.openRequest(session, event, closed);
+		// The copies come first, so the item that shows the call ended already says the hub has them.
+		if (event.type === 'tool_end' && holdsResponse(body)) {
+			const call = sentCall(event.input, event.output, event.cwd ?? session.projectDir);
+			if (call) await this.sent.keep(event.toolUseId, call);
+			if (this.sessions.get(session.id) !== session) return {};
+		}
 		this.receive(session, event);
 		return {};
 	}
@@ -787,7 +796,7 @@ export class Hub {
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
 		this.view(client, session.id);
-		return { session: summary(session), chat: await show(await this.conversation(session), session.projectDir) };
+		return { session: summary(session), chat: await this.sent.show(await this.conversation(session), session.projectDir) };
 	}
 
 	private async conversation(session: Session): Promise<ChatItem[]> {
@@ -835,7 +844,7 @@ export class Hub {
 
 	private async openOther(pid: number): Promise<{ session: OtherSession; chat: ChatItem[] }> {
 		const { session } = await this.other(pid);
-		return { session, chat: await show(normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)), session.projectDir) };
+		return { session, chat: await this.sent.show(normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)), session.projectDir) };
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {
@@ -1284,7 +1293,7 @@ export class Hub {
 		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
 		// The model never holds what the hub says about sent files, only what it sends out.
-		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: showLive(item, session.projectDir) });
+		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: this.sent.showLive(item, session.projectDir) });
 		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.chat), body });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);

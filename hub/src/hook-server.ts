@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { hookName } from './hooks/events.js';
+import { holdsResponse } from './hooks/events.js';
 import type { Hub } from './hub.js';
 import { listenOnSocket } from './socket.js';
 
@@ -33,7 +33,7 @@ export async function listenHooks(hub: Pick<Hub, 'hook' | 'status'>, path: strin
 				response.end();
 				return;
 			}
-			const held = hookName(body) === 'PermissionRequest';
+			const held = holdsResponse(body);
 			const closed = new AbortController();
 			response.on('close', () => {
 				if (!response.writableFinished) closed.abort();
