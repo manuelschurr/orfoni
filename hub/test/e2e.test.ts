@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import type { ChatItem, Effort, HubStatus, OtherSession, PastConversation, PermissionMode, SessionId, SessionSummary, SlashCommand } from '@orfoni/protocol';
+import { sentFileRef, type ChatItem, type Effort, type FileChunk, type FolderListing, type HubStatus, type OtherSession, type PastConversation, type PermissionMode, type SessionId, type SessionSummary, type SlashCommand } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, offRemoteControl, onePagePdf, pane, sleep, tmux, until, type Started } from './e2e/client.js';
 
 let client: HubClient;
@@ -622,5 +622,67 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 		expect(names).not.toContain('fast');
 		expect(answers[0]!.commands.some((command) => command.name.includes(':') && command.aliases.length > 0)).toBe(true);
 		expect(defaults()).toEqual(before);
+	});
+	// Claude Code offers SendUserFile only while Remote Control is connected, so this session turns it on for its own folder, and lists on claude.ai while it runs.
+	test('a file Claude sends is kept as it was when Claude went on, opens after the original is gone and after a hub restart, and the session folder lists and opens its files', async () => {
+		const tag = randomUUID().slice(0, 8);
+		const dir = mkdtempSync(`${TRUSTED_DIR}/sent-`);
+		mkdirSync(`${dir}/.claude`);
+		writeFileSync(`${dir}/.claude/settings.local.json`, '{ "remoteControlAtStartup": true }\n');
+		const name = `note-${tag}.txt`;
+		let copies: string | null = null;
+		try {
+			const { id } = await start({
+				dir,
+				permissionMode: 'auto',
+				prompt: `Use the Write tool to create ${name} containing exactly: kept-${tag}. Then call the SendUserFile tool with files set to ["${name}"]. Then reply with exactly: sent-${tag}`,
+			});
+			const call = await client.waitForChat(id, (item) => item.kind === 'tool' && item.name === 'SendUserFile' && item.status !== 'running');
+			if (call.kind !== 'tool') throw new Error('unreachable');
+			const { claudeSessionId } = await client.waitForSession(id, (s) => s.state === 'answered');
+			await client.waitForChat(id, replied(`sent-${tag}`));
+			const original = readFileSync(join(dir, name));
+			expect(original.toString('utf8')).toContain(`kept-${tag}`);
+			expect(call).toMatchObject({ status: 'done', sent: { files: [{ name, path: join(dir, name), size: original.length, image: false, state: 'kept' }] } });
+			copies = join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni', 'sent', call.toolUseId);
+			expect(readFileSync(join(copies, '0'))).toEqual(original);
+			// The hub holds the call's PostToolUse until it has the copy, so Claude's next step comes after it.
+			const { keptAt } = JSON.parse(readFileSync(join(copies, 'call.json'), 'utf8')) as { keptAt: number };
+			const nextStep = () => {
+				const entries = transcriptOf(dir, claudeSessionId)
+					.split('\n')
+					.filter(Boolean)
+					.map((line) => JSON.parse(line) as { type: string; timestamp?: string; message?: { content?: unknown } });
+				const result = entries.findIndex((entry) => entry.type === 'user' && JSON.stringify(entry.message?.content ?? '').includes(`"tool_use_id":"${call.toolUseId}"`));
+				return result === -1 ? undefined : entries.slice(result + 1).find((entry) => entry.type === 'assistant')?.timestamp;
+			};
+			// Claude Code may write the reply to its transcript after the hub has shown it.
+			await until(() => nextStep() !== undefined, 15_000);
+			expect(keptAt).toBeLessThan(Date.parse(nextStep()!));
+
+			const session = { kind: 'orfoni', sessionId: id } as const;
+			const listing = (await client.request('listFolder', { session, path: '' })) as FolderListing;
+			expect(listing.entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: '.claude', kind: 'folder' }), expect.objectContaining({ name, kind: 'file', size: original.length })]));
+			const fromFolder = (await client.request('readFile', { file: { kind: 'folder', session, path: name }, offset: 0 })) as FileChunk;
+			expect(fromFolder.size).toBe(original.length);
+			expect(Buffer.from(fromFolder.data, 'base64')).toEqual(original);
+
+			rmSync(join(dir, name));
+			const ref = sentFileRef(call.toolUseId, 0, call.sent!.files[0]!);
+			const sent = (await client.request('readFile', { file: ref, offset: 0 })) as FileChunk;
+			expect(sent.size).toBe(original.length);
+			expect(Buffer.from(sent.data, 'base64')).toEqual(original);
+			const card = async () => ((await client.request('openSession', { sessionId: id })) as { chat: ChatItem[] }).chat.find((item) => item.kind === 'tool' && item.toolUseId === call.toolUseId);
+			expect(await card()).toMatchObject({ sent: { files: [{ name, size: original.length, state: 'kept' }] } });
+
+			await restartHub();
+			expect(await card()).toMatchObject({ sent: { files: [{ name, size: original.length, state: 'kept' }] } });
+			const afterRestart = (await client.request('readFile', { file: ref, offset: 0 })) as FileChunk;
+			expect(afterRestart.version).toBe(sent.version);
+			expect(Buffer.from(afterRestart.data, 'base64')).toEqual(original);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			if (copies) rmSync(copies, { recursive: true, force: true });
+		}
 	});
 });
