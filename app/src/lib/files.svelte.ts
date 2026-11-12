@@ -1,6 +1,6 @@
 import { base64Bytes, FILE_CHUNK_BYTES, MAX_FILE_BYTES, type FileChunk, type FileRef } from '@orfoni/protocol';
 import type { DeviceFiles, SavedFile } from './device-files';
-import type { HubRequestError } from './hub-client.svelte';
+import { HubRequestError } from './hub-client.svelte';
 
 export const MAX_THUMBNAIL_BYTES = 4 * 1024 * 1024;
 const PIECES_IN_FLIGHT = 2;
@@ -19,8 +19,6 @@ const CHANGED = 'The file changed while it downloaded. Click to try again.';
 const DROPPED = 'The connection to the VPS dropped. Click to try again.';
 
 const idle: Transfer = { kind: 'idle' };
-
-class RowReason extends Error {}
 
 class FirstComeSlots {
 	private readonly waiting: (() => void)[] = [];
@@ -41,12 +39,12 @@ class FirstComeSlots {
 }
 
 export function isOlderHub(error: unknown): boolean {
-	return (error as Partial<HubRequestError>).code === 'bad_message';
+	return error instanceof HubRequestError && error.code === 'bad_message';
 }
 
 function reasonOf(error: unknown): string {
 	if (isOlderHub(error)) return OLDER_HUB;
-	if ((error as Partial<HubRequestError>).code === 'disconnected') return DROPPED;
+	if (error instanceof HubRequestError && error.code === 'disconnected') return DROPPED;
 	return error instanceof Error ? error.message : String(error);
 }
 
@@ -129,7 +127,7 @@ export class FileTransfers {
 
 	private async readAll(ref: FileRef, limit: number, tooLarge: string, take: (offset: number, data: string) => Promise<void> | void, progress?: (done: number, size: number) => void): Promise<number> {
 		const first = await this.piece(ref, 0);
-		if (first.size > limit) throw new RowReason(tooLarge);
+		if (first.size > limit) throw new Error(tooLarge);
 		await take(0, first.data);
 		let done = base64Bytes(first.data);
 		progress?.(done, first.size);
@@ -141,7 +139,7 @@ export class FileTransfers {
 					const offset = next;
 					next += FILE_CHUNK_BYTES;
 					const chunk = await this.piece(ref, offset);
-					if (chunk.version !== first.version) throw new RowReason(CHANGED);
+					if (chunk.version !== first.version) throw new Error(CHANGED);
 					await take(offset, chunk.data);
 					done += base64Bytes(chunk.data);
 					progress?.(done, first.size);

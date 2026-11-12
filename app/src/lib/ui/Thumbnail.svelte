@@ -9,15 +9,10 @@
 
 	$effect(() => {
 		if (!box) return;
-		const load = () => files.thumbnail(ref, size).then((loaded) => (loaded === null ? (failed = true) : (url = loaded)));
-		if (typeof IntersectionObserver === 'undefined') {
-			void load();
-			return;
-		}
 		const observer = new IntersectionObserver((entries) => {
 			if (!entries.some((entry) => entry.isIntersecting)) return;
 			observer.disconnect();
-			void load();
+			void files.thumbnail(ref, size).then((loaded) => (loaded === null ? (failed = true) : (url = loaded)));
 		});
 		observer.observe(box);
 		return () => observer.disconnect();

@@ -2,7 +2,7 @@
 	import { joinFolderPath, type FolderListing, type SessionRef } from '@orfoni/protocol';
 	import { onMount } from 'svelte';
 	import { isOlderHub, OLDER_HUB } from '../files.svelte';
-	import type { HubClient, HubRequestError } from '../hub-client.svelte';
+	import { HubRequestError, type HubClient } from '../hub-client.svelte';
 	import FileRow from './FileRow.svelte';
 	import { folderName } from './format';
 
@@ -16,7 +16,7 @@
 
 	function failure(error: unknown): string {
 		if (isOlderHub(error)) return OLDER_HUB;
-		return (error as Partial<HubRequestError>).code === 'disconnected' ? 'The connection to the VPS dropped.' : (error as Error).message;
+		return error instanceof HubRequestError && error.code === 'disconnected' ? 'The connection to the VPS dropped.' : (error as Error).message;
 	}
 
 	async function go(to: string): Promise<void> {

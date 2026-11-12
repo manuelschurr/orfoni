@@ -1,6 +1,6 @@
 import { FILE_CHUNK_BYTES, type ChatItem, type SentFile } from '@orfoni/protocol';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { FakeDeviceFiles, type DeviceFile, type SavedFile } from '../device-files';
 import type { FakeTransport } from '../fake-transport';
 import { connectedClient } from '../testing';
@@ -11,6 +11,17 @@ const MB = 1024 * 1024;
 const user: ChatItem = { kind: 'user', id: 'u1', text: 'Send me the report.', at: 1 };
 
 afterEach(() => vi.restoreAllMocks());
+
+// jsdom has no IntersectionObserver, so every thumbnail counts as on screen once it is observed.
+beforeAll(() => {
+	globalThis.IntersectionObserver ??= class {
+		constructor(private readonly seen: IntersectionObserverCallback) {}
+		observe(target: Element) {
+			this.seen([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+		}
+		disconnect() {}
+	} as unknown as typeof IntersectionObserver;
+});
 
 function sentFile(name: string, changes: Partial<SentFile> = {}): SentFile {
 	return { name, path: `/root/projects/alpha/${name}`, size: 11, image: false, state: 'kept', ...changes };
