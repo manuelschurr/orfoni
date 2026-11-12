@@ -160,7 +160,7 @@ function notifications(): { title: string; body?: string; extra?: Record<string,
 
 // `results` answers other requests by their method.
 function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType<typeof otherSession>[] = [], results: Record<string, unknown> = {}) {
-	const hub = { line: (_message: unknown) => {}, click: (_message: unknown) => {} };
+	const hub = { line: (_message: unknown) => {}, click: (_message: unknown) => {}, requests: [] as Record<string, unknown>[] };
 	const commands = inTauri((cmd, args, push) => {
 		switch (cmd) {
 			case 'settings_get':
@@ -171,6 +171,7 @@ function withSessions(sessions: ReturnType<typeof summary>[], others: ReturnType
 				return { kind: 'connected' };
 			case 'hub_send': {
 				const request = JSON.parse(args.line as string) as { id: number; method: string; sessionId?: string; pid?: number };
+				hub.requests.push(request);
 				if (request.method === 'listSessions') hub.line({ type: 'response', id: request.id, ok: true, result: sessions });
 				if (request.method === 'listOtherSessions') hub.line({ type: 'response', id: request.id, ok: true, result: others });
 				const opened = sessions.find((session) => session.id === request.sessionId);
@@ -678,4 +679,72 @@ test('on a narrow screen, a session removed while its task list is open takes bo
 	await waitFor(() => expect(layers()).toBe(0));
 	expect(screen.queryByRole('dialog', { name: /^Tasks/ })).toBeNull();
 	expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+});
+
+const alphaFolder = { path: '', entries: [{ name: 'report.pdf', kind: 'file', size: 2048, modifiedAt: 1 }], omitted: 0 };
+
+test("on a wide screen, Files shows the session's folder in the task list's place, closing it gives the task list back, and the choice is remembered", async () => {
+	const { hub } = withSessions([ranging], [], { listFolder: alphaFolder });
+	const { unmount } = render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Range the pairs/ }));
+	expect(await screen.findByRole('complementary', { name: 'Task list' })).toBeTruthy();
+	const files = screen.getByRole('button', { name: 'Files' });
+	expect(files.getAttribute('aria-pressed')).toBe('false');
+
+	await fireEvent.click(files);
+	const panel = screen.getByRole('complementary', { name: 'Files' });
+	expect(within(panel).getByRole('heading', { name: 'Files in alpha' })).toBeTruthy();
+	expect(await within(panel).findByRole('button', { name: 'Open report.pdf' })).toBeTruthy();
+	expect(screen.queryByRole('complementary', { name: 'Task list' })).toBeNull();
+	expect(files.getAttribute('aria-pressed')).toBe('true');
+	expect(hub.requests.filter((request) => request.method === 'listFolder')).toMatchObject([{ session: { kind: 'orfoni', sessionId: 'w1' }, path: '' }]);
+	expect(localStorage.getItem('orfoni.files.shown')).toBe('true');
+
+	unmount();
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Range the pairs/ }));
+	expect(await screen.findByRole('complementary', { name: 'Files' })).toBeTruthy();
+	await fireEvent.click(screen.getByRole('button', { name: 'Close the files' }));
+	expect(screen.queryByRole('complementary', { name: 'Files' })).toBeNull();
+	expect(screen.getByRole('complementary', { name: 'Task list' })).toBeTruthy();
+	expect(screen.getByRole('button', { name: 'Files' }).getAttribute('aria-pressed')).toBe('false');
+	expect(localStorage.getItem('orfoni.files.shown')).toBe('false');
+});
+
+test('on a narrow screen, Files behind More opens the folder over the conversation, and back closes it and keeps the conversation', async () => {
+	stubMedia(narrowWindow);
+	withSessions([summary('a1', 'idle', { title: 'Fix the login page' })], [], { listFolder: alphaFolder });
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^Fix the login page/ }));
+	await fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+	const files = screen.getByRole('button', { name: 'Files' });
+	expect(files.hasAttribute('aria-pressed')).toBe(false);
+	await fireEvent.click(files);
+	const sheet = screen.getByRole('dialog', { name: 'Files in alpha' });
+	expect(await within(sheet).findByRole('button', { name: 'Open report.pdf' })).toBeTruthy();
+	expect(screen.queryByRole('complementary', { name: 'Files' })).toBeNull();
+	await waitFor(() => expect(layers()).toBe(2));
+
+	history.back();
+	await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Files in alpha' })).toBeNull());
+	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+	expect(layers()).toBe(1);
+
+	await fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+	await waitFor(() => expect(layers()).toBe(2));
+	await fireEvent.click(screen.getByRole('button', { name: 'Close the files' }));
+	expect(screen.queryByRole('dialog', { name: 'Files in alpha' })).toBeNull();
+	await waitFor(() => expect(layers()).toBe(1));
+});
+
+test('a session outside orfoni opens its folder from its header, named by its process', async () => {
+	const { hub } = withSessions([], [otherSession(1172033, { name: 'swarm-73' })], { listFolder: { ...alphaFolder, entries: [{ name: 'swarm.toml', kind: 'file', size: 90, modifiedAt: 1 }] } });
+	render(App);
+	await fireEvent.click(await screen.findByRole('button', { name: /^swarm-73/ }));
+	expect(await screen.findByText('Outside orfoni')).toBeTruthy();
+	await fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+	const panel = screen.getByRole('complementary', { name: 'Files' });
+	expect(within(panel).getByRole('heading', { name: 'Files in swarm' })).toBeTruthy();
+	expect(await within(panel).findByRole('button', { name: 'Open swarm.toml' })).toBeTruthy();
+	expect(hub.requests.filter((request) => request.method === 'listFolder')).toMatchObject([{ session: { kind: 'other', pid: 1172033 }, path: '' }]);
 });

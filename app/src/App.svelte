@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-	import type { HubStatus, SessionId, SessionSummary } from '@orfoni/protocol';
+	import type { HubStatus, SessionId, SessionRef, SessionSummary } from '@orfoni/protocol';
 	import { getVersion } from '@tauri-apps/api/app';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -20,6 +20,8 @@
 	import ChatView from './lib/ui/ChatView.svelte';
 	import Composer from './lib/ui/Composer.svelte';
 	import EarlierConversationsDialog from './lib/ui/EarlierConversationsDialog.svelte';
+	import FilesPanel from './lib/ui/FilesPanel.svelte';
+	import FilesSheet from './lib/ui/FilesSheet.svelte';
 	import MemoryView from './lib/ui/MemoryView.svelte';
 	import { bytes, folderName, sessionTitle, windowTitle } from './lib/ui/format';
 	import HostKeyDialog from './lib/ui/HostKeyDialog.svelte';
@@ -63,9 +65,10 @@
 	const conversation = $derived(session?.id ?? (client?.other ? `outside ${client.other.session.pid}` : client?.memoryShown ? 'memory' : null));
 	const screen = $derived<'list' | 'conversation'>(conversation === null ? 'list' : 'conversation');
 	// What a narrow window shows in front of the conversation it was opened over, while there is something to show.
-	let front = $state<{ layer: 'tasks' | 'terminal'; over: string } | null>(null);
+	let front = $state<{ layer: 'tasks' | 'terminal' | 'files'; over: string } | null>(null);
 	const overlay = $derived.by(() => {
 		if (!front || front.over !== conversation) return null;
+		if (front.layer === 'files') return 'files';
 		if (front.layer === 'tasks') return session?.taskList?.length ? 'tasks' : null;
 		return terminals.length > 0 ? 'terminal' : null;
 	});
@@ -73,6 +76,10 @@
 	const depth = $derived(!narrow.current || screen === 'list' ? 0 : overlay ? 2 : 1);
 	// The entries this page pushed. A reload stays on the entry it was on, so the count starts from there.
 	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
+
+	const FILES_KEY = 'orfoni.files.shown';
+	// Whether a wide window shows the files beside the conversation, in the task list's place.
+	let filesShown = $state(storedFilesShown());
 
 	let version = $state<string | null>(null);
 	// The session a clicked notice names. A tap on the phone that started orfoni names it before the hub has listed the sessions.
@@ -143,8 +150,32 @@
 		syncHistory();
 	}
 
-	function bringToFront(layer: 'tasks' | 'terminal'): void {
+	function bringToFront(layer: 'tasks' | 'terminal' | 'files'): void {
 		if (conversation) front = { layer, over: conversation };
+	}
+
+	// A convenience of this window, so storage it cannot use leaves the files closed.
+	function storedFilesShown(): boolean {
+		try {
+			return localStorage.getItem(FILES_KEY) === 'true';
+		} catch {
+			return false;
+		}
+	}
+
+	// The Files button in a session's header.
+	function pressFiles(): void {
+		if (narrow.current) bringToFront('files');
+		else showFiles(!filesShown);
+	}
+
+	function showFiles(shown: boolean): void {
+		filesShown = shown;
+		try {
+			localStorage.setItem(FILES_KEY, String(shown));
+		} catch {
+			// The choice then lasts until the window closes.
+		}
 	}
 
 	function started({ session: created, needsTrust, memoryWarning }: Result<'startSession'>): void {
@@ -182,6 +213,15 @@
 
 <svelte:window onkeydown={switchPane} onpopstate={popped} />
 
+<!-- The session's folder, beside the conversation in a wide window and over it in a narrow one. -->
+{#snippet files(hub: HubClient, where: SessionRef, folder: string)}
+	{#if narrow.current}
+		{#if overlay === 'files'}<FilesSheet client={hub} session={where} {folder} onclose={() => (front = null)} />{/if}
+	{:else if filesShown}
+		<FilesPanel client={hub} session={where} {folder} onclose={() => showFiles(false)} />
+	{/if}
+{/snippet}
+
 {#if client && ready}
 	<div class="app" class:split={terminals.length > 0} class:narrow={narrow.current} data-screen={screen}>
 		<Sidebar {client} {version} findUpdate={isTauri() ? findUpdate : undefined} onnew={() => (creating = true)} onsettings={setup ? () => void setup?.edit() : undefined} onearlier={(dir) => (earlier = dir)} />
@@ -190,7 +230,19 @@
 				{#key session.id}
 					<div class="session">
 						<div class="conversation">
-							<SessionHeader {client} {session} narrow={narrow.current} touch={touch.current} onback={() => void client?.select(null)} ontasks={() => bringToFront('tasks')} onterminal={() => sessionTerminal(session)} onshell={(target) => shell(session, target)} onforked={started} />
+							<SessionHeader
+								{client}
+								{session}
+								narrow={narrow.current}
+								touch={touch.current}
+								onback={() => void client?.select(null)}
+								ontasks={() => bringToFront('tasks')}
+								onterminal={() => sessionTerminal(session)}
+								onfiles={pressFiles}
+								{filesShown}
+								onshell={(target) => shell(session, target)}
+								onforked={started}
+							/>
 							<ChatView
 								{client}
 								chat={client.chats.get(session.id)}
@@ -221,14 +273,21 @@
 						</div>
 						{#if session.taskList?.length && narrow.current}
 							<TaskSheet tasks={session.taskList} open={overlay === 'tasks'} onclose={() => (front = null)} />
-						{:else if session.taskList?.length}
+						{:else if session.taskList?.length && !filesShown}
 							<TaskSidebar tasks={session.taskList} />
 						{/if}
+						{@render files(client, { kind: 'orfoni', sessionId: session.id }, session.projectDir)}
 					</div>
 				{/key}
 			{:else if client.other}
-				{#key client.other.session.pid}
-					<OtherSessionView {client} narrow={narrow.current} onback={() => void client?.select(null)} onported={started} />
+				{@const other = client.other.session}
+				{#key other.pid}
+					<div class="session">
+						<div class="conversation">
+							<OtherSessionView {client} narrow={narrow.current} onback={() => void client?.select(null)} onported={started} onfiles={pressFiles} {filesShown} />
+						</div>
+						{@render files(client, { kind: 'other', pid: other.pid }, other.projectDir)}
+					</div>
 				{/key}
 			{:else if client.memoryShown}
 				<MemoryView {client} narrow={narrow.current} onback={() => void client?.select(null)} />

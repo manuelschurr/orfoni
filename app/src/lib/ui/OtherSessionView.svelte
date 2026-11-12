@@ -6,7 +6,14 @@
 	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
 
-	let { client, narrow = false, onback, onported }: { client: HubClient; narrow?: boolean; onback?: () => void; onported: (ported: Result<'portSession'>) => void } = $props();
+	let {
+		client,
+		narrow = false,
+		onback,
+		onported,
+		onfiles,
+		filesShown = false,
+	}: { client: HubClient; narrow?: boolean; onback?: () => void; onported: (ported: Result<'portSession'>) => void; onfiles?: () => void; filesShown?: boolean } = $props();
 	let dialog: HTMLDialogElement | undefined = $state();
 	let model = $state<ModelAlias | ''>('');
 	let effort = $state<Effort | ''>('');
@@ -83,6 +90,7 @@
 		</div>
 		{#if !ended}
 			<div class="actions">
+				{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={onfiles}>Files</button>{/if}
 				<button class="btn btn-primary" disabled={blocked !== null} aria-describedby={blocked ? 'port-reason' : undefined} onclick={openDialog}>Port into orfoni</button>
 			</div>
 		{/if}

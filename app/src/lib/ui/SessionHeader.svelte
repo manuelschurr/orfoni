@@ -12,6 +12,8 @@
 		onback,
 		ontasks,
 		onterminal,
+		onfiles,
+		filesShown = false,
 		onshell,
 		onforked,
 	}: {
@@ -23,6 +25,9 @@
 		onback?: () => void;
 		ontasks?: () => void;
 		onterminal: () => void;
+		onfiles?: () => void;
+		// Whether the files show beside the conversation, which a narrow window has no room for.
+		filesShown?: boolean;
 		onshell: (target: string) => void;
 		onforked: (forked: Result<'forkSession'>) => void;
 	} = $props();
@@ -200,6 +205,7 @@
 {#snippet controls()}
 	<div class="actions" id="{id}-actions">
 		<button class="btn" onclick={onterminal}>Terminal</button>
+		{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={onfiles}>Files</button>{/if}
 		<button
 			class="btn"
 			disabled={busy}
