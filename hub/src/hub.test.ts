@@ -2243,7 +2243,6 @@ describe('hooks', () => {
 	});
 });
 
-// A session's folder on disk, for the files Claude sends from it and the explorer.
 function folder(): string {
 	return join(dir, 'proj');
 }
@@ -2285,7 +2284,6 @@ describe('sent files', () => {
 	const delivered = (paths: string[]) => `${paths.length} files delivered to user.\n${paths.map((path) => `  ${path} → file_uuid: ${randomUUID()}`).join('\n')}`;
 	const stamped = (type: 'user' | 'assistant', content: unknown) => ({ ...entry(type, content), timestamp: new Date(T0 - 60_000).toISOString() });
 
-	// A conversation in which Claude sent files by these paths, as the transcript records it.
 	function sentInTranscript(files: string[], toolUseId = TOOL_USE): SessionMessage[] {
 		return [
 			stamped('user', 'send them'),

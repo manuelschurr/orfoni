@@ -21,15 +21,12 @@ import java.io.File
 
 @InvokeArg
 class SaveArgs {
-  // The part file downloads.rs wrote in the app's cache folder.
   lateinit var path: String
-  // Already made safe by safe_name in downloads.rs.
   lateinit var name: String
 }
 
 @TauriPlugin
 class DownloadsPlugin(private val activity: Activity) : Plugin(activity) {
-  // Saves the part where the phone's Files app shows downloads, then opens it with the app for its type. The copy runs off the main thread, since a file can be 100 MB. Resolves with { folder, name, how }, which downloads.rs reads as SavedFile.
   @Command
   fun saveAndOpen(invoke: Invoke) {
     val args = invoke.parseArgs(SaveArgs::class.java)
@@ -62,7 +59,7 @@ class DownloadsPlugin(private val activity: Activity) : Plugin(activity) {
 
   private class Saved(val uri: Uri, val folder: String, val name: String)
 
-  // Android 10 and later: MediaStore's Downloads collection under Download/orfoni, which needs no permission for the app's own files and survives an uninstall. Android picks "name (1).ext" itself on a clash, so the name comes back from the row it made.
+  // Android 10 and later: an app needs no permission for its own entries in MediaStore's Downloads collection, and they survive an uninstall. Android picks "name (1).ext" itself on a clash, so the name comes back from the row it made.
   @RequiresApi(Build.VERSION_CODES.Q)
   private fun toSharedDownloads(part: File, name: String): Saved {
     val resolver = activity.contentResolver
@@ -105,13 +102,12 @@ class DownloadsPlugin(private val activity: Activity) : Plugin(activity) {
   // MediaProvider appends an extension that matches the type it is given, so a type Android does not know is stored as octet-stream, which keeps the name as it is.
   private fun storeType(name: String) = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension(name)) ?: "application/octet-stream"
 
-  // Source files and notes Android does not know open as text, and the rest as anything, so the phone offers every app that takes any file.
   private fun viewType(name: String): String {
     val ext = extension(name)
-    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: if (ext in TEXT) "text/plain" else "*/*"
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: if (ext in TEXT_ANDROID_DOES_NOT_KNOW) "text/plain" else "*/*"
   }
 
   private companion object {
-    val TEXT = setOf("md", "txt", "log", "json", "jsonl", "ts", "js", "svelte", "rs", "kt", "py", "sh", "toml", "yaml", "yml", "csv", "tsv")
+    val TEXT_ANDROID_DOES_NOT_KNOW = setOf("md", "txt", "log", "json", "jsonl", "ts", "js", "svelte", "rs", "kt", "py", "sh", "toml", "yaml", "yml", "csv", "tsv")
   }
 }

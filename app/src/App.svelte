@@ -78,7 +78,6 @@
 	let pushed: number = (history.state as { layers?: number } | null)?.layers ?? 0;
 
 	const FILES_KEY = 'orfoni.files.shown';
-	// Whether a wide window shows the files beside the conversation, in the task list's place.
 	let filesShown = $state(storedFilesShown());
 
 	let version = $state<string | null>(null);
@@ -154,7 +153,6 @@
 		if (conversation) front = { layer, over: conversation };
 	}
 
-	// A convenience of this window, so storage it cannot use leaves the files closed.
 	function storedFilesShown(): boolean {
 		try {
 			return localStorage.getItem(FILES_KEY) === 'true';
@@ -163,7 +161,6 @@
 		}
 	}
 
-	// The Files button in a session's header.
 	function pressFiles(): void {
 		if (narrow.current) bringToFront('files');
 		else showFiles(!filesShown);
@@ -173,9 +170,7 @@
 		filesShown = shown;
 		try {
 			localStorage.setItem(FILES_KEY, String(shown));
-		} catch {
-			// The choice then lasts until the window closes.
-		}
+		} catch {}
 	}
 
 	function started({ session: created, needsTrust, memoryWarning }: Result<'startSession'>): void {
@@ -213,7 +208,6 @@
 
 <svelte:window onkeydown={switchPane} onpopstate={popped} />
 
-<!-- The session's folder, beside the conversation in a wide window and over it in a narrow one. -->
 {#snippet files(hub: HubClient, where: SessionRef, folder: string)}
 	{#if narrow.current}
 		{#if overlay === 'files'}<FilesSheet client={hub} session={where} {folder} onclose={() => (front = null)} />{/if}

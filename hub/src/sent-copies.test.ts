@@ -27,7 +27,7 @@ const call = (...paths: string[]): SentCall => ({ caption: null, render: false, 
 const item = (toolUseId: string, ...paths: string[]): ChatItem => ({ kind: 'tool', toolUseId, name: 'SendUserFile', input: { files: paths }, status: 'done', output: '' });
 
 async function states(copies: SentCopies, chat: ChatItem[]): Promise<string> {
-	const shown = await copies.show(chat, dir);
+	const shown = await copies.showFromDisk(chat, dir);
 	return shown.flatMap((shownItem) => (shownItem.kind === 'tool' ? (shownItem.sent?.files.map((file) => file.state) ?? []) : [])).join(' ');
 }
 

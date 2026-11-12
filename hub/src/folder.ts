@@ -8,7 +8,6 @@ import { HubError } from './hub-error.js';
 type Kind = FolderEntry['kind'];
 
 const KIND_ORDER: Record<Kind, number> = { folder: 0, file: 1, other: 2 };
-// Natural order, so a2 comes before a10, and case aside, so README sits among the r's.
 const NAMES = new Intl.Collator('en', { numeric: true, sensitivity: 'accent' });
 
 async function realRoot(root: string): Promise<string> {
@@ -20,8 +19,7 @@ async function realRoot(root: string): Promise<string> {
 	}
 }
 
-// Where `path` really is, when that is inside the folder. A folder path holds no .. and is not absolute, so only a symbolic link can lead out, and one that does, or leads nowhere, is null: to the user it is not in the session's folder.
-async function within(base: string, path: string): Promise<string | null> {
+async function realPathInside(base: string, path: string): Promise<string | null> {
 	let target: string;
 	try {
 		target = await realpath(join(base, path));
@@ -36,15 +34,14 @@ async function kindOf(base: string, path: string, entry: Dirent): Promise<Kind> 
 	if (entry.isDirectory()) return 'folder';
 	if (entry.isFile()) return 'file';
 	if (!entry.isSymbolicLink()) return 'other';
-	const target = await within(base, joinFolderPath(path, entry.name));
+	const target = await realPathInside(base, joinFolderPath(path, entry.name));
 	const info = target === null ? null : await stat(target).catch(() => null);
 	return info?.isDirectory() ? 'folder' : info?.isFile() ? 'file' : 'other';
 }
 
-// One readdir and one sort, and stats only for the entries shown, so a folder of 100 000 entries costs no more than that. .git and node_modules are folders like any other.
 export async function listFolder(root: string, path: string): Promise<FolderListing> {
 	const base = await realRoot(root);
-	const dir = await within(base, path);
+	const dir = await realPathInside(base, path);
 	if (dir === null || !(await stat(dir).then((info) => info.isDirectory(), () => false))) throw new HubError('not_found', `There is no folder ${path} in the session's folder.`);
 	const named = await Promise.all((await readdir(dir, { withFileTypes: true })).map(async (entry) => ({ name: entry.name, kind: await kindOf(base, path, entry) })));
 	named.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || NAMES.compare(a.name, b.name) || (a.name < b.name ? -1 : 1));
@@ -59,7 +56,7 @@ export async function listFolder(root: string, path: string): Promise<FolderList
 }
 
 export async function folderFile(root: string, path: string): Promise<FileSource> {
-	const target = await within(await realRoot(root), path);
+	const target = await realPathInside(await realRoot(root), path);
 	if (target === null) throw new HubError('not_found', `There is no file ${path} in the session's folder.`);
 	return { kind: 'live', path: target };
 }

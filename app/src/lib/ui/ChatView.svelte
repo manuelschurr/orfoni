@@ -36,7 +36,7 @@
 	type Tool = Extract<ChatItem, { kind: 'tool' }>;
 	type Segment = { kind: 'tools'; key: string; tools: Tool[] } | { kind: 'sent'; key: string; item: Tool & { sent: SentFiles } } | { kind: 'item'; key: string; item: ChatItem };
 
-	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added. Files Claude sends are something to see, so they break the run as a card of their own.
+	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added.
 	const segments = $derived.by(() => {
 		const groups: Segment[] = [];
 		const items = chat ?? [];

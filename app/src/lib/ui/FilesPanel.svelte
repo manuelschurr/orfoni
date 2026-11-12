@@ -6,7 +6,6 @@
 	let { client, session, folder, onclose }: { client: HubClient; session: SessionRef; folder: string; onclose: () => void } = $props();
 </script>
 
-<!-- Beside the conversation, where the task list goes, which comes back when this closes. -->
 <aside class="panel" aria-label="Files">
 	<div class="top">
 		<h2>Files</h2>

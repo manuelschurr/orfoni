@@ -67,7 +67,6 @@ const results = {
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 
 export class HubRequestError extends Error {
-	// disconnected: the request never got an answer. bad_answer: the answer did not match the protocol, which bad_message from the hub, about a request it could not read, is kept apart from.
 	constructor(
 		readonly code: ErrorCode | 'disconnected' | 'bad_answer',
 		message: string,
@@ -210,7 +209,6 @@ export class HubClient {
 	releaseHints = $state(0);
 	// What each session's message box holds while it is closed.
 	readonly drafts = new Drafts();
-	// Saving and opening the files Claude sent and those in a session's folder.
 	readonly files: FileTransfers;
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
@@ -343,7 +341,6 @@ export class HubClient {
 		return (await this.request('listProjectDirs', {})).dirs;
 	}
 
-	// A hub older than this app knows neither of these and fails them with bad_message.
 	readFile(file: FileRef, offset: number): Promise<FileChunk> {
 		return this.request('readFile', { file, offset });
 	}

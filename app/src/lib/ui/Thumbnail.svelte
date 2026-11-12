@@ -7,7 +7,6 @@
 	let url = $state<string | null>(null);
 	let failed = $state(false);
 
-	// A card far up the chat waits until it is scrolled to, so opening a long conversation reads no images. Where there is no IntersectionObserver, it loads at once.
 	$effect(() => {
 		if (!box) return;
 		const load = () => files.thumbnail(ref, size).then((loaded) => (loaded === null ? (failed = true) : (url = loaded)));

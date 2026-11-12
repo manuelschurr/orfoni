@@ -93,7 +93,6 @@ describe('parseClientRequest', () => {
 		expectBadMessage('{"id":1,"method":"selfDestruct"}');
 	});
 
-	// Only a symbolic link can then lead out of the session's folder, which the hub checks.
 	test('a file or folder in a session is named by a path inside its folder, without . or .. and not absolute', () => {
 		const orfoni = { kind: 'orfoni', sessionId: 's' };
 		expect(parseClientRequest(JSON.stringify({ id: 9, method: 'listFolder', session: orfoni, path: '' }))).toEqual({ id: 9, method: 'listFolder', session: orfoni, path: '' });
@@ -176,7 +175,6 @@ test('a tool item without its input round-trips', () => {
 	expect(parseHubMessage(JSON.stringify(message))).toEqual({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'Bash', status: 'done', output: { stdout: 'ok' } } });
 });
 
-// A later hub may change what it says about sent files, which then costs this app the card and never the line.
 test('a tool item keeps the files a call sent as far as this app can read them', () => {
 	const file = { name: 'a.png', path: '/w/a.png', size: 4, image: true, state: 'original' };
 	const line = (sent: unknown) => JSON.stringify({ type: 'chatItem', sessionId: 's', item: { kind: 'tool', toolUseId: 't1', name: 'SendUserFile', status: 'done', sent } });

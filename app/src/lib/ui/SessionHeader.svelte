@@ -26,7 +26,6 @@
 		ontasks?: () => void;
 		onterminal: () => void;
 		onfiles?: () => void;
-		// Whether the files show beside the conversation, which a narrow window has no room for.
 		filesShown?: boolean;
 		onshell: (target: string) => void;
 		onforked: (forked: Result<'forkSession'>) => void;
@@ -97,8 +96,7 @@
 		}
 	}
 
-	// A narrow window opens these over the conversation, which would leave More open behind them and after they close.
-	function cover(open: () => void): void {
+	function closeMoreThenOpen(open: () => void): void {
 		more = false;
 		open();
 	}
@@ -210,15 +208,15 @@
 <!-- The actions, gauges and settings, which a narrow header shows on request. -->
 {#snippet controls()}
 	<div class="actions" id="{id}-actions">
-		<button class="btn" onclick={() => cover(onterminal)}>Terminal</button>
-		{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={() => cover(onfiles)}>Files</button>{/if}
+		<button class="btn" onclick={() => closeMoreThenOpen(onterminal)}>Terminal</button>
+		{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={() => closeMoreThenOpen(onfiles)}>Files</button>{/if}
 		<button
 			class="btn"
 			disabled={busy}
 			onclick={() =>
 				act(async () => {
 					const target = await client.openShell(session.id);
-					cover(() => onshell(target));
+					closeMoreThenOpen(() => onshell(target));
 				})}>New shell</button
 		>
 		<button

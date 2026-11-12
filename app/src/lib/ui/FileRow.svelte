@@ -4,11 +4,10 @@
 	import { TOO_LARGE, type FileTransfers } from '../files.svelte';
 	import { fileSize, transferText } from './format';
 
-	// `closed` says why the row takes no click. `note` says something worth knowing before the click. `children` is a preview shown above the name, inside the button so a click on it opens the file.
-	let { files, ref, name, size, closed = null, note = null, children }: { files: FileTransfers; ref: FileRef; name: string; size: number | null; closed?: string | null; note?: string | null; children?: Snippet } = $props();
+	let { files, ref, name, size, disabledBecause = null, note = null, children }: { files: FileTransfers; ref: FileRef; name: string; size: number | null; disabledBecause?: string | null; note?: string | null; children?: Snippet } = $props();
 	const id = $props.id();
 	const transfer = $derived(files.transfer(ref));
-	const refusal = $derived(closed ?? (size !== null && size > MAX_FILE_BYTES ? TOO_LARGE : null));
+	const refusal = $derived(disabledBecause ?? (size !== null && size > MAX_FILE_BYTES ? TOO_LARGE : null));
 	const busy = $derived(transfer.kind === 'reading' || transfer.kind === 'saving');
 	const text = $derived(refusal ?? transferText(transfer, name) ?? note);
 	const progress = $derived(transfer.kind === 'reading' && transfer.size ? transfer.done / transfer.size : null);

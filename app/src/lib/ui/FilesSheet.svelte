@@ -7,13 +7,11 @@
 	let dialog: HTMLDialogElement | undefined = $state();
 	const id = $props.id();
 
-	// It shows only while open, so the folder is listed when it opens and not before.
 	$effect(() => {
 		if (dialog && !dialog.open) dialog.showModal();
 	});
 </script>
 
-<!-- A narrow window has no room beside the conversation, so the files rise over it from the bottom, as the task list does. A tap on the backdrop, outside the content, closes them. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <dialog bind:this={dialog} class="sheet" aria-labelledby="{id}-title" onclose={onclose} onclick={(event) => event.target === dialog && onclose()}>
 	<div class="content">

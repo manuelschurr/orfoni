@@ -162,6 +162,7 @@ interface Waiter {
 type Send = (message: HubMessage) => void;
 type PermissionRequest = Extract<HookEvent, { type: 'permission_request' }>;
 type StopFailure = Extract<HookEvent, { type: 'stop_failure' }>;
+type ToolEnd = Extract<HookEvent, { type: 'tool_end' }>;
 
 const ClaudeConfig = z.object({
 	projects: z.record(z.string(), z.looseObject({ hasTrustDialogAccepted: z.boolean().optional() })).optional(),
@@ -453,14 +454,15 @@ export class Hub {
 		const mode = HookPermissionMode.safeParse(body);
 		if (mode.success) this.apply(session, { kind: 'permission_mode', mode: mode.data.permission_mode, at: Date.now() });
 		if (event.type === 'permission_request') return this.openRequest(session, event, closed);
-		// The copies come first, so the item that shows the call ended already says the hub has them.
-		if (event.type === 'tool_end' && holdsResponse(body)) {
-			const call = sentCall(event.input, event.output, event.cwd ?? session.projectDir);
-			if (call) await this.sent.keep(event.toolUseId, call);
-			if (this.sessions.get(session.id) !== session) return {};
-		}
-		this.receive(session, event);
+		if (event.type === 'tool_end' && holdsResponse(body)) await this.receiveAfterKeepingCopies(session, event);
+		else this.receive(session, event);
 		return {};
+	}
+
+	private async receiveAfterKeepingCopies(session: Session, event: ToolEnd): Promise<void> {
+		const call = sentCall(event.input, event.output, event.cwd ?? session.projectDir);
+		if (call) await this.sent.keep(event.toolUseId, call);
+		if (this.sessions.get(session.id) === session) this.receive(session, event);
 	}
 
 	// Claude Code reruns the status line every 10 s, so each problem with it is logged once.
@@ -581,7 +583,6 @@ export class Hub {
 		}
 	}
 
-	// The folder the session started in, which the explorer shows wherever Claude has gone since.
 	private async folderOf(ref: SessionRef): Promise<string> {
 		if (ref.kind === 'orfoni') return this.session(ref.sessionId).projectDir;
 		const other = (await this.refreshOthers()).find(({ session }) => session.pid === ref.pid);
@@ -589,7 +590,6 @@ export class Hub {
 		return other.session.projectDir;
 	}
 
-	// Every file a client names comes to bytes here and nowhere else.
 	private async fileSource(ref: FileRef): Promise<FileSource> {
 		return ref.kind === 'sent' ? this.sent.source(ref) : folderFile(await this.folderOf(ref.session), ref.path);
 	}
@@ -811,7 +811,7 @@ export class Hub {
 
 	private async openSession(client: Send, session: Session): Promise<{ session: SessionSummary; chat: ChatItem[] }> {
 		this.view(client, session.id);
-		return { session: summary(session), chat: await this.sent.show(await this.conversation(session), session.projectDir) };
+		return { session: summary(session), chat: await this.sent.showFromDisk(await this.conversation(session), session.projectDir) };
 	}
 
 	private async conversation(session: Session): Promise<ChatItem[]> {
@@ -859,7 +859,7 @@ export class Hub {
 
 	private async openOther(pid: number): Promise<{ session: OtherSession; chat: ChatItem[] }> {
 		const { session } = await this.other(pid);
-		return { session, chat: await this.sent.show(normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)), session.projectDir) };
+		return { session, chat: await this.sent.showFromDisk(normalizeHistory(await this.options.readHistory(session.claudeSessionId, session.projectDir)), session.projectDir) };
 	}
 
 	private view(client: Send, sessionId: SessionId | null): void {
@@ -1307,8 +1307,7 @@ export class Hub {
 		session.model = after;
 		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
-		// The model never holds what the hub says about sent files, only what it sends out.
-		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: this.sent.showLive(item, session.projectDir) });
+		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: this.sent.showFromMemory(item, session.projectDir) });
 		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.chat), body });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);

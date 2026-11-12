@@ -47,13 +47,11 @@ function shownState(page: Page, label: string) {
 	return page.getByRole('main').getByText(label, { exact: true });
 }
 
-// The browser build hands a file it opens to the browser as a download.
 async function download(page: Page, open: Locator): Promise<{ name: string; bytes: Buffer }> {
 	const [file] = await Promise.all([page.waitForEvent('download'), open.click()]);
 	return { name: file.suggestedFilename(), bytes: readFileSync(await file.path()) };
 }
 
-// Pictures of the views for a person to look over, kept with the run's other output.
 async function snap(page: Page, name: string): Promise<void> {
 	await page.screenshot({ path: test.info().outputPath(name) });
 }

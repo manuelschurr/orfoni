@@ -30,7 +30,6 @@ function contents(size: number): Uint8Array {
 	return Uint8Array.from({ length: size }, (_, index) => (index * 7) % 251);
 }
 
-// The piece the hub answers for a request, cut from the file's bytes.
 function piece(bytes: Uint8Array, offset: number, version = 'copy-1') {
 	return { size: bytes.length, version, data: Buffer.from(bytes.subarray(offset, offset + FILE_CHUNK_BYTES)).toString('base64') };
 }

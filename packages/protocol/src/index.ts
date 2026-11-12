@@ -136,10 +136,9 @@ export const Question = z.object({
 });
 export type Question = z.infer<typeof Question>;
 
-// The largest file the hub keeps a copy of and the app opens, one number for both, so a file the hub would not keep is one the app would not open either.
+// The largest file the hub keeps a copy of and the app opens.
 export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
-// Claude Code's tool use IDs, such as toolu_014JNaTw7XmbD3GUNEJNA486. The hub names a folder after one, so nothing else passes.
 export const ToolUseId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 
 // What a click on a file Claude sent would open, as the hub knew it when it sent the item. sending: the call still runs. kept: the copy the hub made when Claude sent it. original: the hub has no copy, and the file is on the VPS, as it is now. missing: no copy and no file. tooLarge: over MAX_FILE_BYTES, which the hub keeps no copy of and the app does not open.
@@ -152,9 +151,8 @@ export const SentFile = z.object({
 	path: z.string(),
 	// The size of the file a click would open, or null when the hub knows none.
 	size: z.number().int().min(0).nullable(),
-	// A kind of image the app can show inside the card.
 	image: z.boolean(),
-	// A state from a later hub reads as one worth a try.
+	// A state from a later hub reads as original.
 	state: SentFileState.catch('original'),
 });
 export type SentFile = z.infer<typeof SentFile>;
@@ -174,7 +172,7 @@ export const ChatItem = z.discriminatedUnion('kind', [
 		input: z.unknown().optional(),
 		status: z.enum(['running', 'done', 'failed']),
 		output: z.unknown().optional(),
-		// The files a SendUserFile call sent, which the hub reads from Claude Code's formats so that the app does not depend on them. An app from before this drops the key, and this app drops one it cannot read rather than the whole line.
+		// An app from before this drops the key. This app drops a sent it cannot read rather than the whole line, since a strict chat item made the installed 0.3.20 app fail to open sessions on 2026-11-06, so a later hub that changes what it says about sent files costs the app the card and never the line.
 		sent: SentFiles.optional().catch(undefined),
 	}),
 	z.object({
@@ -277,40 +275,35 @@ export function withUploadNames(text: string): string {
 		.join('');
 }
 
-// A file goes from the VPS to a device in pieces of at most this many bytes, one readFile request each, so a download holds up the other messages on the line by a piece or two at a time.
+// A readFile answer carries at most this many bytes of the file.
 export const FILE_CHUNK_BYTES = 256 * 1024;
 // A folder listing names at most this many entries and counts the rest.
 export const MAX_FOLDER_ENTRIES = 1000;
 
-// A session the app shows: one of orfoni's own, or one outside orfoni, which has no orfoni ID and is known by its process.
 export const SessionRef = z.discriminatedUnion('kind', [z.object({ kind: z.literal('orfoni'), sessionId: SessionId }), z.object({ kind: z.literal('other'), pid: z.number().int() })]);
 export type SessionRef = z.infer<typeof SessionRef>;
 
-// A place inside a session's folder: names joined by /, none of them empty, . or .., so only a symbolic link can lead out, which the hub checks. The empty path is the folder itself.
 export function isFolderPath(path: string): boolean {
 	return path === '' || path.split('/').every((name) => name !== '' && name !== '.' && name !== '..' && !name.includes('\0'));
 }
 
-// The explorer goes down a folder with this, so the app and the hub share one rule for what a folder path is.
 export function joinFolderPath(folder: string, name: string): string {
 	const path = folder === '' ? name : `${folder}/${name}`;
 	if (name === '' || name.includes('/') || !isFolderPath(path)) throw new Error(`${JSON.stringify(name)} is not the name of an entry in a folder`);
 	return path;
 }
 
+// Names joined by /, none of them empty, . or .., so only a symbolic link can lead out, which the hub checks. The empty path is the session's folder itself.
 export const FolderPath = z.string().max(4096).refine(isFolderPath, { message: 'a folder path is names joined by /, without . or ..' });
 
-// What a client names when it asks for a file's bytes.
 export const FileRef = z.discriminatedUnion('kind', [
 	// A file Claude sent: its call, its place in the call's files, and the path the hub reported for it, which the hub reads only when it kept no copy.
 	z.object({ kind: z.literal('sent'), toolUseId: ToolUseId, index: z.number().int().min(0).max(999), path: z.string().max(4096).regex(/^\/[^\0]*$/) }),
-	// A file in a session's folder.
 	z.object({ kind: z.literal('folder'), session: SessionRef, path: FolderPath.refine((path) => path !== '', { message: 'name a file, not the folder itself' }) }),
 ]);
 export type FileRef = z.infer<typeof FileRef>;
 export type SentRef = Extract<FileRef, { kind: 'sent' }>;
 
-// The app never builds the ref of a sent file by hand, so it always names the file the hub described.
 export function sentFileRef(toolUseId: string, index: number, file: SentFile): SentRef {
 	return { kind: 'sent', toolUseId, index, path: file.path };
 }

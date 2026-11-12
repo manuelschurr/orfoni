@@ -6,7 +6,6 @@
 	import FileRow from './FileRow.svelte';
 	import { folderName } from './format';
 
-	// `folder` is where the session started, which the hub lists the paths under.
 	let { client, session, folder }: { client: HubClient; session: SessionRef; folder: string } = $props();
 	let path = $state('');
 	let shown = $state.raw<{ kind: 'loading' } | { kind: 'listed'; listing: FolderListing } | { kind: 'failed'; text: string }>({ kind: 'loading' });
@@ -20,7 +19,6 @@
 		return (error as Partial<HubRequestError>).code === 'disconnected' ? 'The connection to the VPS dropped.' : (error as Error).message;
 	}
 
-	// Only the newest listing lands, since the hub answers in any order.
 	async function go(to: string): Promise<void> {
 		path = to;
 		shown = { kind: 'loading' };

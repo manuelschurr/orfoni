@@ -646,7 +646,6 @@ describe('orfoni-hub against real Claude Code sessions', () => {
 			expect(call).toMatchObject({ status: 'done', sent: { files: [{ name, path: join(dir, name), size: original.length, image: false, state: 'kept' }] } });
 			copies = join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'orfoni', 'sent', call.toolUseId);
 			expect(readFileSync(join(copies, '0'))).toEqual(original);
-			// The hub holds the call's PostToolUse until it has the copy, so Claude's next step comes after it.
 			const { keptAt } = JSON.parse(readFileSync(join(copies, 'call.json'), 'utf8')) as { keptAt: number };
 			const nextStep = () => {
 				const entries = transcriptOf(dir, claudeSessionId)

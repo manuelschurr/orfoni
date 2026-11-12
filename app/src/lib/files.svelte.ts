@@ -2,13 +2,10 @@ import { base64Bytes, FILE_CHUNK_BYTES, MAX_FILE_BYTES, type FileChunk, type Fil
 import type { DeviceFiles, SavedFile } from './device-files';
 import type { HubRequestError } from './hub-client.svelte';
 
-// The largest image a card shows inside itself. Its bytes sit decoded in the WebView, unlike those of a file that is opened.
 export const MAX_THUMBNAIL_BYTES = 4 * 1024 * 1024;
-// Pieces of every transfer and thumbnail together. Each piece is about 350 KB on the one line the hub shares with approvals and chat items, so this bounds how long a download can hold them up.
 const PIECES_IN_FLIGHT = 2;
 const THUMBNAILS_KEPT = 40;
 
-// Where opening a file has got. A row reads it and only FileTransfers writes it.
 export type Transfer =
 	| { kind: 'idle' }
 	| { kind: 'reading'; done: number; size: number | null }
@@ -23,10 +20,26 @@ const DROPPED = 'The connection to the VPS dropped. Click to try again.';
 
 const idle: Transfer = { kind: 'idle' };
 
-// A failure whose text is already what the row says.
-class Refusal extends Error {}
+class RowReason extends Error {}
 
-// The hub fails a method it does not know with bad_message. The app's own check of an answer fails with bad_answer, so that never reads as an older hub.
+class FirstComeSlots {
+	private readonly waiting: (() => void)[] = [];
+
+	constructor(private free: number) {}
+
+	async run<T>(work: () => Promise<T>): Promise<T> {
+		if (this.free > 0) this.free--;
+		else await new Promise<void>((resolve) => this.waiting.push(resolve));
+		try {
+			return await work();
+		} finally {
+			const next = this.waiting.shift();
+			if (next) next();
+			else this.free++;
+		}
+	}
+}
+
 export function isOlderHub(error: unknown): boolean {
 	return (error as Partial<HubRequestError>).code === 'bad_message';
 }
@@ -45,12 +58,10 @@ function decode(base64: string): Uint8Array<ArrayBuffer> {
 	return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
 
-// Every file that leaves the hub for this device goes through here: opened from a card or the explorer, or shown as a thumbnail.
 export class FileTransfers {
 	private transfers = $state.raw(new Map<string, Transfer>());
 	private readonly thumbnails = new Map<string, Promise<string | null>>();
-	private free = PIECES_IN_FLIGHT;
-	private readonly queue: (() => void)[] = [];
+	private readonly pieceSlots = new FirstComeSlots(PIECES_IN_FLIGHT);
 
 	constructor(
 		private readonly readFile: (file: FileRef, offset: number) => Promise<FileChunk>,
@@ -61,7 +72,7 @@ export class FileTransfers {
 		return this.transfers.get(refKey(ref)) ?? idle;
 	}
 
-	// Saves the file on the device and opens it there. Call it only from a click, since the browser build's download needs one.
+	// Call it only from a click, since a browser starts a download only on user activation.
 	async open(ref: FileRef, name: string): Promise<void> {
 		const key = refKey(ref);
 		const now = this.transfer(ref);
@@ -78,7 +89,6 @@ export class FileTransfers {
 		}
 	}
 
-	// An object URL of the file's bytes, or null for a file too large to show or that could not be read.
 	thumbnail(ref: FileRef, size: number | null): Promise<string | null> {
 		if (size === null || size > MAX_THUMBNAIL_BYTES) return Promise.resolve(null);
 		const key = refKey(ref);
@@ -113,41 +123,31 @@ export class FileTransfers {
 		}
 	}
 
-	// First come, first served, for every transfer and thumbnail together.
-	private async piece(ref: FileRef, offset: number): Promise<FileChunk> {
-		if (this.free > 0) this.free--;
-		else await new Promise<void>((resolve) => this.queue.push(resolve));
-		try {
-			return await this.readFile(ref, offset);
-		} finally {
-			const next = this.queue.shift();
-			if (next) next();
-			else this.free++;
-		}
+	private piece(ref: FileRef, offset: number): Promise<FileChunk> {
+		return this.pieceSlots.run(() => this.readFile(ref, offset));
 	}
 
-	// The first piece tells the size and version. Two workers then take the other offsets, and each piece goes to `take` at its offset in whatever order it arrives.
 	private async readAll(ref: FileRef, limit: number, tooLarge: string, take: (offset: number, data: string) => Promise<void> | void, progress?: (done: number, size: number) => void): Promise<number> {
 		const first = await this.piece(ref, 0);
-		if (first.size > limit) throw new Refusal(tooLarge);
+		if (first.size > limit) throw new RowReason(tooLarge);
 		await take(0, first.data);
 		let done = base64Bytes(first.data);
 		progress?.(done, first.size);
 		let next = FILE_CHUNK_BYTES;
+		let stopped = false;
 		const worker = async () => {
 			try {
-				while (next < first.size) {
+				while (!stopped && next < first.size) {
 					const offset = next;
 					next += FILE_CHUNK_BYTES;
 					const chunk = await this.piece(ref, offset);
-					if (chunk.version !== first.version) throw new Refusal(CHANGED);
+					if (chunk.version !== first.version) throw new RowReason(CHANGED);
 					await take(offset, chunk.data);
 					done += base64Bytes(chunk.data);
 					progress?.(done, first.size);
 				}
 			} catch (error) {
-				// The other worker stops after the piece it waits for.
-				next = first.size;
+				stopped = true;
 				throw error;
 			}
 		};

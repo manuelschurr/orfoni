@@ -18,7 +18,7 @@
 					.replace(/\.$/, '')
 			: '',
 	);
-	const closed: Partial<Record<SentFile['state'], string>> = {
+	const disabledBecause: Partial<Record<SentFile['state'], string>> = {
 		sending: 'Claude is still sending this file.',
 		missing: 'This file is gone from the VPS, and the hub kept no copy.',
 		tooLarge: TOO_LARGE,
@@ -40,7 +40,7 @@
 	<ul class="files">
 		{#each rows as { file, ref, thumbnail } (ref.index)}
 			<li>
-				<FileRow files={client.files} {ref} name={file.name} size={file.size} closed={closed[file.state] ?? null} note={notes[file.state] ?? null}>
+				<FileRow files={client.files} {ref} name={file.name} size={file.size} disabledBecause={disabledBecause[file.state] ?? null} note={notes[file.state] ?? null}>
 					{#if thumbnail}<Thumbnail files={client.files} {ref} size={file.size} name={file.name} />{/if}
 				</FileRow>
 			</li>

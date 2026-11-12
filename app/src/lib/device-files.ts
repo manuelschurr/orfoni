@@ -1,16 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { z } from 'zod';
 
-// Where a file went and how it reached the user. opened: the default app has it. revealed: a program, shown in its folder instead of run. noApp: saved, but the phone has no app for its type. downloaded: the browser build handed it to the browser.
 export type SavedFile = { folder: string; name: string; how: 'opened' | 'revealed' | 'noApp' | 'downloaded' };
 export type SavedHow = SavedFile['how'];
 
-// One file arriving. Writes go to explicit offsets, so they may arrive in any order and the same piece may come twice.
 export interface DeviceFile {
 	write(offset: number, base64: string): Promise<void>;
-	// Cuts the file to `size`, saves it and opens it with the device's default app.
 	finish(size: number): Promise<SavedFile>;
-	// Drops what arrived so far. The app's part file stays until a download an hour later removes it.
 	discard(): void;
 }
 
@@ -18,10 +14,9 @@ export interface DeviceFiles {
 	begin(name: string): DeviceFile;
 }
 
-// What file_finish in downloads.rs answers.
 const Finished = z.object({ folder: z.string(), name: z.string(), how: z.enum(['opened', 'revealed', 'noApp']) });
 
-// Rust's errors arrive as bare strings.
+// Tauri rejects a command's Err(String) as a bare string.
 function failure(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
 }
@@ -45,7 +40,6 @@ export const tauriDeviceFiles: DeviceFiles = {
 	},
 };
 
-// The pieces of one file held in memory, for the browser build and the fake.
 class Pieces {
 	private readonly pieces = new Map<number, Uint8Array>();
 
@@ -70,7 +64,7 @@ class Pieces {
 	}
 }
 
-// The browser build, for development and the Playwright checks: a blob URL behind an <a download>, which Playwright sees as a download. Android's WebView has no handler for this, which is why the app never uses it.
+// Android's WebView does nothing with an <a download> of a blob URL, so only the browser build uses this.
 export const browserDeviceFiles: DeviceFiles = {
 	begin(name) {
 		const pieces = new Pieces();
@@ -97,7 +91,6 @@ export const browserDeviceFiles: DeviceFiles = {
 	},
 };
 
-// For tests: keeps each finished file's bytes, answers with `how`, or fails every finish with `failure` while it is set.
 export class FakeDeviceFiles implements DeviceFiles {
 	readonly saved: { name: string; bytes: Uint8Array }[] = [];
 	readonly discarded: string[] = [];

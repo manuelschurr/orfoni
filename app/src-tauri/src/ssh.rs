@@ -148,7 +148,7 @@ impl Connection {
             read,
             write,
             pending: Vec::new(),
-            scanned: 0,
+            newline_free_len: 0,
             stderr: Vec::new(),
             exit_status: None,
         })
@@ -173,8 +173,7 @@ pub struct HubChannel {
     read: ChannelReadHalf,
     write: ChannelWriteHalf<Msg>,
     pending: Vec<u8>,
-    // How much of `pending` is known to hold no line end, so a line that arrives in many packets is scanned once.
-    scanned: usize,
+    newline_free_len: usize,
     stderr: Vec<u8>,
     exit_status: Option<u32>,
 }
@@ -182,16 +181,16 @@ pub struct HubChannel {
 impl HubChannel {
     pub async fn next_line(&mut self) -> Result<String, SshError> {
         loop {
-            if let Some(at) = self.pending[self.scanned..]
+            if let Some(at) = self.pending[self.newline_free_len..]
                 .iter()
                 .position(|&byte| byte == b'\n')
             {
-                let end = self.scanned + at;
+                let end = self.newline_free_len + at;
                 let line: Vec<u8> = self.pending.drain(..=end).collect();
-                self.scanned = 0;
+                self.newline_free_len = 0;
                 return Ok(String::from_utf8_lossy(&line[..end]).into_owned());
             }
-            self.scanned = self.pending.len();
+            self.newline_free_len = self.pending.len();
             match self.read.wait().await {
                 Some(ChannelMsg::Data { data }) => self.pending.extend_from_slice(&data),
                 Some(ChannelMsg::ExtendedData { data, .. }) if self.stderr.len() < STDERR_LIMIT => {

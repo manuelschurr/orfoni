@@ -158,17 +158,15 @@ export function fileSize(size: number): string {
 	return size < MB ? `${Math.round(size / KB)} KB` : `${(size / MB).toFixed(1)} MB`;
 }
 
-// How much of a file has arrived, in the unit of its size, as in "1.2 of 3.4 MB".
 export function fileProgress(done: number, size: number): string {
 	const part = size < KB ? String(done) : size < MB ? String(Math.round(done / KB)) : (done / MB).toFixed(1);
 	return `${part} of ${fileSize(size)}`;
 }
 
-// `name` is the name the file was opened under, which the device may have changed to one not taken yet.
-export function savedText({ folder, name: saved, how }: SavedFile, name: string): string {
+export function savedText({ folder, name: saved, how }: SavedFile, requestedName: string): string {
 	switch (how) {
 		case 'opened':
-			return saved === name ? `Opened ${saved} from ${folder}.` : `Saved to ${folder} as ${saved} and opened it.`;
+			return saved === requestedName ? `Opened ${saved} from ${folder}.` : `Saved to ${folder} as ${saved} and opened it.`;
 		case 'revealed':
 			return `Saved ${saved} to ${folder} and showed it in its folder, since orfoni does not run programs.`;
 		case 'noApp':
@@ -337,7 +335,6 @@ function phrases(tools: { name: string }[], tense: Tense): string {
 	return said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said.at(-1)}` : (said[0] ?? '');
 }
 
-// What the working line says while a call runs, when the hub does not know the line Claude Code shows.
 export function runningTool(name: string): string {
 	return kindOf(name) === 'send' ? capitalize(toolWords.send.doing(1)) : `Running ${name}`;
 }

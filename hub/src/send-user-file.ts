@@ -1,13 +1,11 @@
 import { isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 
-// Everything the hub knows about the formats of Claude Code's SendUserFile, measured on Claude Code 2.1.322, so that a change in them is fixed in the hub alone and not in the apps.
+// Claude Code's SendUserFile formats are undocumented. These are as measured on Claude Code 2.1.322.
 export const SEND_USER_FILE = 'SendUserFile';
 
-// What one call sent: one file per path of its input, in that order.
 export interface SentCall {
 	caption: string | null;
-	// The call asked for display: "render", so the card shows its images.
 	render: boolean;
 	files: { path: string; size: number | null }[];
 }
@@ -25,8 +23,8 @@ function resultText(output: unknown): string {
 	return blocks.success ? blocks.data.map((block) => block.text ?? '').join('\n') : '';
 }
 
-// Which of the paths Claude Code reported is the input path at `index`: the same path, else the one in the same place when it reported one per input path, as after Claude moved to another folder, else the only one that ends in a relative input path.
-function reported(paths: string[], input: string[], index: number, guess: string): number {
+// Claude Code resolves a relative input path against its working directory at the time of the call, which may no longer be the session's, so a reported path matches by equality, then by position when it reported one per input path, then by a unique suffix.
+function matchByPathPlaceOrSuffix(paths: string[], input: string[], index: number, guess: string): number {
 	const same = paths.indexOf(guess);
 	if (same !== -1) return same;
 	if (paths.length === input.length) return index;
@@ -36,7 +34,6 @@ function reported(paths: string[], input: string[], index: number, guess: string
 	return ends.length === 1 ? ends[0]! : -1;
 }
 
-// Null when the input is not one of SendUserFile that this hub reads, and the chat then shows the call as any other tool. `cwd` resolves a relative path Claude Code reported no resolved path for.
 export function sentCall(input: unknown, output: unknown, cwd: string): SentCall | null {
 	const parsed = Input.safeParse(input);
 	if (!parsed.success) return null;
@@ -49,7 +46,7 @@ export function sentCall(input: unknown, output: unknown, cwd: string): SentCall
 		render: display === 'render',
 		files: files.map((file, index) => {
 			const guess = isAbsolute(file) ? normalize(file) : resolve(cwd, file);
-			const found = attachments[reported(paths, files, index, guess)];
+			const found = attachments[matchByPathPlaceOrSuffix(paths, files, index, guess)];
 			return { path: found?.path ?? guess, size: found?.size ?? null };
 		}),
 	};

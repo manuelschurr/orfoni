@@ -12,17 +12,13 @@ use serde::{Deserialize, Serialize};
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Part files live in <app cache dir>/downloads/<token>.part until file_finish saves their bytes where the user finds them.
 const PARTS: &str = "downloads";
-/// A part this old belongs to a download that was given up, and the next download removes it.
 const PART_LIFETIME: Duration = Duration::from_secs(3600);
-/// Types Windows runs rather than shows. A click on a file Claude built must not run it, so these are shown in their folder instead.
 #[cfg(desktop)]
 const PROGRAM_TYPES: [&str; 17] = [
     "exe", "msi", "msix", "appx", "bat", "cmd", "com", "scr", "ps1", "vbs", "js", "jse", "wsf", "hta", "lnk", "reg", "cpl",
 ];
 
-/// How a saved file reached the user: opened in its default app, shown in its folder because it is a program, or saved where the phone has no app for it. Mirrors SavedFile in app/src/lib/device-files.ts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum How {
@@ -31,7 +27,6 @@ pub enum How {
     NoApp,
 }
 
-/// Where a file went, as the user would look for it.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedFile {
     pub folder: String,
@@ -39,20 +34,19 @@ pub struct SavedFile {
     pub how: How,
 }
 
-/// Writes one piece, still in base64, at its offset into the part file for `token`. The same piece twice writes the same bytes, and pieces may come in any order.
 #[tauri::command]
 pub async fn file_write(app: AppHandle, token: String, offset: u64, data: String) -> Result<(), String> {
     let dir = parts_dir(&app)?;
+    let token = Token::parse(&token)?;
     blocking(move || write_piece(&dir, &token, offset, &data)).await
 }
 
-/// Cuts the part to `size`, saves it under `name` where the device keeps downloads, opens it, and removes the part.
 #[tauri::command]
 pub async fn file_finish(app: AppHandle, token: String, name: String, size: u64) -> Result<SavedFile, String> {
     let dir = parts_dir(&app)?;
+    let part = Token::parse(&token)?.part_in(&dir);
     blocking(move || {
-        let part = part_path(&dir, &token)?;
-        let saved = cut(&part, size).and_then(|()| save_and_open(&app, &part, &safe_name(&name)));
+        let saved = truncate_to_size(&part, size).and_then(|()| save_and_open(&app, &part, &safe_name(&name)));
         let _ = fs::remove_file(&part);
         saved
     })
@@ -69,8 +63,8 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + 
     tauri::async_runtime::spawn_blocking(work).await.map_err(|error| error.to_string())?
 }
 
-fn write_piece(dir: &Path, token: &str, offset: u64, data: &str) -> Result<(), String> {
-    let part = part_path(dir, token)?;
+fn write_piece(dir: &Path, token: &Token, offset: u64, data: &str) -> Result<(), String> {
+    let part = token.part_in(dir);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|error| format!("A piece of the file was not base64: {error}"))?;
     if offset == 0 {
         prune_parts(dir, PART_LIFETIME);
@@ -83,14 +77,21 @@ fn write_piece(dir: &Path, token: &str, offset: u64, data: &str) -> Result<(), S
     write().map_err(|error| format!("Writing the file on this device failed: {error}"))
 }
 
-/// Only lowercase UUIDs, which device-files.ts makes with crypto.randomUUID(), so a token cannot name a path.
-fn part_path(dir: &Path, token: &str) -> Result<PathBuf, String> {
-    let groups: Vec<&str> = token.split('-').collect();
-    let uuid = groups.iter().map(|group| group.len()).eq([8, 4, 4, 4, 12]) && groups.iter().all(|group| group.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
-    if !uuid {
-        return Err(format!("{token:?} is not a download token."));
+struct Token(String);
+
+impl Token {
+    fn parse(token: &str) -> Result<Token, String> {
+        let groups: Vec<&str> = token.split('-').collect();
+        let uuid = groups.iter().map(|group| group.len()).eq([8, 4, 4, 4, 12]) && groups.iter().all(|group| group.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+        if !uuid {
+            return Err(format!("{token:?} is not a download token."));
+        }
+        Ok(Token(token.to_owned()))
     }
-    Ok(dir.join(format!("{token}.part")))
+
+    fn part_in(&self, dir: &Path) -> PathBuf {
+        dir.join(format!("{}.part", self.0))
+    }
 }
 
 fn prune_parts(dir: &Path, older_than: Duration) {
@@ -103,8 +104,7 @@ fn prune_parts(dir: &Path, older_than: Duration) {
     }
 }
 
-/// A piece that came again after a restart may have written past the end, and a piece that never came leaves the part short.
-fn cut(part: &Path, size: u64) -> Result<(), String> {
+fn truncate_to_size(part: &Path, size: u64) -> Result<(), String> {
     let file = OpenOptions::new().create(true).truncate(false).write(true).open(part).map_err(|error| format!("Reading the downloaded file failed: {error}"))?;
     let len = file.metadata().map_err(|error| error.to_string())?.len();
     if len < size {
@@ -113,7 +113,7 @@ fn cut(part: &Path, size: u64) -> Result<(), String> {
     file.set_len(size).map_err(|error| format!("Writing the file on this device failed: {error}"))
 }
 
-/// A name every platform takes: path separators, control characters and <>:"|?* become _, trailing dots and spaces go, a Windows device name (CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9, with any extension) gets a _ in front, at most 200 bytes keeping the extension, and an empty result becomes "file".
+/// Windows refuses <>:"|?* and trailing dots and spaces in a name, and reserves CON, PRN, AUX, NUL, COM1 to COM9 and LPT1 to LPT9 with any extension.
 pub fn safe_name(name: &str) -> String {
     const MAX: usize = 200;
     let replaced: String = name.chars().map(|c| if c.is_control() || "/\\<>:\"|?*".contains(c) { '_' } else { c }).collect();
@@ -138,7 +138,6 @@ fn prefix(text: &str, max: usize) -> &str {
     &text[..end]
 }
 
-/// The stem and the extension with its dot. A leading dot is part of the stem, so ".env" has no extension.
 fn split_extension(name: &str) -> (&str, &str) {
     match name.rfind('.') {
         Some(at) if at > 0 => name.split_at(at),
@@ -146,7 +145,6 @@ fn split_extension(name: &str) -> (&str, &str) {
     }
 }
 
-/// "name.ext" for 0, "name (n).ext" after, as a browser numbers its downloads.
 #[cfg(desktop)]
 fn numbered(name: &str, n: u32) -> String {
     if n == 0 {
@@ -162,7 +160,6 @@ fn is_program(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, extension)| PROGRAM_TYPES.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
-/// Opening a saved file, behind a trait so the tests can see whether a file was opened or shown in its folder.
 #[cfg(desktop)]
 trait Opener {
     fn open(&self, path: &Path) -> Result<(), String>;
@@ -172,7 +169,7 @@ trait Opener {
 #[cfg(desktop)]
 fn save_into(dir: &Path, part: &Path, name: &str, opener: &impl Opener) -> Result<SavedFile, String> {
     let folder = dir.file_name().map_or_else(|| dir.display().to_string(), |name| name.to_string_lossy().into_owned());
-    let path = place(dir, part, name).map_err(|error| format!("Saving {name} to {folder} failed: {error}"))?;
+    let path = place_or_reuse_same_bytes(dir, part, name).map_err(|error| format!("Saving {name} to {folder} failed: {error}"))?;
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let how = if is_program(&name) {
         opener.reveal(&path).map_err(|error| format!("Saved {name} to {folder}, but showing it in its folder failed: {error}"))?;
@@ -184,9 +181,8 @@ fn save_into(dir: &Path, part: &Path, name: &str, opener: &impl Opener) -> Resul
     Ok(SavedFile { folder, name, how })
 }
 
-/// Puts the part's bytes into `dir` under the first free numbered name. A taken name that already holds the same bytes is the file to open, so a second click on a file does not save it again. create_new takes a name only if nobody has it, so two downloads of one name at once cannot share it.
 #[cfg(desktop)]
-fn place(dir: &Path, part: &Path, name: &str) -> io::Result<PathBuf> {
+fn place_or_reuse_same_bytes(dir: &Path, part: &Path, name: &str) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let mut source = File::open(part)?;
     for n in 0..1000 {
@@ -232,7 +228,7 @@ fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
     }
 }
 
-/// Desktop: the user's Downloads folder, then the default app through the opener's open_path, which the opener's JS scope does not cover and so needs no capability. A file no app takes makes Windows ask which app to use, so it counts as opened.
+/// The opener's open_path is outside the opener's JS scope, so it needs no capability. A file no app takes makes Windows ask which app to use, so it counts as opened.
 #[cfg(desktop)]
 fn save_and_open<R: Runtime>(app: &AppHandle<R>, part: &Path, name: &str) -> Result<SavedFile, String> {
     let dir = app.path().download_dir().map_err(|error| error.to_string())?;
@@ -254,7 +250,7 @@ impl<R: Runtime> Opener for SystemOpener<'_, R> {
     }
 }
 
-/// Windows marks a browser's downloads as coming from the internet, which makes Office open them in Protected View and SmartScreen check a program before it runs. A saved file gets the same mark.
+/// Windows marks a browser's downloads with a Zone.Identifier stream, which makes Office open them in Protected View and SmartScreen check a program before it runs, so a saved file gets the same mark.
 #[cfg(windows)]
 fn mark_from_internet(path: &Path) {
     let mut stream = path.as_os_str().to_owned();
@@ -267,7 +263,6 @@ fn mark_from_internet(path: &Path) {
 #[cfg(all(desktop, not(windows)))]
 fn mark_from_internet(_path: &Path) {}
 
-/// Android: DownloadsPlugin.kt copies the part into the shared Download/orfoni folder through MediaStore and starts the app for its type.
 #[cfg(target_os = "android")]
 fn save_and_open<R: Runtime>(app: &AppHandle<R>, part: &Path, name: &str) -> Result<SavedFile, String> {
     #[derive(Serialize)]
@@ -285,7 +280,6 @@ fn save_and_open<R: Runtime>(app: &AppHandle<R>, part: &Path, name: &str) -> Res
 #[cfg(target_os = "android")]
 struct Downloads<R: Runtime>(tauri::plugin::PluginHandle<R>);
 
-/// Registers DownloadsPlugin.kt on Android, the way background.rs registers BackgroundPlugin.kt. Other platforms need nothing.
 pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("downloads")
         .setup(|_app, _api| {
@@ -317,6 +311,10 @@ mod tests {
 
     const TOKEN: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
+    fn token() -> Token {
+        Token::parse(TOKEN).unwrap()
+    }
+
     fn encode(bytes: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
@@ -337,11 +335,11 @@ mod tests {
     fn pieces_written_out_of_order_and_twice_give_the_whole_file() {
         let dir = tempfile::tempdir().unwrap();
 
-        write_piece(dir.path(), TOKEN, 6, &encode(b"world")).unwrap();
-        write_piece(dir.path(), TOKEN, 0, &encode(b"hello ")).unwrap();
-        write_piece(dir.path(), TOKEN, 6, &encode(b"world")).unwrap();
-        let part = part_path(dir.path(), TOKEN).unwrap();
-        cut(&part, 11).unwrap();
+        write_piece(dir.path(), &token(), 6, &encode(b"world")).unwrap();
+        write_piece(dir.path(), &token(), 0, &encode(b"hello ")).unwrap();
+        write_piece(dir.path(), &token(), 6, &encode(b"world")).unwrap();
+        let part = token().part_in(dir.path());
+        truncate_to_size(&part, 11).unwrap();
 
         assert_eq!(fs::read(&part).unwrap(), b"hello world");
     }
@@ -350,7 +348,7 @@ mod tests {
     fn a_piece_that_is_not_base64_is_refused() {
         let dir = tempfile::tempdir().unwrap();
 
-        assert!(write_piece(dir.path(), TOKEN, 0, "not base64!").is_err());
+        assert!(write_piece(dir.path(), &token(), 0, "not base64!").is_err());
     }
 
     #[test]
@@ -358,17 +356,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let part = part_with(dir.path(), b"hello world, again");
 
-        cut(&part, 11).unwrap();
+        truncate_to_size(&part, 11).unwrap();
         assert_eq!(fs::read(&part).unwrap(), b"hello world");
-        assert!(cut(&part, 12).is_err());
+        assert!(truncate_to_size(&part, 12).is_err());
     }
 
     #[test]
     fn an_empty_file_finishes_without_any_piece() {
         let dir = tempfile::tempdir().unwrap();
-        let part = part_path(dir.path(), TOKEN).unwrap();
+        let part = token().part_in(dir.path());
 
-        cut(&part, 0).unwrap();
+        truncate_to_size(&part, 0).unwrap();
 
         assert_eq!(fs::read(&part).unwrap(), b"");
     }
@@ -377,9 +375,9 @@ mod tests {
     fn a_token_that_is_not_a_lowercase_uuid_names_no_part() {
         let dir = tempfile::tempdir().unwrap();
 
-        assert_eq!(part_path(dir.path(), TOKEN).unwrap(), dir.path().join(format!("{TOKEN}.part")));
+        assert_eq!(token().part_in(dir.path()), dir.path().join(format!("{TOKEN}.part")));
         for token in ["", "../x", "0F8FAD5B-D9CB-469F-A165-70867728950E", "0f8fad5b-d9cb-469f-a165-70867728950", "0f8fad5b/d9cb-469f-a165-70867728950e"] {
-            assert!(part_path(dir.path(), token).is_err(), "{token:?}");
+            assert!(Token::parse(token).is_err(), "{token:?}");
         }
     }
 
@@ -389,9 +387,9 @@ mod tests {
         let old = part_with(dir.path(), b"old");
         File::options().write(true).open(&old).unwrap().set_modified(SystemTime::now() - Duration::from_secs(7200)).unwrap();
         let other = "1f8fad5b-d9cb-469f-a165-70867728950e";
-        write_piece(dir.path(), other, 0, &encode(b"fresh")).unwrap();
+        write_piece(dir.path(), &Token::parse(other).unwrap(), 0, &encode(b"fresh")).unwrap();
 
-        write_piece(dir.path(), TOKEN, 0, &encode(b"new")).unwrap();
+        write_piece(dir.path(), &token(), 0, &encode(b"new")).unwrap();
 
         assert_eq!(names(dir.path()), [format!("{TOKEN}.part"), format!("{other}.part")]);
     }

@@ -132,11 +132,11 @@ export function hookName(body: unknown): string {
 	return typeof body === 'object' && body !== null && 'hook_event_name' in body && typeof body.hook_event_name === 'string' ? body.hook_event_name : '';
 }
 
-const KeepsCopy = z.object({ hook_event_name: z.literal('PostToolUse'), tool_name: z.literal(SEND_USER_FILE), agent_id: z.never().optional() });
+const MainSendUserFileEnd = z.object({ hook_event_name: z.literal('PostToolUse'), tool_name: z.literal(SEND_USER_FILE), agent_id: z.never().optional() });
 
-// The hooks whose answer waits until the hub has acted on them: a request until it is decided, and the end of a call of the main conversation that sent files until the hub has its copies, so Claude cannot change a file before the hub has it.
+// Claude Code waits for a hook's answer before it goes on, so holding the main conversation's SendUserFile PostToolUse until the hub has its copies keeps Claude from changing a file first.
 export function holdsResponse(body: unknown): boolean {
-	return hookName(body) === 'PermissionRequest' || KeepsCopy.safeParse(body).success;
+	return hookName(body) === 'PermissionRequest' || MainSendUserFileEnd.safeParse(body).success;
 }
 
 export function parseHookEvent(hookName: string, body: unknown): HookEvent {
