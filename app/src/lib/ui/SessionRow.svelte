@@ -1,15 +1,15 @@
 <script lang="ts">
 	import type { SessionSummary } from '@orfoni/protocol';
 	import { lastActive } from '../hub-client.svelte';
-	import { oomKills, relativeTime, rowMemory, sessionState, shortTime, tasksDone } from './format';
+	import { continuesAt, oomKills, relativeTime, rowMemory, sessionState, shortTime, tasksDone } from './format';
 
 	let { session, title, selected, now, onselect }: { session: SessionSummary; title: string; selected: boolean; now: number; onselect: () => void } = $props();
 	const unread = $derived(session.state === 'answered');
 	const memory = $derived(rowMemory(session.memory));
 	const kills = $derived(session.memory?.oomKills ?? 0);
 	const about = $derived(session.summary?.about);
-	// When orfoni sends continue to a session that ran into a plan limit, so the list tells it from one that needs you.
-	const continues = $derived(session.limit?.continuesAt ?? null);
+	// When orfoni sends continue to a session that ran into a plan limit or an API error, so the list tells it from one that needs you.
+	const continues = $derived(continuesAt(session));
 </script>
 
 <button class="row" class:unread data-session={session.id} aria-current={selected ? 'true' : undefined} onclick={onselect}>
@@ -23,7 +23,7 @@
 		{#if about || session.tasks || memory || continues !== null}
 			<span class="line second">
 				<span class="about" title={about}>{about ?? ''}</span>
-				{#if continues !== null}<span class="chip" title="orfoni sends continue once the limit has reset">continues {shortTime(continues, now)}</span>{/if}
+				{#if continues !== null}<span class="chip" title={session.limit ? 'orfoni sends continue once the limit has reset' : 'orfoni sends continue after the API error'}>continues {shortTime(continues, now)}</span>{/if}
 				{#if session.tasks}
 					<span class="chip"><span aria-hidden="true">{session.tasks.done}/{session.tasks.total}</span><span class="sr-only">, {tasksDone(session.tasks)}</span></span>
 				{/if}

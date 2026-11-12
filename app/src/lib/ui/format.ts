@@ -56,9 +56,10 @@ export const stateLabel: Record<SessionStateKind, string> = {
 	failed: 'Failed',
 };
 
-// A turn that ran into a plan limit failed, but on nothing that is wrong with the session.
+// A turn that ran into a plan limit or an API error a continue gets past failed, but on nothing that is wrong with the session.
 export function sessionState(session: SessionSummary): string {
-	return session.state === 'failed' && session.limit ? 'Limit reached' : stateLabel[session.state];
+	if (session.state !== 'failed') return stateLabel[session.state];
+	return session.limit ? 'Limit reached' : session.apiError ? 'API error' : stateLabel.failed;
 }
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
@@ -79,6 +80,16 @@ export function limitNote(limit: NonNullable<SessionSummary['limit']>, now: numb
 	if (limit.resetsAt === null) return null;
 	const reset = `The limit ${limit.resetsAt > now ? 'resets' : 'reset'} ${atTime(limit.resetsAt, now)}.`;
 	return limit.continuesAt === null ? reset : `${reset} orfoni sends continue ${atTime(limit.continuesAt, now)}.`;
+}
+
+// When orfoni sends continue to a session whose turn ended on an API error, or null once it sends no more, which the chat says.
+export function apiErrorNote(apiError: NonNullable<SessionSummary['apiError']>, now: number): string | null {
+	return apiError.continuesAt === null ? null : `orfoni sends continue ${atTime(apiError.continuesAt, now)}.`;
+}
+
+// When orfoni sends continue to a session, after a plan limit or an API error, or null when it sends none.
+export function continuesAt(session: SessionSummary): number | null {
+	return session.limit?.continuesAt ?? session.apiError?.continuesAt ?? null;
 }
 
 // A time of day in minutes after midnight as a time field holds it, 05:30, and back, or null for what is no time of day.

@@ -1,7 +1,7 @@
 import type { ChatItem } from '@orfoni/protocol';
 import { expect, test } from 'vitest';
 import { summary } from '../testing';
-import { atTime, conversationPrompt, conversationTitle, limitNote, minutesOfDay, sessionState, sessionTitle, shortTime, timeOfDay, windowStartNote } from './format';
+import { apiErrorNote, atTime, continuesAt, conversationPrompt, conversationTitle, limitNote, minutesOfDay, sessionState, sessionTitle, shortTime, timeOfDay, windowStartNote } from './format';
 
 const user = (text: string): ChatItem => ({ kind: 'user', id: text, text, at: 1000 });
 
@@ -40,9 +40,22 @@ test('a session that ran into a plan limit says when the limit resets and when o
 	expect(limitNote({ resetsAt: null, continuesAt: null }, now)).toBeNull();
 });
 
-test('a failed session reads as failed, and as having reached a limit when that is what failed the turn', () => {
+test('a session whose turn ended on an API error says when orfoni sends continue, and nothing once it sends no more', () => {
+	expect(apiErrorNote({ continuesAt: at(21, 13) }, at(21, 12))).toBe('orfoni sends continue at 21:13.');
+	expect(apiErrorNote({ continuesAt: null }, at(21, 12))).toBeNull();
+});
+
+test('orfoni sends continue at the time a limit or an API error names, and at none otherwise', () => {
+	expect(continuesAt(summary('s1', 'failed', { limit: { resetsAt: 100, continuesAt: 160 } }))).toBe(160);
+	expect(continuesAt(summary('s1', 'failed', { apiError: { continuesAt: 30 } }))).toBe(30);
+	expect(continuesAt(summary('s1', 'failed', { apiError: { continuesAt: null } }))).toBeNull();
+	expect(continuesAt(summary('s1', 'failed'))).toBeNull();
+});
+
+test('a failed session reads as failed, and as having reached a limit or hit an API error when that is what failed the turn', () => {
 	expect(sessionState(summary('s1', 'failed'))).toBe('Failed');
 	expect(sessionState(summary('s1', 'failed', { limit: { resetsAt: null, continuesAt: null } }))).toBe('Limit reached');
+	expect(sessionState(summary('s1', 'failed', { apiError: { continuesAt: null } }))).toBe('API error');
 	expect(sessionState(summary('s1', 'working'))).toBe('Working');
 });
 

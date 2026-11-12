@@ -91,6 +91,18 @@ test('a session that ran into a plan limit says so, with when the limit resets a
 	expect(screen.getByText('Working')).toBeTruthy();
 });
 
+test('a session whose turn ended on an API error says so, with when orfoni sends continue, until it works again', async () => {
+	const continuesAt = Date.now() + 30_000;
+	const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(continuesAt);
+	const { report } = await header({ state: 'failed', apiError: { continuesAt } });
+	expect(screen.getByText('API error')).toBeTruthy();
+	expect(screen.getByRole('status').textContent).toBe(`orfoni sends continue at ${clock}.`);
+	report({ apiError: { continuesAt: null } });
+	await vi.waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+	report({ state: 'working', apiError: null });
+	await vi.waitFor(() => expect(screen.getByText('Working')).toBeTruthy());
+});
+
 test('a session that never created a task, has no summary, and reports no memory, model, or effort shows none of them', async () => {
 	await header({});
 	expect(screen.queryByRole('progressbar')).toBeNull();
