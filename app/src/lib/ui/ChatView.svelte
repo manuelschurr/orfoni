@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ChatItem, SessionSummary } from '@orfoni/protocol';
+	import type { ChatItem, SentFiles, SessionSummary } from '@orfoni/protocol';
 	import type { Snippet } from 'svelte';
 	import { itemKey, type HubClient } from '../hub-client.svelte';
 	import ApprovalCard from './ApprovalCard.svelte';
@@ -7,6 +7,7 @@
 	import PeerMessage from './PeerMessage.svelte';
 	import PlanCard from './PlanCard.svelte';
 	import QuestionCard from './QuestionCard.svelte';
+	import SentFilesCard from './SentFilesCard.svelte';
 	import ToolGroup from './ToolGroup.svelte';
 	import WorkingIndicator from './WorkingIndicator.svelte';
 
@@ -32,15 +33,19 @@
 		return false;
 	}
 
-	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added.
+	type Tool = Extract<ChatItem, { kind: 'tool' }>;
+	type Segment = { kind: 'tools'; key: string; tools: Tool[] } | { kind: 'sent'; key: string; item: Tool & { sent: SentFiles } } | { kind: 'item'; key: string; item: ChatItem };
+
+	// A run of tool calls is one group, keyed by its first call so it stays open while calls are added. Files Claude sends are something to see, so they break the run as a card of their own.
 	const segments = $derived.by(() => {
-		const groups: ({ kind: 'tools'; key: string; tools: Extract<ChatItem, { kind: 'tool' }>[] } | { kind: 'item'; key: string; item: ChatItem })[] = [];
+		const groups: Segment[] = [];
 		const items = chat ?? [];
 		for (const [index, item] of items.entries()) {
 			const last = groups.at(-1);
 			const card = item.kind === 'tool' ? cardOf[item.name] : undefined;
 			if (card && hasCard(items, index, card)) continue;
 			if (item.kind !== 'tool') groups.push({ kind: 'item', key: itemKey(item), item });
+			else if (item.sent) groups.push({ kind: 'sent', key: itemKey(item), item: { ...item, sent: item.sent } });
 			else if (last?.kind === 'tools') last.tools.push(item);
 			else groups.push({ kind: 'tools', key: `tools-${item.toolUseId}`, tools: [item] });
 		}
@@ -81,6 +86,8 @@
 			{#each segments as segment (segment.key)}
 				{#if segment.kind === 'tools'}
 					<div class="item" data-kind="tools"><ToolGroup tools={segment.tools} /></div>
+				{:else if segment.kind === 'sent'}
+					<div class="item" data-kind="sent"><SentFilesCard {client} item={segment.item} /></div>
 				{:else}
 					{@const item = segment.item}
 					<div class="item" data-kind={item.kind}>
@@ -135,8 +142,8 @@
 		margin-top: 1.1rem;
 	}
 
-	.item[data-kind='tool'] + .item[data-kind='tool'] {
-		margin-top: 0.4rem;
+	.item[data-kind='sent'] + .item[data-kind='sent'] {
+		margin-top: 0.6rem;
 	}
 
 	.state {

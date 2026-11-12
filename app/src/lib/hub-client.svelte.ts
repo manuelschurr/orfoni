@@ -26,7 +26,9 @@ import {
 	type SessionRef,
 } from '@orfoni/protocol';
 import { z } from 'zod';
+import type { DeviceFiles } from './device-files';
 import { Drafts } from './drafts.svelte';
+import { FileTransfers } from './files.svelte';
 import type { ConnectionStatus, HubTransport } from './transport';
 
 type Method = ClientRequest['method'];
@@ -65,8 +67,9 @@ const results = {
 export type Result<M extends Method> = z.infer<(typeof results)[M]>;
 
 export class HubRequestError extends Error {
+	// disconnected: the request never got an answer. bad_answer: the answer did not match the protocol, which bad_message from the hub, about a request it could not read, is kept apart from.
 	constructor(
-		readonly code: ErrorCode | 'disconnected',
+		readonly code: ErrorCode | 'disconnected' | 'bad_answer',
 		message: string,
 	) {
 		super(message);
@@ -207,6 +210,8 @@ export class HubClient {
 	releaseHints = $state(0);
 	// What each session's message box holds while it is closed.
 	readonly drafts = new Drafts();
+	// Saving and opening the files Claude sent and those in a session's folder.
+	readonly files: FileTransfers;
 	projects = $derived(groupProjects(this.sessions.values(), this.others));
 
 	private readonly transport: HubTransport;
@@ -216,8 +221,9 @@ export class HubClient {
 	private otherLoads = 0;
 	private readonly listedCommands = new Set<string>();
 
-	constructor(transport: HubTransport) {
+	constructor(transport: HubTransport, devices: DeviceFiles) {
 		this.transport = transport;
+		this.files = new FileTransfers((file, offset) => this.readFile(file, offset), devices);
 		transport.onStatus((status) => this.statusChanged(status));
 		transport.onLine((line) => this.receive(line));
 	}
@@ -483,7 +489,7 @@ export class HubClient {
 				}
 				const result = results[pending.method].safeParse(message.result);
 				if (result.success) pending.resolve(result.data);
-				else pending.reject(new HubRequestError('bad_message', `The hub's answer to ${pending.method} does not match the protocol: ${z.prettifyError(result.error)}`));
+				else pending.reject(new HubRequestError('bad_answer', `The hub's answer to ${pending.method} does not match the protocol: ${z.prettifyError(result.error)}`));
 				return;
 			}
 			case 'sessionUpdated': {

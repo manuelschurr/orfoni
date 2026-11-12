@@ -94,7 +94,7 @@
 			failure = (error as Error).message;
 			return;
 		}
-		const hub = new HubClient(transports.hub);
+		const hub = new HubClient(transports.hub, transports.files);
 		terminalTransport = transports.terminal;
 		client = hub;
 		let stopListening: Promise<() => void> | undefined;

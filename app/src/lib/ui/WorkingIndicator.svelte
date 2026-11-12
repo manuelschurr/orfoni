@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ChatItem, SessionSummary } from '@orfoni/protocol';
-	import { elapsed } from './format';
+	import { elapsed, runningTool } from './format';
 
 	let { since, chat, activity = null }: { since: number; chat: ChatItem[]; activity?: SessionSummary['activity'] } = $props();
 	let now = $state(Date.now());
@@ -13,7 +13,7 @@
 	// What the chat tells, for when the hub does not know the line Claude Code shows.
 	const guess = $derived.by(() => {
 		const last = chat.at(-1);
-		if (last?.kind === 'tool' && last.status === 'running') return `Running ${last.name}`;
+		if (last?.kind === 'tool' && last.status === 'running') return runningTool(last.name);
 		if (last?.kind === 'assistant' && !last.done) return 'Writing';
 		return 'Thinking';
 	});

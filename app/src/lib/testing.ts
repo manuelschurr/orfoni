@@ -1,4 +1,5 @@
 import { ClaudeSessionId, SessionId, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
+import { FakeDeviceFiles } from './device-files';
 import { FakeTransport } from './fake-transport';
 import { HubClient } from './hub-client.svelte';
 
@@ -42,16 +43,16 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 	};
 }
 
-export async function connectedClient(sessions: SessionSummary[], others: OtherSession[] = []): Promise<{ client: HubClient; transport: FakeTransport }> {
+export async function connectedClient(sessions: SessionSummary[], others: OtherSession[] = [], device = new FakeDeviceFiles()): Promise<{ client: HubClient; transport: FakeTransport; device: FakeDeviceFiles }> {
 	const transport = new FakeTransport();
-	const client = new HubClient(transport);
+	const client = new HubClient(transport, device);
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 	transport.status({ kind: 'connected' });
 	transport.respond('listSessions', sessions);
 	await settle();
 	transport.respond('listOtherSessions', others);
 	await settle();
-	return { client, transport };
+	return { client, transport, device };
 }
 
 // The text assistive technology reads from an element, which leaves out what is hidden from it.

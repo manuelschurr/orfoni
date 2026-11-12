@@ -1,5 +1,6 @@
 import { ClaudeSessionId, RequestId, SessionId, type ChatItem, type OtherSession, type SessionStateKind, type SessionSummary } from '@orfoni/protocol';
 import { beforeEach, describe, expect, test } from 'vitest';
+import { FakeDeviceFiles } from './device-files';
 import { FakeTransport } from './fake-transport';
 import { Drafts } from './drafts.svelte';
 import { HubClient, isRecent } from './hub-client.svelte';
@@ -40,7 +41,7 @@ async function open(target: SessionSummary, chat: ChatItem[] = []): Promise<void
 
 beforeEach(() => {
 	transport = new FakeTransport();
-	client = new HubClient(transport);
+	client = new HubClient(transport, new FakeDeviceFiles());
 });
 
 describe('HubClient', () => {
@@ -413,6 +414,13 @@ describe('files', () => {
 		transport.fail('listFolder', 'bad_message', 'Invalid discriminator value');
 		await expect(listing).rejects.toMatchObject({ code: 'bad_message' });
 		expect(client.problem).toBeNull();
+	});
+
+	test('an answer that does not match the protocol fails as bad_answer, so it never reads as an older hub', async () => {
+		await connect();
+		const reading = client.readFile(file, 0);
+		transport.respond('readFile', { size: -1, version: '', data: '' });
+		await expect(reading).rejects.toMatchObject({ code: 'bad_answer', message: expect.stringMatching(/^The hub's answer to readFile does not match the protocol/) });
 	});
 });
 

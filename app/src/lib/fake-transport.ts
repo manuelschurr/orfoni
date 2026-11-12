@@ -57,6 +57,16 @@ export class FakeTransport implements HubTransport {
 		return request;
 	}
 
+	// Every request of the method still waiting for its answer, oldest first.
+	waiting<M extends Method>(method: M): Extract<ClientRequest, { method: M }>[] {
+		return this.requests(method).filter(({ id }) => !this.answered.has(id));
+	}
+
+	answer(request: ClientRequest, result: unknown): void {
+		this.answered.add(request.id);
+		this.push({ type: 'response', id: request.id, ok: true, result });
+	}
+
 	respond(method: Method, result: unknown): void {
 		const { id } = this.unanswered(method);
 		this.answered.add(id);

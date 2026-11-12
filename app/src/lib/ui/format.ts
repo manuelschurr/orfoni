@@ -1,4 +1,6 @@
 import { Effort, PermissionMode, withUploadNames, type ChatItem, type OtherSession, type PastConversation, type SessionStateKind, type SessionSummary, type WindowStart } from '@orfoni/protocol';
+import type { SavedFile } from '../device-files';
+import type { Transfer } from '../files.svelte';
 
 // The aliases claude takes with --model and /model.
 export const models = ['fable', 'opus', 'sonnet', 'haiku'] as const;
@@ -149,6 +151,48 @@ export function bytes(value: number): string {
 	return value >= GB ? `${(value / GB).toFixed(1)} GB` : `${Math.round(value / MB)} MB`;
 }
 
+const KB = 1024;
+
+export function fileSize(size: number): string {
+	if (size < KB) return size === 1 ? '1 byte' : `${size} bytes`;
+	return size < MB ? `${Math.round(size / KB)} KB` : `${(size / MB).toFixed(1)} MB`;
+}
+
+// How much of a file has arrived, in the unit of its size, as in "1.2 of 3.4 MB".
+export function fileProgress(done: number, size: number): string {
+	const part = size < KB ? String(done) : size < MB ? String(Math.round(done / KB)) : (done / MB).toFixed(1);
+	return `${part} of ${fileSize(size)}`;
+}
+
+// `name` is the name the file was opened under, which the device may have changed to one not taken yet.
+export function savedText({ folder, name: saved, how }: SavedFile, name: string): string {
+	switch (how) {
+		case 'opened':
+			return saved === name ? `Opened ${saved} from ${folder}.` : `Saved to ${folder} as ${saved} and opened it.`;
+		case 'revealed':
+			return `Saved ${saved} to ${folder} and showed it in its folder, since orfoni does not run programs.`;
+		case 'noApp':
+			return `Saved to ${folder}. No app on this phone opens this kind of file.`;
+		case 'downloaded':
+			return `Downloaded ${saved}.`;
+	}
+}
+
+export function transferText(transfer: Transfer, name: string): string | null {
+	switch (transfer.kind) {
+		case 'idle':
+			return null;
+		case 'reading':
+			return transfer.size === null ? 'Opening.' : `Opening, ${fileProgress(transfer.done, transfer.size)}.`;
+		case 'saving':
+			return 'Saving the file on this device.';
+		case 'saved':
+			return savedText(transfer.saved, name);
+		case 'failed':
+			return transfer.reason;
+	}
+}
+
 export function tasksDone(tasks: { done: number; total: number }): string {
 	return `${tasks.done} of ${tasks.total} tasks done`;
 }
@@ -245,6 +289,7 @@ const toolWords: Record<string, ToolWords> = {
 	toolsearch: once(['loaded', 'loading'], 'tools'),
 	question: things(['asked', 'asking'], ['a question', 'questions']),
 	plan: things(['proposed', 'proposing'], ['a plan', 'plans']),
+	send: once(['sent', 'sending'], 'files'),
 };
 const toolKinds: Record<string, string> = {
 	Bash: 'command',
@@ -268,6 +313,7 @@ const toolKinds: Record<string, string> = {
 	ToolSearch: 'toolsearch',
 	AskUserQuestion: 'question',
 	ExitPlanMode: 'plan',
+	SendUserFile: 'send',
 };
 
 function kindOf(name: string): string {
@@ -289,6 +335,11 @@ function phrases(tools: { name: string }[], tense: Tense): string {
 	}
 	const said = [...counts].map(([kind, { name, count }]) => toolWords[kind]?.[tense](count) ?? otherTool(name, count, tense));
 	return said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said.at(-1)}` : (said[0] ?? '');
+}
+
+// What the working line says while a call runs, when the hub does not know the line Claude Code shows.
+export function runningTool(name: string): string {
+	return kindOf(name) === 'send' ? capitalize(toolWords.send.doing(1)) : `Running ${name}`;
 }
 
 export function capitalize(text: string): string {
