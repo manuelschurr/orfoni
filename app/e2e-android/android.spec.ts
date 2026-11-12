@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { _android, expect, test, type AndroidDevice, type Page } from '@playwright/test';
-import type { SessionId } from '@orfoni/protocol';
+import type { PermissionMode, SessionId } from '@orfoni/protocol';
 import { acceptTrustPrompt, eventually, HubClient, newProjectDir, onePagePdf, pane, tmux, type Started } from '../../hub/test/e2e/client';
 
 const PACKAGE = 'com.orfoni.app.debug';
@@ -86,8 +87,8 @@ async function phoneScreenshot(name: string): Promise<void> {
 	writeFileSync(test.info().outputPath(name), execFileSync('adb', ['exec-out', 'screencap', '-p'], { env: { ...process.env, PATH: `/opt/android-sdk/platform-tools:${process.env.PATH}` }, maxBuffer: 64 * 1024 * 1024 }));
 }
 
-async function startSession(title: string, prompt: string): Promise<SessionId> {
-	const result = (await hub.request('startSession', { projectDir: newProjectDir(), model: 'haiku', permissionMode: 'default', title, prompt })) as Started;
+async function startSession(title: string, prompt: string, { dir = newProjectDir(), permissionMode = 'default' }: { dir?: string; permissionMode?: PermissionMode } = {}): Promise<SessionId> {
+	const result = (await hub.request('startSession', { projectDir: dir, model: 'haiku', permissionMode, title, prompt })) as Started;
 	started.push(result.session.id);
 	await acceptTrustPrompt(result);
 	return result.session.id;
@@ -250,11 +251,16 @@ test('on the phone a terminal opens without the keyboard, a tap brings it up, an
 	expect(keyboardShown()).toBe(true);
 });
 
+// The window that has the focus on the phone, as Android names it, with the app's package in it.
+function focusedWindow(): string {
+	return adb('shell', 'dumpsys window | grep mCurrentFocus || true').trim().split('\n')[0]!;
+}
+
 // Taps orfoni's notification with this title in the notification shade. Android bundles an app's notifications under one heading, and a tap on a line of a closed bundle opens the bundle, so a second tap opens the notification, as it takes a person.
 async function tapNotification(title: string): Promise<void> {
 	adb('shell', 'cmd', 'statusbar', 'expand-notifications');
 	try {
-		for (let attempt = 0; attempt < 3 && !adb('shell', 'dumpsys window | grep -m1 mCurrentFocus || true').includes(PACKAGE); attempt++) {
+		for (let attempt = 0; attempt < 3 && !focusedWindow().includes(PACKAGE); attempt++) {
 			const shown = await eventually(async () => onScreen(`text="${title}"[^>]*bounds="[^"]*"`), (node) => node !== '', 10_000);
 			adb('shell', 'input', 'tap', ...center(shown));
 			await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -341,5 +347,138 @@ test('a PDF picked in Android\'s picker with the paperclip goes to Claude with t
 		await phoneScreenshot('answered.png');
 	} finally {
 		adb('shell', 'rm', '-f', `/sdcard/Download/${name}`);
+	}
+});
+
+const SAVED = '/sdcard/Download/orfoni';
+
+// The bytes of a file orfoni saved in the phone's shared Download/orfoni, or null when it is not there.
+function savedOnPhone(name: string): Buffer | null {
+	if (!adb('shell', `ls ${SAVED}/ 2>/dev/null || true`).split(/\r?\n/).includes(name)) return null;
+	return execFileSync('adb', ['exec-out', 'cat', `${SAVED}/${name}`], { env: { ...process.env, PATH: `/opt/android-sdk/platform-tools:${process.env.PATH}` }, maxBuffer: 64 * 1024 * 1024 });
+}
+
+// Taps the row and waits until another app has the focus, or until orfoni says the row's file saved without an app to open it. The page is asked only while orfoni is in front, since Android pauses a WebView behind another app.
+type Opened = { openedIn: string } | { noApp: true };
+
+async function tapToOpen(page: Page, row: ReturnType<Page['locator']>, noApp: ReturnType<Page['locator']>): Promise<Opened> {
+	await row.scrollIntoViewIfNeeded();
+	await touch(page, row);
+	const outcome = await eventually(
+		async (): Promise<Opened | null> => {
+			const focus = focusedWindow();
+			if (focus.includes('Window{') && !focus.includes(PACKAGE)) return { openedIn: focus };
+			return focus.includes(PACKAGE) && (await noApp.count()) > 0 ? { noApp: true as const } : null;
+		},
+		(now) => now !== null,
+		60_000,
+	);
+	return outcome!;
+}
+
+// Taps the row and waits for an app to show the file, picking one when Android asks which.
+async function tapToView(page: Page, row: ReturnType<Page['locator']>, noApp: ReturnType<Page['locator']>): Promise<string> {
+	const opened = await tapToOpen(page, row, noApp);
+	if (!('openedIn' in opened)) throw new Error('orfoni found no app on the phone to open the file');
+	return opened.openedIn.includes(CHOOSER) ? pickInChooser() : opened.openedIn;
+}
+
+const CHOOSER = 'android/com.android.internal.app.ResolverActivity';
+
+// With no default app for a type, Android first asks which app opens it. This picks Files by Google just once, leaving Don't Ask Again unticked so the phone's defaults stay as they were, and waits for that app to have the focus, which proves it could read the file through orfoni's grant.
+async function pickInChooser(): Promise<string> {
+	const viewer = await eventually(async () => onScreen('text="Files by Google"[^>]*bounds="[^"]*"'), (node) => node !== '', 10_000);
+	adb('shell', 'input', 'tap', ...center(viewer.split('\n')[0]!));
+	return eventually(async () => focusedWindow(), (focus) => focus.includes('Window{') && !focus.includes(PACKAGE) && !focus.includes(CHOOSER), 20_000);
+}
+
+// Leaves the app that opened a file with Android's back gesture, sent only while that app is in front so that orfoni's own back does not close the conversation, and brings orfoni to the front.
+async function backToOrfoni(): Promise<Page> {
+	if (!focusedWindow().includes(PACKAGE)) adb('shell', 'input', 'keyevent', 'KEYCODE_BACK');
+	return appPage();
+}
+
+// Claude Code offers SendUserFile only while Remote Control is connected, so this folder turns it on, and the session lists on claude.ai while it runs.
+test('a file Claude sends shows on the phone as a card with a thumbnail, and a tap saves it to Download/orfoni and opens it in another app', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const icon = `icon-${tag}.png`;
+	const note = `note-${tag}.txt`;
+	const dir = newProjectDir();
+	writeFileSync(`${dir}/.claude/settings.local.json`, '{ "remoteControlAtStartup": true }\n');
+	const png = new URL('../src-tauri/icons/128x128.png', import.meta.url).pathname;
+	copyFileSync(png, join(dir, icon));
+	const text = Buffer.from(`kept-${tag}\n`);
+	writeFileSync(join(dir, note), text);
+	try {
+		const page = await freshApp();
+		await logIn(page);
+		await startSession(`send ${tag}`, `Call the SendUserFile tool once, with files set to ["${icon}", "${note}"], caption set to "Your note and the icon", and display set to "render". Then reply with exactly: sent-${tag}`, { dir, permissionMode: 'auto' });
+		await page.getByRole('navigation', { name: 'Sessions' }).getByText(`send ${tag}`).click();
+		const cardOn = (shown: Page) => shown.locator('[data-kind="sent"]').getByRole('article', { name: 'Claude sent you 2 files' });
+		const card = cardOn(page);
+		await expect(card).toBeVisible({ timeout: REPLY_MS });
+		await expect(page.getByRole('article', { name: 'Claude' }).last()).toContainText(`sent-${tag}`, { timeout: REPLY_MS });
+		await expect(card.getByText('Your note and the icon', { exact: true })).toBeVisible();
+		await expect(card.getByRole('button', { name: `Open ${note}` })).toContainText(`${text.length} bytes`);
+		const iconRow = card.getByRole('button', { name: `Open ${icon}` });
+		await expect(iconRow).toContainText(`${Math.round(statSync(png).size / 1024)} KB`);
+		await card.scrollIntoViewIfNeeded();
+		const thumbnail = iconRow.getByRole('img', { name: icon });
+		await expect(thumbnail).toBeVisible();
+		expect(await thumbnail.evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight])).toEqual([128, 128]);
+		await expectNoSidewaysScroll(page);
+
+		const noApp = (shown: Page) => cardOn(shown).getByText('Saved to Download/orfoni. No app on this phone opens this kind of file.', { exact: true });
+		console.log(`${icon} opened in: ${await tapToView(page, iconRow, noApp(page))}`);
+		await new Promise((resolve) => setTimeout(resolve, 1_500));
+		await phoneScreenshot('android-opened.png');
+		expect(savedOnPhone(icon)).toEqual(readFileSync(png));
+
+		const back = await backToOrfoni();
+		await expect(cardOn(back).getByText(`Opened ${icon} from Download/orfoni.`, { exact: true })).toBeVisible();
+		await cardOn(back).scrollIntoViewIfNeeded();
+		await phoneScreenshot('android-card.png');
+
+		const noteOpened = await tapToOpen(back, cardOn(back).getByRole('button', { name: `Open ${note}` }), noApp(back));
+		console.log(`${note} opened in: ${'openedIn' in noteOpened ? noteOpened.openedIn : 'no app, as the row says'}`);
+		expect(savedOnPhone(note)).toEqual(text);
+		if ('openedIn' in noteOpened) {
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			await phoneScreenshot('android-opened-note.png');
+			const again = await backToOrfoni();
+			await expect(cardOn(again).getByText(`Opened ${note} from Download/orfoni.`, { exact: true })).toBeVisible();
+		}
+	} finally {
+		adb('shell', 'rm', '-f', `${SAVED}/${icon}`, `${SAVED}/${note}`);
+	}
+});
+
+test('on the phone a file in the Files sheet under More saves to Download/orfoni and opens in another app with a tap', async () => {
+	const tag = randomUUID().slice(0, 8);
+	const photo = `photo-${tag}.png`;
+	const dir = newProjectDir();
+	const png = new URL('../src-tauri/icons/128x128.png', import.meta.url).pathname;
+	copyFileSync(png, join(dir, photo));
+	try {
+		const page = await freshApp();
+		await logIn(page);
+		await startSession(`files ${tag}`, 'Reply with exactly: ready', { dir });
+		await page.getByRole('navigation', { name: 'Sessions' }).getByText(`files ${tag}`).click();
+		const main = page.getByRole('main');
+		await main.getByRole('button', { name: 'More' }).click();
+		await main.getByRole('button', { name: 'Files', exact: true }).click();
+		const sheetOn = (shown: Page) => shown.getByRole('dialog', { name: 'Files', exact: true });
+		const row = sheetOn(page).getByRole('button', { name: `Open ${photo}` });
+		await expect(row).toContainText(`${Math.round(statSync(png).size / 1024)} KB`);
+		await expectNoSidewaysScroll(page);
+
+		console.log(`${photo} opened in: ${await tapToView(page, row, sheetOn(page).getByText('Saved to Download/orfoni. No app on this phone opens this kind of file.', { exact: true }))}`);
+		expect(savedOnPhone(photo)).toEqual(readFileSync(png));
+
+		const back = await backToOrfoni();
+		await expect(sheetOn(back).getByText(`Opened ${photo} from Download/orfoni.`, { exact: true })).toBeVisible();
+		await phoneScreenshot('android-files.png');
+	} finally {
+		adb('shell', 'rm', '-f', `${SAVED}/${photo}`);
 	}
 });
