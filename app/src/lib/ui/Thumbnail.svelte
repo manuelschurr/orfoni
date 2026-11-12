@@ -26,14 +26,15 @@
 </script>
 
 {#if !failed}
-	<div class="thumbnail" class:loading={url === null} bind:this={box}>
+	<span class="thumbnail" class:loading={url === null} bind:this={box}>
 		{#if url}<img src={url} alt={name} />{/if}
-	</div>
+	</span>
 {/if}
 
 <style>
 	.thumbnail {
 		display: flex;
+		flex-basis: 100%;
 		justify-content: center;
 		overflow: hidden;
 		border-radius: var(--radius-control);

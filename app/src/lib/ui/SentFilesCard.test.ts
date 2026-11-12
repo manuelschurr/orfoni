@@ -233,6 +233,21 @@ test('an image Claude asked to show appears in its card, read through the same p
 	expect(transport.requests('readFile')).toHaveLength(1);
 });
 
+test("an image sits in its own file's box, so a click on it opens that file and the file's status shows under the box", async () => {
+	vi.spyOn(URL, 'createObjectURL').mockImplementation(() => 'blob:image-1');
+	const png = contents(300);
+	const { transport } = await shown([user, sendCall([sentFile('notes.txt'), sentFile('chart.png', { image: true, size: png.length })], { render: true })]);
+	answerAt(transport, png, 0);
+	const image = await within(row('chart.png')).findByRole('img', { name: 'chart.png' });
+	expect(within(row('notes.txt')).queryByRole('img')).toBeNull();
+
+	await fireEvent.click(image);
+	expect(transport.waiting('readFile')).toMatchObject([{ file: { toolUseId: 'toolu_1', index: 1 }, offset: 0 }]);
+	answerAt(transport, png, 0);
+	await waitFor(() => expect(note('chart.png')).toBe('Opened chart.png from Downloads.'));
+	expect(row('chart.png').textContent).not.toContain('Opened chart.png');
+});
+
 test('an image that cannot be read leaves its row without one', async () => {
 	const { transport } = await shown([user, sendCall([sentFile('chart.png', { image: true, size: 300 })], { render: true })]);
 	transport.fail('readFile', 'not_found', "The hub's copy of this file is gone.");

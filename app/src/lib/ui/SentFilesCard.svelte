@@ -40,8 +40,9 @@
 	<ul class="files">
 		{#each rows as { file, ref, thumbnail } (ref.index)}
 			<li>
-				{#if thumbnail}<Thumbnail files={client.files} {ref} size={file.size} name={file.name} />{/if}
-				<FileRow files={client.files} {ref} name={file.name} size={file.size} closed={closed[file.state] ?? null} note={notes[file.state] ?? null} />
+				<FileRow files={client.files} {ref} name={file.name} size={file.size} closed={closed[file.state] ?? null} note={notes[file.state] ?? null}>
+					{#if thumbnail}<Thumbnail files={client.files} {ref} size={file.size} name={file.name} />{/if}
+				</FileRow>
 			</li>
 		{/each}
 	</ul>
@@ -60,15 +61,13 @@
 
 	.files {
 		display: grid;
-		gap: 0.6rem;
+		gap: 0.9rem;
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	li {
-		display: grid;
-		gap: 0.4rem;
 		min-width: 0;
 	}
 </style>

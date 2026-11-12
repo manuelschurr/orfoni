@@ -633,7 +633,9 @@ test('on a narrow screen, a terminal opens over the conversation with a history 
 	await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Terminals' })).toBeNull());
 	expect(layers()).toBe(1);
 	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+	expect(screen.getByRole('button', { name: 'More' }).getAttribute('aria-expanded')).toBe('false');
 
+	await fireEvent.click(screen.getByRole('button', { name: 'More' }));
 	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
 	expect(within(screen.getByRole('complementary', { name: 'Terminals' })).getAllByRole('tab')).toHaveLength(1);
 	await waitFor(() => expect(layers()).toBe(2));
@@ -693,8 +695,10 @@ test("on a wide screen, Files shows the session's folder in the task list's plac
 
 	await fireEvent.click(files);
 	const panel = screen.getByRole('complementary', { name: 'Files' });
-	expect(within(panel).getByRole('heading', { name: 'Files in alpha' })).toBeTruthy();
+	expect(within(panel).getByRole('heading', { name: 'Files' })).toBeTruthy();
 	expect(await within(panel).findByRole('button', { name: 'Open report.pdf' })).toBeTruthy();
+	expect(within(within(panel).getByRole('navigation', { name: 'Folder path' })).getByRole('button', { name: 'alpha' }).getAttribute('aria-current')).toBe('location');
+	expect(within(panel).getAllByText('alpha')).toHaveLength(1);
 	expect(screen.queryByRole('complementary', { name: 'Task list' })).toBeNull();
 	expect(files.getAttribute('aria-pressed')).toBe('true');
 	expect(hub.requests.filter((request) => request.method === 'listFolder')).toMatchObject([{ session: { kind: 'orfoni', sessionId: 'w1' }, path: '' }]);
@@ -720,20 +724,24 @@ test('on a narrow screen, Files behind More opens the folder over the conversati
 	const files = screen.getByRole('button', { name: 'Files' });
 	expect(files.hasAttribute('aria-pressed')).toBe(false);
 	await fireEvent.click(files);
-	const sheet = screen.getByRole('dialog', { name: 'Files in alpha' });
+	const sheet = screen.getByRole('dialog', { name: 'Files' });
 	expect(await within(sheet).findByRole('button', { name: 'Open report.pdf' })).toBeTruthy();
+	expect(within(sheet).getAllByText('alpha')).toHaveLength(1);
+	expect(screen.getByRole('button', { name: 'More' }).getAttribute('aria-expanded')).toBe('false');
 	expect(screen.queryByRole('complementary', { name: 'Files' })).toBeNull();
 	await waitFor(() => expect(layers()).toBe(2));
 
 	history.back();
-	await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Files in alpha' })).toBeNull());
+	await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Files' })).toBeNull());
 	expect(screen.getByRole('heading', { level: 1, name: 'Fix the login page' })).toBeTruthy();
+	expect(screen.queryByRole('button', { name: 'Files' })).toBeNull();
 	expect(layers()).toBe(1);
 
+	await fireEvent.click(screen.getByRole('button', { name: 'More' }));
 	await fireEvent.click(screen.getByRole('button', { name: 'Files' }));
 	await waitFor(() => expect(layers()).toBe(2));
 	await fireEvent.click(screen.getByRole('button', { name: 'Close the files' }));
-	expect(screen.queryByRole('dialog', { name: 'Files in alpha' })).toBeNull();
+	expect(screen.queryByRole('dialog', { name: 'Files' })).toBeNull();
 	await waitFor(() => expect(layers()).toBe(1));
 });
 
@@ -744,7 +752,8 @@ test('a session outside orfoni opens its folder from its header, named by its pr
 	expect(await screen.findByText('Outside orfoni')).toBeTruthy();
 	await fireEvent.click(screen.getByRole('button', { name: 'Files' }));
 	const panel = screen.getByRole('complementary', { name: 'Files' });
-	expect(within(panel).getByRole('heading', { name: 'Files in swarm' })).toBeTruthy();
+	expect(within(panel).getByRole('heading', { name: 'Files' })).toBeTruthy();
+	expect(within(panel).getByRole('button', { name: 'swarm' }).getAttribute('aria-current')).toBe('location');
 	expect(await within(panel).findByRole('button', { name: 'Open swarm.toml' })).toBeTruthy();
 	expect(hub.requests.filter((request) => request.method === 'listFolder')).toMatchObject([{ session: { kind: 'other', pid: 1172033 }, path: '' }]);
 });

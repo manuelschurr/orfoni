@@ -1,5 +1,5 @@
 import type { SessionSummary, TaskItem } from '@orfoni/protocol';
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { expect, test, vi } from 'vitest';
 import { connectedClient, spoken, stubDialogs, summary } from '../testing';
 import SessionHeader from './SessionHeader.svelte';
@@ -15,7 +15,7 @@ const taskList: TaskItem[] = [
 	{ id: '3', subject: 'Test 2: four pairs ranging at once', status: 'pending', activeForm: null },
 ];
 
-async function header(changes: Parameters<typeof summary>[2], props: { narrow?: boolean; touch?: boolean; onback?: () => void; ontasks?: () => void } = {}) {
+async function header(changes: Parameters<typeof summary>[2], props: { narrow?: boolean; touch?: boolean; onback?: () => void; ontasks?: () => void; onterminal?: () => void; onfiles?: () => void; onshell?: (target: string) => void } = {}) {
 	const session = summary('s1', 'working', { title: 'Fix the login page', ...changes });
 	const { client, transport } = await connectedClient([session]);
 	const forked = vi.fn();
@@ -421,6 +421,31 @@ test('a narrow header shows the back control, the title and the state, and keeps
 
 	await fireEvent.click(screen.getByRole('button', { name: 'Back to the sessions' }));
 	expect(onback).toHaveBeenCalledOnce();
+});
+
+test('in a narrow header, Terminal, Files and New shell fold More away as they open over the conversation', async () => {
+	const onterminal = vi.fn();
+	const onfiles = vi.fn();
+	const onshell = vi.fn();
+	const { transport } = await header({ state: 'idle' }, { narrow: true, onterminal, onfiles, onshell });
+	const more = screen.getByRole('button', { name: 'More' });
+
+	await fireEvent.click(more);
+	await fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+	expect(onterminal).toHaveBeenCalledOnce();
+	expect(more.getAttribute('aria-expanded')).toBe('false');
+	expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull();
+
+	await fireEvent.click(more);
+	await fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+	expect(onfiles).toHaveBeenCalledOnce();
+	expect(more.getAttribute('aria-expanded')).toBe('false');
+
+	await fireEvent.click(more);
+	await fireEvent.click(screen.getByRole('button', { name: 'New shell' }));
+	transport.answer(transport.unanswered('openShell'), { target: 'orfoni-s1-sh2' });
+	await waitFor(() => expect(onshell).toHaveBeenCalledWith('orfoni-s1-sh2'));
+	expect(more.getAttribute('aria-expanded')).toBe('false');
 });
 
 test('a narrow header has a control with the count of done tasks that opens the task list, and none without a task list', async () => {

@@ -97,6 +97,12 @@
 		}
 	}
 
+	// A narrow window opens these over the conversation, which would leave More open behind them and after they close.
+	function cover(open: () => void): void {
+		more = false;
+		open();
+	}
+
 	function startRename(): void {
 		renaming = title;
 		void tick().then(() => nameField?.select());
@@ -204,14 +210,15 @@
 <!-- The actions, gauges and settings, which a narrow header shows on request. -->
 {#snippet controls()}
 	<div class="actions" id="{id}-actions">
-		<button class="btn" onclick={onterminal}>Terminal</button>
-		{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={onfiles}>Files</button>{/if}
+		<button class="btn" onclick={() => cover(onterminal)}>Terminal</button>
+		{#if onfiles}<button class="btn" aria-pressed={narrow ? undefined : filesShown} onclick={() => cover(onfiles)}>Files</button>{/if}
 		<button
 			class="btn"
 			disabled={busy}
 			onclick={() =>
 				act(async () => {
-					onshell(await client.openShell(session.id));
+					const target = await client.openShell(session.id);
+					cover(() => onshell(target));
 				})}>New shell</button
 		>
 		<button

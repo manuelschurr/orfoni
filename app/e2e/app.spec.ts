@@ -746,7 +746,7 @@ test('the files Claude sends show as one card with the caption and a thumbnail, 
 	const note = card.getByRole('button', { name: 'Open note.txt' });
 	await expect(note).toContainText(`${original.length} bytes`);
 	await expect(card.getByRole('button', { name: 'Open icon.png' })).toContainText(`${Math.round(statSync(png).size / 1024)} KB`);
-	const thumbnail = card.getByRole('img', { name: 'icon.png' });
+	const thumbnail = card.getByRole('button', { name: 'Open icon.png' }).getByRole('img', { name: 'icon.png' });
 	await expect(thumbnail).toBeVisible();
 	expect(await thumbnail.evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight])).toEqual([128, 128]);
 
@@ -778,7 +778,8 @@ test('the Files button opens the session folder beside the chat, a file there do
 	await button.click();
 	await expect(button).toHaveAttribute('aria-pressed', 'true');
 	const panel = page.getByRole('complementary', { name: 'Files' });
-	await expect(panel.getByRole('heading', { name: `Files in ${basename(dir)}` })).toBeVisible();
+	await expect(panel.getByRole('heading', { name: 'Files', exact: true })).toBeVisible();
+	await expect(panel.getByRole('navigation', { name: 'Folder path' }).getByRole('button', { name: basename(dir), exact: true })).toHaveAttribute('aria-current', 'location');
 	await expect(panel.getByRole('button', { name: 'Open the folder .claude' })).toBeVisible();
 	const file = panel.getByRole('button', { name: 'Open readme.txt' });
 	await expect(file).toContainText(`${readme.length} bytes`);
@@ -812,7 +813,7 @@ test('on a phone, Files under More opens the session folder as a sheet over the 
 		const main = page.getByRole('main');
 		await main.getByRole('button', { name: 'More' }).tap();
 		await main.getByRole('button', { name: 'Files', exact: true }).tap();
-		const sheet = page.getByRole('dialog', { name: `Files in ${basename(dir)}` });
+		const sheet = page.getByRole('dialog', { name: 'Files', exact: true });
 		await expect(sheet.getByRole('button', { name: 'Open readme.txt' })).toBeVisible();
 		const box = await sheet.boundingBox();
 		expect(box?.x).toBeGreaterThanOrEqual(0);
@@ -821,6 +822,8 @@ test('on a phone, Files under More opens the session folder as a sheet over the 
 		await page.goBack();
 		await expect(sheet).toHaveCount(0);
 		await expect(main.getByRole('heading', { level: 1 })).toHaveText('phone files check');
+		await expect(main.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
+		await expect(main.getByRole('button', { name: 'Files', exact: true })).toHaveCount(0);
 	} finally {
 		await phone.close();
 	}

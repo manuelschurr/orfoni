@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { MAX_FILE_BYTES, type FileRef } from '@orfoni/protocol';
+	import type { Snippet } from 'svelte';
 	import { TOO_LARGE, type FileTransfers } from '../files.svelte';
 	import { fileSize, transferText } from './format';
 
-	// `closed` says why the row takes no click. `note` says something worth knowing before the click.
-	let { files, ref, name, size, closed = null, note = null }: { files: FileTransfers; ref: FileRef; name: string; size: number | null; closed?: string | null; note?: string | null } = $props();
+	// `closed` says why the row takes no click. `note` says something worth knowing before the click. `children` is a preview shown above the name, inside the button so a click on it opens the file.
+	let { files, ref, name, size, closed = null, note = null, children }: { files: FileTransfers; ref: FileRef; name: string; size: number | null; closed?: string | null; note?: string | null; children?: Snippet } = $props();
 	const id = $props.id();
 	const transfer = $derived(files.transfer(ref));
 	const refusal = $derived(closed ?? (size !== null && size > MAX_FILE_BYTES ? TOO_LARGE : null));
@@ -15,6 +16,7 @@
 
 <div class="file" data-state={refusal === null ? transfer.kind : 'closed'}>
 	<button class="open" aria-label="Open {name}" aria-describedby={text ? `${id}-note` : undefined} aria-busy={busy} disabled={refusal !== null || busy} onclick={() => void files.open(ref, name)}>
+		{@render children?.()}
 		<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5L12.5 5v9.5h-8.5zM9 1.5V5h3.5" /></svg>
 		<span class="name">{name}</span>
 		{#if size !== null}<span class="size">{fileSize(size)}</span>{/if}
@@ -35,6 +37,7 @@
 	.open {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 0.55rem;
 		width: 100%;
 		min-width: 0;
