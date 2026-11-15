@@ -1427,26 +1427,47 @@ describe('model and effort', () => {
 		expect(other.session(id)).toMatchObject({ context: 87.5 });
 	});
 
-	// The plan windows belong to the account, so they come with the hub status rather than with a session. Each session repeats what it saw at its last turn, as 14, 18, 34, 36 and 38% of one 5-hour window did on 2026-11-06.
-	test('the hub status carries the freshest plan usage the sessions report: the latest window, its highest share, and a window no report has dropped', async () => {
+	// The plan windows belong to the account, so they come with the hub status rather than with a session. On 2026-11-15 a weekly reset took the week from 99 to 4% without moving its reset time, and the status bar went on showing the 99% that idle sessions repeated.
+	const window = (used: number, resets: number) => ({ used_percentage: used, resets_at: resets });
+	const plan = async (client: TestClient) => ((await client.ok('hubStatus', {})) as HubStatus).plan;
+
+	test('the hub status carries the plan usage a session heard of last: a share that drops within one window shows, and an idle session repeating its older report changes nothing', async () => {
 		const client = await startHub();
-		expect(await client.ok('hubStatus', {})).toMatchObject({ plan: null });
-		const { id: active } = await ready(client);
+		expect(await plan(client)).toBeNull();
 		const { id: idle } = await ready(client);
-		const plan = async () => ((await client.ok('hubStatus', {})) as HubStatus).plan;
-		const window = (used: number, resets: number) => ({ used_percentage: used, resets_at: resets });
-		hub.status(active, statusLine({ rate_limits: { five_hour: window(38, 1793124600), seven_day: window(17, 1793271600) } }));
-		expect(await plan()).toEqual({ fiveHour: { usedPercent: 38, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 17, resetsAt: 1793271600_000 } });
-		hub.status(idle, statusLine({ rate_limits: { five_hour: window(14, 1793124600), seven_day: window(13, 1793271600) } }));
-		hub.status(idle, statusLine({ rate_limits: { seven_day: window(5, 1793271600) } }));
+		const { id: active } = await ready(client);
+		hub.status(idle, statusLine({ rate_limits: { five_hour: window(80, 1793124600), seven_day: window(99, 1793271600) } }));
+		expect(await plan(client)).toEqual({ fiveHour: { usedPercent: 80, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 99, resetsAt: 1793271600_000 } });
+		vi.setSystemTime(Date.now() + 10_000);
+		hub.status(active, statusLine({ rate_limits: { five_hour: window(15, 1793124600), seven_day: window(4, 1793271600) } }));
+		hub.status(idle, statusLine({ rate_limits: { five_hour: window(80, 1793124600), seven_day: window(99, 1793271600) } }));
 		hub.status(idle, statusLine({ rate_limits: undefined }));
-		expect(await plan()).toEqual({ fiveHour: { usedPercent: 38, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 17, resetsAt: 1793271600_000 } });
-		hub.status(active, statusLine({ rate_limits: { five_hour: window(41, 1793124600), seven_day: window(18, 1793271600) } }));
-		expect(await plan()).toMatchObject({ fiveHour: { usedPercent: 41 }, sevenDay: { usedPercent: 18 } });
-		// A window that started afresh has a later reset time, so its share replaces the higher one of the window before.
-		hub.status(active, statusLine({ rate_limits: { five_hour: window(2, 1793142600), seven_day: window(18, 1793271600) } }));
-		hub.status(idle, statusLine({ rate_limits: { five_hour: window(14, 1793124600) } }));
-		expect(await plan()).toMatchObject({ fiveHour: { usedPercent: 2, resetsAt: 1793142600_000 } });
+		expect(await plan(client)).toEqual({ fiveHour: { usedPercent: 15, resetsAt: 1793124600_000 }, sevenDay: { usedPercent: 4, resetsAt: 1793271600_000 } });
+		vi.setSystemTime(Date.now() + 10_000);
+		hub.status(active, statusLine({ rate_limits: { five_hour: window(2, 1793142600), seven_day: window(5, 1793271600) } }));
+		expect(await plan(client)).toEqual({ fiveHour: { usedPercent: 2, resetsAt: 1793142600_000 }, sevenDay: { usedPercent: 5, resetsAt: 1793271600_000 } });
+	});
+
+	test('after a restart the plan usage comes from the session whose turn was latest, whichever reports first', async () => {
+		const client = await startHub();
+		const old = await ready(client);
+		const recent = await ready(client);
+		const turn = async ({ id, claude }: { id: string; claude: ClaudeSessionId }) => {
+			await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'hi' }));
+			await hub.hook(id, body('Stop', claude));
+		};
+		await turn(old);
+		vi.setSystemTime(Date.now() + 3_600_000);
+		await turn(recent);
+		const recentAt = Date.now();
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && (JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as { sessions: { lastActiveAt: number }[] }).sessions.some((session) => session.lastActiveAt === recentAt));
+		hub.close();
+		vi.setSystemTime(Date.now() + 60_000);
+
+		const after = await startHub(fakeTmux([`orfoni-${old.id}`, `orfoni-${recent.id}`]));
+		hub.status(recent.id, statusLine({ rate_limits: { seven_day: window(4, 1793271600) } }));
+		hub.status(old.id, statusLine({ rate_limits: { seven_day: window(99, 1793271600) } }));
+		expect(await plan(after)).toEqual({ fiveHour: null, sevenDay: { usedPercent: 4, resetsAt: 1793271600_000 } });
 	});
 
 	test('the plan usage changes no session, so a status line that only moves it tells no client', async () => {

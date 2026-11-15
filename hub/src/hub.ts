@@ -42,6 +42,7 @@ import { HubError } from './hub-error.js';
 import { CONTINUE_TEXT, continueAt, limitReset, MAX_CONTINUES } from './limit.js';
 import { paneMemory, scopeMemory, serverMemory, systemMemory, type ScopeMemory } from './memory.js';
 import { Registry, type OtherProcess } from './others.js';
+import { PlanUsage } from './plan-usage.js';
 import { PendingRequests, RequestError, type HookResponse } from './requests.js';
 import { sentCall } from './send-user-file.js';
 import { SentCopies } from './sent-copies.js';
@@ -49,7 +50,7 @@ import { noticesOf, titleOf } from './session/notices.js';
 import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
-import { newerPlan, parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
+import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
 import { loadState, saveState, type StoredPlan, type StoredSession } from './store.js';
 import { Summarizer, type ApiKey, type SummaryBudget, type SummaryClient, type SummaryInput } from './summaries.js';
 import { readTaskFiles } from './task-files.js';
@@ -371,7 +372,7 @@ export class Hub {
 	private readonly summarizer: Summarizer;
 	private readonly reported = new Set<string>();
 	private readonly commandLists = new Map<string, { since: number; commands: Promise<SlashCommand[]> }>();
-	private plan: HubStatus['plan'] = null;
+	private readonly planUsage = new PlanUsage();
 
 	private constructor(
 		private readonly options: HubOptions,
@@ -485,7 +486,7 @@ export class Hub {
 			this.report(`orfoni-hub: ignored the status line of session ${session.id}: ${error.message}`);
 			return;
 		}
-		this.plan = newerPlan(this.plan, statusLine.plan);
+		this.planUsage.reported(session.id, statusLine.plan, { now: Date.now(), lastActiveAt: session.model.lastActiveAt });
 		this.apply(session, { kind: 'status_line', statusLine, at: Date.now() });
 	}
 
@@ -547,7 +548,7 @@ export class Hub {
 				await this.remove(this.session(request.sessionId));
 				return {};
 			case 'hubStatus':
-				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.plan, automation: this.automation() };
+				return { memory: await systemMemory(this.options.systemRoot), summaries: await this.summarizer.status(), plan: this.planUsage.plan, automation: this.automation() };
 			case 'memoryReport':
 				return this.memoryReport();
 			case 'relaunchSession':
@@ -787,6 +788,7 @@ export class Hub {
 		const statusLine = await originalStatusLine(session.projectDir, this.options.home);
 		await writePrivate(file, `${JSON.stringify(hookSettings(this.options.hookSocket, statusLine, this.uploadsDir()), null, '\t')}\n`);
 		session.claude = { kind: 'launching', createdAt: null };
+		this.planUsage.started(session.id);
 		// Every start of Claude Code carries the title as its name, so a rename also reaches a Claude Code that was not running.
 		const name = session.title ? ['--name', session.title] : [];
 		session.namePending = false;
@@ -990,6 +992,7 @@ export class Hub {
 	private async remove(session: Session): Promise<void> {
 		await this.stop(session);
 		this.sessions.delete(session.id);
+		this.planUsage.removed(session.id);
 		await rm(this.settingsPath(session.id), { force: true });
 		this.save();
 		this.broadcast({ type: 'sessionRemoved', sessionId: session.id });
@@ -1151,7 +1154,7 @@ export class Hub {
 	}
 
 	private nextWindowStart(): number | null {
-		return nextWindowStart({ startAt: this.planSettings.startWindowAt, last: this.lastWindowStart, fiveHourResetsAt: this.plan?.fiveHour?.resetsAt ?? null, now: Date.now() });
+		return nextWindowStart({ startAt: this.planSettings.startWindowAt, last: this.lastWindowStart, fiveHourResetsAt: this.planUsage.plan?.fiveHour?.resetsAt ?? null, now: Date.now() });
 	}
 
 	// The first message after a window has ended starts the next one, so a short exchange early in the day has the window under way, and its reset nearer, by the time you start.
@@ -1167,7 +1170,7 @@ export class Hub {
 			exchange = { plan: { fiveHour: null, sevenDay: null }, problem: (error as Error).message, limited: false };
 		}
 		this.startingWindow = false;
-		if (exchange.plan.fiveHour !== null || exchange.plan.sevenDay !== null) this.plan = newerPlan(this.plan, exchange.plan);
+		this.planUsage.exchanged(exchange.plan, Date.now());
 		const started = windowStarted(at, exchange);
 		this.lastWindowStart = started;
 		this.save();
