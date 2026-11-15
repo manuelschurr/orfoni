@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Effort, PermissionMode, ProjectDir } from '@orfoni/protocol';
 	import type { HubClient, Result } from '../hub-client.svelte';
+	import FolderField from './FolderField.svelte';
 	import { folderName, titleFrom, type ModelAlias } from './format';
 	import ModelEffortFields from './ModelEffortFields.svelte';
 	import PermissionModeField from './PermissionModeField.svelte';
@@ -77,13 +78,7 @@
 <dialog bind:this={dialog} class="dialog" aria-labelledby="new-session-title" onclose={() => (open = false)}>
 	<form onsubmit={start}>
 		<h2 id="new-session-title">New session</h2>
-		<label class="row">
-			<span>Folder</span>
-			<input class="field mono" list="project-dirs" bind:value={folder} placeholder="/root/projects/..." required autocomplete="off" spellcheck="false" />
-			<datalist id="project-dirs">
-				{#each dirs as dir (dir.path)}<option value={dir.path}></option>{/each}
-			</datalist>
-		</label>
+		<FolderField {dirs} bind:value={folder} />
 		{#if recent.length > 0}
 			<div class="recent" role="group" aria-label="Recent folders">
 				{#each recent as dir (dir.path)}

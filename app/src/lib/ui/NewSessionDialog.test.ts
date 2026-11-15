@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { expect, test, vi } from 'vitest';
 import { connectedClient, stubDialogs } from '../testing';
 import NewSessionDialog from './NewSessionDialog.svelte';
@@ -67,4 +67,66 @@ test('the earlier conversations of the folder open from the dialog, which asks f
 	expect(onearlier).toHaveBeenCalledWith('/root/projects/alpha');
 	expect(screen.getByRole('dialog', { hidden: true }).hasAttribute('open')).toBe(false);
 	expect(transport.requests('startSession')).toEqual([]);
+});
+
+async function withFolders(paths: string[]) {
+	const { client, transport } = await connectedClient([]);
+	render(NewSessionDialog, { client, open: true, onstarted: () => {} });
+	transport.respond('listProjectDirs', { dirs: paths.map((path, index) => ({ path, lastActive: index < 2 ? 300 - index : null })) });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	return { transport, field: screen.getByRole('combobox', { name: 'Folder' }) as HTMLInputElement };
+}
+
+const folders = () => within(document.getElementById(screen.getByRole('combobox', { name: 'Folder' }).getAttribute('aria-controls') ?? '') as HTMLElement);
+const options = () => folders().queryAllByRole('option').map((option) => option.textContent);
+
+// The browser's own list for an input drew as a window of its own over the dialog, at times see-through, in the Windows app.
+test('the folder field lists the folders that hold what you type, and a click on one picks it', async () => {
+	const { field } = await withFolders(['/root/code/orfoni', '/root/code/events', '/root/projects/haldian/hub']);
+	expect(options()).toEqual([]);
+	await fireEvent.input(field, { target: { value: 'EV' } });
+	expect(field.getAttribute('aria-expanded')).toBe('true');
+	expect(options()).toEqual(['/root/code/events']);
+	await fireEvent.click(folders().getByRole('option', { name: '/root/code/events' }));
+	expect(field.value).toBe('/root/code/events');
+	expect(options()).toEqual([]);
+	expect(document.activeElement).toBe(field);
+
+	await fireEvent.click(field);
+	expect(options()).toEqual(['/root/code/orfoni', '/root/code/events', '/root/projects/haldian/hub']);
+	await fireEvent.blur(field);
+	expect(options()).toEqual([]);
+	await fireEvent.click(screen.getByRole('button', { name: 'Show folders' }));
+	expect(options()).toHaveLength(3);
+});
+
+test('the arrow keys move through the folders, Enter picks one without starting the session, and Escape closes the list without the dialog', async () => {
+	const { field, transport } = await withFolders(['/root/code/orfoni', '/root/code/events', '/root/projects/haldian/hub']);
+	await fireEvent.keyDown(field, { key: 'ArrowUp' });
+	const selected = () => folders().getAllByRole('option').find((option) => option.getAttribute('aria-selected') === 'true')?.textContent;
+	expect(selected()).toBe('/root/projects/haldian/hub');
+	await fireEvent.keyDown(field, { key: 'ArrowDown' });
+	expect(selected()).toBe('/root/code/orfoni');
+	await fireEvent.keyDown(field, { key: 'ArrowDown' });
+	expect(field.getAttribute('aria-activedescendant')).toBe(folders().getByRole('option', { name: '/root/code/events' }).id);
+	expect(await fireEvent.keyDown(field, { key: 'Enter' })).toBe(false);
+	expect(field.value).toBe('/root/code/events');
+	expect(options()).toEqual([]);
+	expect(transport.requests('startSession')).toEqual([]);
+
+	await fireEvent.input(field, { target: { value: '/root/code/' } });
+	expect(options()).toEqual(['/root/code/orfoni', '/root/code/events']);
+	expect(await fireEvent.keyDown(field, { key: 'Escape' })).toBe(false);
+	expect(options()).toEqual([]);
+	expect(await fireEvent.keyDown(field, { key: 'Escape' })).toBe(true);
+	expect(screen.getByRole('dialog').hasAttribute('open')).toBe(true);
+});
+
+test('a folder typed in full, or one nothing matches, shows no list', async () => {
+	const { field } = await withFolders(['/root/code/orfoni', '/root/code/events']);
+	await fireEvent.input(field, { target: { value: '/root/code/orfoni' } });
+	expect(options()).toEqual([]);
+	await fireEvent.input(field, { target: { value: '/srv/elsewhere' } });
+	expect(options()).toEqual([]);
+	expect(field.getAttribute('aria-expanded')).toBe('false');
 });

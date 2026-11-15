@@ -107,6 +107,39 @@ test('the session list loads, and a session idle or ended for more than 48 hours
 	for (const session of sessions) await expect(page.locator(`[data-session="${session.id}"]`)).toBeVisible();
 });
 
+// The browser's own list for an input drew as a window of its own over the dialog, at times see-through, in the Windows app, so the field draws its list itself.
+test("the folder field lists the hub's folders inside the dialog, and Escape closes the list before the dialog", async ({ page }) => {
+	const dirs = (await hub.request('listProjectDirs', {})) as { dirs: { path: string }[] };
+	const [first] = dirs.dirs;
+	test.skip(first === undefined, 'the hub lists no folders');
+	for (const [scheme, width] of [['light', 1600], ['dark', 400]] as const) {
+		await page.setViewportSize({ width, height: 900 });
+		await page.emulateMedia({ colorScheme: scheme });
+		await page.goto(APP);
+		await expect(page.getByRole('status').getByText('Connected', { exact: true })).toBeVisible();
+		await page.getByRole('navigation').getByRole('button', { name: 'New session' }).first().click();
+		const dialog = page.getByRole('dialog', { name: 'New session' });
+		const field = dialog.getByRole('combobox', { name: 'Folder' });
+		const list = dialog.getByRole('listbox', { name: 'Folders' });
+		await field.click();
+		await expect(list).toBeVisible();
+		await expect(list.getByRole('option')).toHaveCount(dirs.dirs.length);
+		await expect(list).toHaveCSS('background-color', await dialog.evaluate((element) => getComputedStyle(element).backgroundColor));
+		await snap(page, `folder-list-${scheme}.png`);
+		await field.press('ArrowDown');
+		await field.press('Enter');
+		await expect(field).toHaveValue(first.path);
+		await expect(list).toBeHidden();
+		await field.fill(first.path.slice(0, -1));
+		await expect(list.getByRole('option', { name: first.path })).toBeVisible();
+		await field.press('Escape');
+		await expect(list).toBeHidden();
+		await expect(dialog).toBeVisible();
+		await field.press('Escape');
+		await expect(dialog).toBeHidden();
+	}
+});
+
 test('start a session and see the reply as a bubble', async ({ page }) => {
 	await page.goto(APP);
 	await expect(page.getByRole('status').getByText('Connected', { exact: true })).toBeVisible();
