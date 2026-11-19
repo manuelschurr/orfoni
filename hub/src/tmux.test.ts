@@ -130,16 +130,24 @@ describe('createTmux', () => {
 
 	it('starts a detached session with its env and puts -- before the command', async () => {
 		const { calls, tmux } = recorder();
-		await tmux.newSession('orfoni-x', '/work', { ORFONI_SESSION: 'x', A: 'b=c' }, ['claude', '--settings', '/s.json', 'hello world']);
+		const work = tmpdir();
+		await tmux.newSession('orfoni-x', work, { ORFONI_SESSION: 'x', A: 'b=c' }, ['claude', '--settings', '/s.json', 'hello world']);
 		expect(calls).toEqual([
 			{
 				args: [
-					'new-session', '-d', '-s', 'orfoni-x', '-c', '/work', '-x', '200', '-y', '50',
+					'new-session', '-d', '-s', 'orfoni-x', '-c', work, '-x', '200', '-y', '50',
 					'-e', 'ORFONI_SESSION=x', '-e', 'A=b=c',
 					'--', 'claude', '--settings', '/s.json', 'hello world',
 				],
 			},
 		]);
+	});
+
+	it('starts nothing in a folder that does not exist, which tmux would swap for the home folder', async () => {
+		const { calls, tmux } = recorder();
+		const missing = join(tmpdir(), `orfoni-gone-${randomUUID()}`);
+		await expect(tmux.newSession('orfoni-x', missing, {}, ['claude'])).rejects.toMatchObject({ code: 'not_found', message: `There is no folder ${missing}.` });
+		expect(calls).toEqual([]);
 	});
 
 	it('reads the screen of a session as text', async () => {

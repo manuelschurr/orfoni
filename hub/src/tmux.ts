@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import { HubError } from './hub-error.js';
 
 export type Run = (args: string[], stdin?: string) => Promise<string>;
 
@@ -72,7 +74,9 @@ const NO_PANES = /no server running|error connecting to|no current target/;
 
 export function createTmux(run: Run): Tmux {
 	return {
+		// tmux starts a session whose folder is missing in the home folder instead, where Claude Code would work on the wrong files and keep its transcript under the wrong project.
 		async newSession(name, cwd, env, command) {
+			if (!(await stat(cwd).then((info) => info.isDirectory(), () => false))) throw new HubError('not_found', `There is no folder ${cwd}.`);
 			const envArgs = Object.entries(env).flatMap(([key, value]) => ['-e', `${key}=${value}`]);
 			await run(['new-session', '-d', '-s', name, '-c', cwd, '-x', '200', '-y', '50', ...envArgs, '--', ...command]);
 		},

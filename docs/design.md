@@ -98,7 +98,7 @@ A third spike, after the final review on 2026-10-26, tested how long messages ar
 
 The hub has these jobs:
 
-- Start a session by creating a tmux session in the project folder that runs `claude --session-id=<uuid> --name <title>`. Stop a session by ending its tmux session.
+- Start a session by creating a tmux session in the project folder that runs `claude --session-id=<uuid> --name <title>`. Stop a session by ending its tmux session. The hub starts nothing in a folder that does not exist, for a session or a shell, because tmux would start it in the home folder instead, where Claude Code works on other files and keeps the transcript under another project.
 - Receive Claude Code's hook events on a Unix socket in the hub's runtime directory, `$XDG_RUNTIME_DIR/orfoni/hooks.sock`. The directory has mode 0700, so no other account on the VPS can post hooks. Each hook is a short `curl --unix-socket` command that posts the event with the orfoni session ID as a header, so the hub knows which session sent it.
 - Accept a Claude session ID only as a UUID, from hooks and from the state file, and pass it to `claude` only glued to its option, as `--resume=<id>`. The ID arrives in hook input, so without both rules a forged hook could add options to `claude`'s arguments.
 - Turn hook events into session states and chat messages, and forward both to connected apps.
