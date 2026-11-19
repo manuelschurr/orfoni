@@ -69,7 +69,7 @@ describe('formatChatItem', () => {
 });
 
 describe('formatSession', () => {
-	test('prints the id, state, folder and title separated by tabs', () => {
+	test('prints the id, state, folder and title, or else the first message, separated by tabs', () => {
 		const session: SessionSummary = {
 			id: SessionId.parse('0b9c1f2e'),
 			projectDir: '/root/code/orfoni',
@@ -80,6 +80,7 @@ describe('formatSession', () => {
 		};
 		expect(formatSession(session)).toBe('0b9c1f2e\tidle\t/root/code/orfoni\thub');
 		expect(formatSession({ ...session, title: null })).toBe('0b9c1f2e\tidle\t/root/code/orfoni\t');
+		expect(formatSession({ ...session, title: null, firstPrompt: 'Fix the login page' })).toBe('0b9c1f2e\tidle\t/root/code/orfoni\tFix the login page');
 	});
 });
 

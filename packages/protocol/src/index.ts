@@ -26,6 +26,8 @@ export const SessionSummary = z.object({
 	id: SessionId,
 	projectDir: z.string(),
 	title: z.string().nullable(),
+	// The first line of the first message you sent in the conversation that is not a command, which names a session that has no title, so the list needs no chat to name it. Null from a hub before 0.3.31.
+	firstPrompt: z.string().nullable().default(null),
 	claudeSessionId: ClaudeSessionId.nullable(),
 	state: SessionStateKind,
 	stateSince: z.number(),

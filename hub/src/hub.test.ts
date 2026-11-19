@@ -330,7 +330,7 @@ describe('startSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(started).toEqual({
-			session: { id, projectDir: PROJECT, title: 'Notes', claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null, limit: null, apiError: null },
+			session: { id, projectDir: PROJECT, title: 'Notes', firstPrompt: null, claudeSessionId: claude, state: 'idle', stateSince: T0, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'plan', context: null, turnFrom: null, push: null, limit: null, apiError: null },
 			needsTrust: true,
 		});
 		expect(claude).not.toBe(id);
@@ -1947,10 +1947,20 @@ describe('portSession', () => {
 		]);
 		expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(hookSettings(SOCKET, null, join(dir, 'uploads')));
 		expect(response.result).toEqual({
-			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null, limit: null, apiError: null },
+			session: { id: session.id, projectDir: OTHER_PROJECT, title: 'swarm-73', firstPrompt: null, claudeSessionId: OTHER, state: 'idle', stateSince: expect.any(Number), lastActiveAt: expect.any(Number), summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: 'auto', context: null, turnFrom: null, push: null, limit: null, apiError: null },
 			needsTrust: true,
 		});
 		expect(kills).toEqual([[4321, 'SIGTERM']]);
+	});
+
+	test('a session without a name comes in named by the first message of its conversation', async () => {
+		runOther(4321, { name: null });
+		transcripts.set(OTHER, [{ ...entry('user', 'Map the swarm radios\nand their ranges'), timestamp: new Date(T0 - 50_000).toISOString() }]);
+		const client = await startHub();
+		let response: Response | undefined;
+		void port(client, 4321).then((r) => (response = r));
+		await stepUntil(() => response !== undefined);
+		expect(response).toMatchObject({ ok: true, result: { session: { title: null, firstPrompt: 'Map the swarm radios' } } });
 	});
 
 	test('a session that exits on its own just before SIGTERM is still resumed', async () => {
@@ -2127,6 +2137,13 @@ describe('earlier conversations', () => {
 		conversations.set(PROJECT, Array.from({ length: 250 }, (_, i) => listed(randomUUID(), T0 - i * 1000)).reverse());
 		const client = await startHub();
 		expect((await past(client)).map(({ lastModified }) => lastModified)).toEqual(Array.from({ length: 200 }, (_, i) => T0 - i * 1000));
+	});
+
+	test('a conversation without a title continues named by its first message', async () => {
+		conversations.set(PROJECT, [listed(NOTES, T0 - 60_000, { summary: '' })]);
+		transcripts.set(NOTES, [{ ...entry('user', 'Notes on the uplink tests'), timestamp: new Date(T0 - 60_000).toISOString() }]);
+		const client = await startHub();
+		expect(await client.ok('continueConversation', { projectDir: PROJECT, claudeSessionId: NOTES })).toMatchObject({ session: { title: null, firstPrompt: 'Notes on the uplink tests' } });
 	});
 
 	test('continues a conversation as a new orfoni session in its folder that resumes it, titled after it, on the requested model, effort and mode', async () => {
@@ -2919,9 +2936,47 @@ describe('restart', () => {
 
 		const after = await startHub(fakeTmux([`orfoni-${a.id}`]));
 		expect(await after.ok('listSessions', {})).toEqual([
-			{ id: a.id, projectDir: PROJECT, title: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
-			{ id: b.id, projectDir: PROJECT, title: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
+			{ id: a.id, projectDir: PROJECT, title: null, firstPrompt: null, claudeSessionId: a.claude, state: 'working', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
+			{ id: b.id, projectDir: PROJECT, title: null, firstPrompt: null, claudeSessionId: b.claude, state: 'offline', stateSince: T0 + 60_000, lastActiveAt: T0, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null },
 		]);
+	});
+
+	test('an untitled session goes out named by its first message, which a restart keeps without reading the transcript', async () => {
+		const client = await startHub();
+		const { id, claude } = await ready(client);
+		await hub.hook(id, body('UserPromptSubmit', claude, { prompt: 'Fix the login page\nand the logout' }));
+		expect(client.session(id)?.firstPrompt).toBe('Fix the login page');
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes('Fix the login page'));
+		hub.close();
+		history = [];
+
+		const after = await startHub();
+		expect(((await after.ok('listSessions', {})) as SessionSummary[]).map((session) => session.firstPrompt)).toEqual(['Fix the login page']);
+		expect(history).toEqual([]);
+	});
+
+	// Before the hub kept the first prompt, the list named an untitled session only once its chat was open.
+	test('an untitled session from before the first prompt was kept is named from its transcript once, and a titled one is not read', async () => {
+		const client = await startHub();
+		const untitled = await start(client);
+		const titled = await start(client, { title: 'Notes' });
+		await untilRealTime(() => existsSync(join(dir, 'state.json')) && readFileSync(join(dir, 'state.json'), 'utf8').includes(titled.id));
+		hub.close();
+		const stamped = (message: SessionMessage) => ({ ...message, timestamp: new Date(T0).toISOString() });
+		transcripts.set(untitled.claude, [entry('user', '!ls'), entry('user', 'Fix the login page\nand the logout'), entry('assistant', [{ type: 'text', text: 'On it.' }], 'end_turn')].map(stamped));
+		transcripts.set(titled.claude, [stamped(entry('user', 'Tidy the notes'))]);
+		history = [];
+
+		const after = await startHub();
+		const names = () => after.ok('listSessions', {}).then((sessions) => Object.fromEntries((sessions as SessionSummary[]).map((session) => [session.id, session.firstPrompt])));
+		expect(await names()).toEqual({ [untitled.id]: 'Fix the login page', [titled.id]: null });
+		expect(history.map((read) => read.claudeSessionId)).toEqual([untitled.claude]);
+		await untilRealTime(() => readFileSync(join(dir, 'state.json'), 'utf8').includes('Fix the login page'));
+		hub.close();
+		history = [];
+
+		await startHub();
+		expect(history).toEqual([]);
 	});
 
 	// A restart used to stamp every session with the moment the hub came back, so the whole list read "45 min".

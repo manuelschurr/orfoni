@@ -55,5 +55,5 @@ export function formatPlan({ plan, automation }: Pick<HubStatus, 'plan' | 'autom
 }
 
 export function formatSession(session: SessionSummary): string {
-	return [session.id, session.state, session.projectDir, session.title ?? ''].join('\t');
+	return [session.id, session.state, session.projectDir, session.title ?? session.firstPrompt ?? ''].join('\t');
 }

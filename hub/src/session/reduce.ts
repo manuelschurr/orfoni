@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatItem, ClaudeSessionId, PermissionMode, RequestId, RequestOutcome, SessionStateKind, TaskItem } from '@orfoni/protocol';
+import { withUploadNames, type ChatItem, type ClaudeSessionId, type PermissionMode, type RequestId, type RequestOutcome, type SessionStateKind, type TaskItem } from '@orfoni/protocol';
 import { z } from 'zod';
 import type { Activity } from '../activity.js';
 import type { HookEvent } from '../hooks/events.js';
@@ -16,6 +16,8 @@ export interface SessionModel {
 	stateSince: number;
 	claudeSessionId: ClaudeSessionId;
 	chat: ChatItem[];
+	// What names the session while it has no title, which a restart keeps, unlike the chat.
+	firstPrompt: string | null;
 	openRequests: RequestId[];
 	viewing: boolean;
 	chatStartedAt: number | null;
@@ -72,7 +74,7 @@ export function endsSession(event: HookEvent): boolean {
 }
 
 export function emptySession(at: number, claudeSessionId: ClaudeSessionId): SessionModel {
-	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: at, limit: null, apiError: null, continues: 0, continuing: false };
+	return { state: 'idle', stateSince: at, claudeSessionId, chat: [], firstPrompt: null, openRequests: [], viewing: false, chatStartedAt: null, summary: null, taskList: [], pendingTaskCalls: [], memory: null, statusLine: null, ranOn: null, activity: null, permissionMode: null, turnFrom: null, push: null, lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: at, limit: null, apiError: null, continues: 0, continuing: false };
 }
 
 export function unread({ lastTurnEndedAt, lastViewedAt }: Pick<SessionModel, 'lastTurnEndedAt' | 'lastViewedAt'>): boolean {
@@ -175,6 +177,16 @@ function liveActivity(model: SessionModel): SessionModel {
 	return model.activity !== null && !(model.state === 'working' && model.viewing) ? { ...model, activity: null } : model;
 }
 
+const FIRST_PROMPT_CHARS = 200;
+
+// The first line of the first message you sent that is not a command, with the names of uploads in place of their paths, and cut short, since it goes out with every update of the session.
+export function namingPrompt(chat: ChatItem[]): string | null {
+	const prompt = chat.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
+	if (prompt?.kind !== 'user') return null;
+	const line = withUploadNames(prompt.text.trim().split('\n', 1)[0] ?? '');
+	return [...line].slice(0, FIRST_PROMPT_CHARS).join('') || null;
+}
+
 // Claude Code sends Claude a background task's notice, a subagent's report and another session's message through the prompt, the way it sends what you type.
 function promptItems(text: string, at: number): ChatItem[] {
 	const notice = taskNotice(text);
@@ -201,7 +213,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 			switch (event.type) {
 				case 'session_start': {
 					const fresh = event.source === 'clear' || event.claudeSessionId !== model.claudeSessionId;
-					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], summary: null, taskList: [], pendingTaskCalls: [], continues: 0 } : model;
+					const next = fresh ? { ...model, claudeSessionId: event.claudeSessionId, chat: [], firstPrompt: null, summary: null, taskList: [], pendingTaskCalls: [], continues: 0 } : model;
 					return event.source === 'compact' ? next : enter(next, 'idle', at);
 				}
 				case 'prompt': {
@@ -209,7 +221,7 @@ function step(model: SessionModel, input: SessionInput): SessionModel {
 					const yours = items[0]?.kind === 'user';
 					// A message from you after a limit starts the count of continues afresh, and the hub's own continue does not.
 					const continues = yours && !model.continuing ? 0 : model.continues;
-					return enter({ ...model, chat: [...model.chat, ...items], turnFrom: yours ? 'you' : 'task', lastActiveAt: at, continues, continuing: false }, 'working', at);
+					return enter({ ...model, chat: [...model.chat, ...items], firstPrompt: model.firstPrompt ?? namingPrompt(items), turnFrom: yours ? 'you' : 'task', lastActiveAt: at, continues, continuing: false }, 'working', at);
 				}
 				case 'assistant_text':
 					return {

@@ -26,8 +26,8 @@ const StoredLimit = z.object({ at: z.number(), resetsAt: z.number().nullable(), 
 // The API error a session's last turn ended on, for the same reason.
 const StoredApiError = z.object({ at: z.number(), continueAt: z.number().nullable() });
 
-// A file from before lastActiveAt has none, and the session then counts as active when its last turn ended. One from before the limit or the API error has no session that waits on one.
-const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null), limit: StoredLimit.nullable().default(null), apiError: StoredApiError.nullable().default(null) });
+// A file from before lastActiveAt has none, and the session then counts as active when its last turn ended. One from before the limit or the API error has no session that waits on one. One from before the first prompt has none, and the hub reads it from the transcript.
+const StoredSession = StoredSessionV2.omit({ tasks: true }).extend({ taskList: z.array(TaskItem), lastActiveAt: z.number().nullable().default(null), limit: StoredLimit.nullable().default(null), apiError: StoredApiError.nullable().default(null), firstPrompt: z.string().nullable().default(null) });
 export type StoredSession = z.infer<typeof StoredSession>;
 
 // What the hub does about the plan's limits, and how its last start of a window went, with when it tries again on the same day. Each setting has a default of its own, so a file from before a setting takes that setting's default.
@@ -55,6 +55,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 			lastActiveAt: null,
 			limit: null,
 			apiError: null,
+			firstPrompt: null,
 		})),
 		summaries,
 		plan: defaultPlan(),
@@ -65,7 +66,7 @@ const HubStateV2 = z.object({ version: z.literal(2), sessions: z.array(StoredSes
 const HubStateV1 = z.object({ version: z.literal(1), sessions: z.array(StoredSessionV1) }).transform(
 	({ sessions }): HubState => ({
 		version: 3,
-		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null })),
+		sessions: sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null, firstPrompt: null })),
 		summaries: null,
 		plan: defaultPlan(),
 	}),

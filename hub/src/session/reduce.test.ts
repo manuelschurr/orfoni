@@ -87,6 +87,29 @@ describe('reduce', () => {
 		expect(model.stateSince).toBe(4);
 	});
 
+	test('the first message you send that is not a command names the session, by its first line, and later messages keep that name', () => {
+		const prompts = ['/model sonnet', '!ls', 'Fix the login page\nand the logout', 'Now the tests'].map((text, index) => hook('prompt', { text }, 2 + index));
+		expect(run(started, ...prompts.slice(0, 2)).firstPrompt).toBeNull();
+		expect(run(started, ...prompts).firstPrompt).toBe('Fix the login page');
+	});
+
+	test('a first prompt names an upload by its file name and is cut at 200 characters', () => {
+		const upload = '@/root/.local/state/orfoni/uploads/0b6c2e1a-1111-4222-8333-944455556666/Q3_report.pdf';
+		expect(run(started, hook('prompt', { text: `${upload} Summarize it` }, 2)).firstPrompt).toBe('Q3_report.pdf Summarize it');
+		expect(run(started, hook('prompt', { text: '🙂'.repeat(300) }, 2)).firstPrompt).toBe('🙂'.repeat(200));
+	});
+
+	test('a task notice or a message from another session names nothing', () => {
+		const notice = '<task-notification>\n<task-id>b1</task-id>\n<summary>Build finished</summary>\n</task-notification>';
+		expect(run(started, hook('prompt', { text: notice }, 2)).firstPrompt).toBeNull();
+	});
+
+	test('a /clear starts a conversation that its own first message names', () => {
+		const cleared = run(started, prompted, hook('stop', { lastAssistantMessage: 'done' }, 3), hook('session_start', { source: 'clear' }, 4, second));
+		expect(cleared.firstPrompt).toBeNull();
+		expect(reduce(cleared, hook('prompt', { text: 'Write the README' }, 5, second)).firstPrompt).toBe('Write the README');
+	});
+
 	test('session_start with source compact keeps the chat and the state', () => {
 		const model = run(started, prompted, hook('session_start', { source: 'compact' }, 3));
 		expect(model.chat).toHaveLength(1);

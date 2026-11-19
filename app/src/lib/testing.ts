@@ -23,6 +23,7 @@ export function summary(id: string, state: SessionStateKind = 'idle', changes: P
 		id: SessionId.parse(id),
 		projectDir: '/root/projects/alpha',
 		title: null,
+		firstPrompt: null,
 		claudeSessionId: ClaudeSessionId.parse('11111111-1111-4111-8111-111111111111'),
 		state,
 		stateSince: Date.now(),

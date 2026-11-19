@@ -47,7 +47,7 @@ import { PendingRequests, RequestError, type HookResponse } from './requests.js'
 import { sentCall } from './send-user-file.js';
 import { SentCopies } from './sent-copies.js';
 import { noticesOf, titleOf } from './session/notices.js';
-import { emptySession, endsSession, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
+import { emptySession, endsSession, namingPrompt, reduce, unread, type SessionInput, type SessionModel } from './session/reduce.js';
 import { taskProgress } from './session/tasks.js';
 import { hookSettings, originalStatusLine } from './settings.js';
 import { parseStatusLine, StatusLineParseError, type StatusLine } from './status-line.js';
@@ -235,11 +235,11 @@ function reportedSettings(session: Session, { model, effort, permissionMode }: C
 
 function summary(session: Session): SessionSummary {
 	const { id, projectDir, title, model } = session;
-	return { id, projectDir, title, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push, limit: model.limit && { resetsAt: model.limit.resetsAt, continuesAt: model.limit.continueAt }, apiError: model.apiError && { continuesAt: model.apiError.continueAt } };
+	return { id, projectDir, title, firstPrompt: model.firstPrompt, claudeSessionId: model.claudeSessionId, state: model.state, stateSince: model.stateSince, lastActiveAt: model.lastActiveAt, summary: model.summary, tasks: taskProgress(model), memory: model.memory, model: model.statusLine?.model ?? null, effort: model.statusLine?.effort ?? null, taskList: model.taskList.length === 0 ? null : model.taskList, activity: model.activity, permissionMode: model.permissionMode, context: model.statusLine?.context ?? null, turnFrom: model.turnFrom, push: model.push, limit: model.limit && { resetsAt: model.limit.resetsAt, continuesAt: model.limit.continueAt }, apiError: model.apiError && { continuesAt: model.apiError.continueAt } };
 }
 
-const SHOWN = ['state', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
-const STORED = ['claudeSessionId', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
+const SHOWN = ['state', 'firstPrompt', 'lastActiveAt', 'claudeSessionId', 'summary', 'taskList', 'memory', 'statusLine', 'activity', 'permissionMode', 'turnFrom', 'push', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
+const STORED = ['claudeSessionId', 'firstPrompt', 'summary', 'taskList', 'lastTurnEndedAt', 'lastViewedAt', 'lastActiveAt', 'limit', 'apiError'] as const satisfies (keyof SessionModel)[];
 
 function changed(fields: readonly (keyof SessionModel)[], before: SessionModel, after: SessionModel): boolean {
 	return fields.some((field) => before[field] !== after[field]);
@@ -290,6 +290,20 @@ async function stateAfterRestart(options: HubOptions, stored: StoredSession): Pr
 		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session counts as working: ${(error as Error).message}`);
 		return { state: 'working', lastTurnEndedAt, lastActiveAt: storedActivity(stored), halt: NO_HALT };
 	}
+}
+
+async function transcriptPrompt(options: HubOptions, claudeSessionId: ClaudeSessionId, projectDir: string): Promise<string | null> {
+	try {
+		return namingPrompt(normalizeHistory(await options.readHistory(claudeSessionId, projectDir)));
+	} catch (error) {
+		options.log(`orfoni-hub: reading the transcript of ${claudeSessionId} failed, so the session has no first prompt to name it: ${(error as Error).message}`);
+		return null;
+	}
+}
+
+// A session from before the hub kept the first prompt, or one that got its first prompt while the hub was down, has it only in its transcript.
+async function firstPromptAfterRestart(options: HubOptions, { title, firstPrompt, claudeSessionId, projectDir }: StoredSession): Promise<string | null> {
+	return title !== null || firstPrompt !== null ? firstPrompt : transcriptPrompt(options, claudeSessionId, projectDir);
 }
 
 async function subfolders(parent: string): Promise<string[]> {
@@ -406,13 +420,16 @@ export class Hub {
 			),
 		);
 		const taskFiles = await Promise.all(state.sessions.map((stored) => readTaskFiles(options.claudeTasksDir, stored.claudeSessionId)));
+		const firstPrompts = await Promise.all(state.sessions.map((stored) => firstPromptAfterRestart(options, stored)));
 		const now = Date.now();
 		state.sessions.forEach(({ id, projectDir, title, claudeSessionId, createdAt, summary, taskList, lastViewedAt }, index) => {
 			const { state: kind, lastTurnEndedAt, lastActiveAt, halt } = restored[index] ?? { state: 'offline', lastTurnEndedAt: null, lastActiveAt: createdAt, halt: NO_HALT };
-			const model: SessionModel = { ...emptySession(now, claudeSessionId), summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind, ...halt };
+			const model: SessionModel = { ...emptySession(now, claudeSessionId), firstPrompt: firstPrompts[index] ?? null, summary, taskList: taskFiles[index] ?? taskList, lastTurnEndedAt, lastViewedAt, lastActiveAt, state: kind, ...halt };
 			const claude: ClaudeProcess = model.state === 'offline' ? { kind: 'exited' } : { kind: 'running', inputReadyAt: 0 };
 			hub.sessions.set(id, { id, projectDir, title, createdAt, model, claude });
 		});
+		// A session nothing happens in would otherwise have its transcript read again at each start.
+		if (state.sessions.some((stored, index) => firstPrompts[index] !== stored.firstPrompt)) hub.save();
 		return hub;
 	}
 
@@ -679,7 +696,9 @@ export class Hub {
 				throw new HubError('internal', `Claude Code (process ${pid}) was still running ${EXIT_TIMEOUT_MS / 1000} s after SIGTERM, so orfoni started nothing. Once it exits, claude --resume=${claudeSessionId} continues the conversation.`);
 			}
 			// The registry name becomes the orfoni title, which the start of Claude Code carries as its name.
-			const ported = await this.newSession(other.session.projectDir, other.session.name, claudeSessionId, [`--resume=${claudeSessionId}`], request, { onFailure: 'keep' });
+			const { name, projectDir } = other.session;
+			const firstPrompt = name ? null : await transcriptPrompt(this.options, claudeSessionId, projectDir);
+			const ported = await this.newSession(projectDir, name, claudeSessionId, [`--resume=${claudeSessionId}`], request, { onFailure: 'keep', firstPrompt });
 			await this.refreshOthers();
 			return ported;
 		} finally {
@@ -711,7 +730,8 @@ export class Hub {
 			if (other) throw new HubError('not_ready', `Claude Code runs this conversation outside orfoni right now, as process ${other.session.pid}. Port that session into orfoni instead.`);
 			const listed = (await this.options.listConversations(projectDir)).find(({ sessionId }) => sessionId === claudeSessionId);
 			if (!listed) throw new HubError('not_found', `Claude Code has no conversation ${claudeSessionId} in ${projectDir}`);
-			return this.withMemoryWarning(await this.newSession(projectDir, listed.summary || null, claudeSessionId, [`--resume=${claudeSessionId}`], request));
+			const firstPrompt = listed.summary ? null : await transcriptPrompt(this.options, claudeSessionId, projectDir);
+			return this.withMemoryWarning(await this.newSession(projectDir, listed.summary || null, claudeSessionId, [`--resume=${claudeSessionId}`], request, { firstPrompt }));
 		} finally {
 			this.claiming.delete(claudeSessionId);
 		}
@@ -747,10 +767,10 @@ export class Hub {
 		claudeSessionId: ClaudeSessionId,
 		identity: string[],
 		settings: ClaudeSettings,
-		{ onFailure = 'drop', inherited, prompt }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited']; prompt?: string } = {},
+		{ onFailure = 'drop', inherited, prompt, firstPrompt = null }: { onFailure?: 'drop' | 'keep'; inherited?: Session['inherited']; prompt?: string; firstPrompt?: string | null } = {},
 	): Promise<{ session: SessionSummary; needsTrust: boolean }> {
 		const now = Date.now();
-		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: emptySession(now, claudeSessionId), claude: { kind: 'exited' }, inherited };
+		const session: Session = { id: SessionId.parse(randomUUID()), projectDir, title, createdAt: now, model: { ...emptySession(now, claudeSessionId), firstPrompt }, claude: { kind: 'exited' }, inherited };
 		const needsTrust = await this.needsTrust(projectDir);
 		this.sessions.set(session.id, session);
 		try {
@@ -1316,7 +1336,7 @@ export class Hub {
 		if (changed(SHOWN, before, after)) this.broadcast({ type: 'sessionUpdated', session: summary(session) });
 		const known = new Set(before.chat);
 		for (const item of after.chat) if (!known.has(item)) this.broadcast({ type: 'chatItem', sessionId: session.id, item: this.sent.showFromMemory(item, session.projectDir) });
-		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.chat), body });
+		for (const { kind, body } of noticesOf(before, after, basename(session.projectDir))) this.broadcast({ type: 'notice', sessionId: session.id, kind, title: titleOf(session.title, after.firstPrompt), body });
 		if (changed(STORED, before, after)) this.save();
 		if (wantsSummary(before, after, input)) this.summarizer.request(session.id);
 		void this.tellName(session);
@@ -1339,6 +1359,7 @@ export class Hub {
 						id,
 						projectDir,
 						title,
+						firstPrompt: model.firstPrompt,
 						claudeSessionId: model.claudeSessionId,
 						createdAt,
 						summary: model.summary,

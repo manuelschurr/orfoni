@@ -129,8 +129,10 @@ export function titleFrom(text: string): string | undefined {
 	return line.length <= 60 ? line : `${line.slice(0, 60).replace(/\s+\S*$/, '')}…`;
 }
 
+// A hub before 0.3.31 sends no first prompt, and then the chat names the session once it is open.
 export function sessionTitle(session: SessionSummary, chat?: ChatItem[]): string {
 	if (session.title) return session.title;
+	if (session.firstPrompt) return session.firstPrompt;
 	const prompt = chat?.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
 	return prompt?.kind === 'user' ? withUploadNames(firstLine(prompt.text)) : 'Untitled session';
 }

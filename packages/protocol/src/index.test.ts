@@ -194,12 +194,13 @@ describe('milestone 3 fields', () => {
 
 	test('a session summary from an older hub gets null summary, tasks, and memory', () => {
 		const message = parseHubMessage(JSON.stringify({ type: 'sessionUpdated', session: base }));
-		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null } });
+		expect(message).toEqual({ type: 'sessionUpdated', session: { ...base, firstPrompt: null, lastActiveAt: null, summary: null, tasks: null, memory: null, model: null, effort: null, taskList: null, activity: null, permissionMode: null, context: null, turnFrom: null, push: null, limit: null, apiError: null } });
 	});
 
 	test('a session summary carries its summary, task progress, and memory', () => {
 		const session = {
 			...base,
+			firstPrompt: 'Fix the login test',
 			lastActiveAt: 1,
 			summary: { about: 'Fixing the login test', status: 'Waiting for approval to run npm test', at: 2 },
 			tasks: { done: 3, total: 7 },

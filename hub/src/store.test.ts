@@ -28,6 +28,7 @@ const state: HubState = {
 			lastActiveAt: 1420,
 			limit: { at: 1420, resetsAt: 9000, continueAt: 9060 },
 			apiError: null,
+			firstPrompt: null,
 		},
 		{
 			id: SessionId.parse('s-2'),
@@ -42,6 +43,7 @@ const state: HubState = {
 			lastActiveAt: null,
 			limit: null,
 			apiError: { at: 2100, continueAt: 2130 },
+			firstPrompt: 'Tidy the notes in b',
 		},
 	],
 	summaries: { day: '2026-10-27', requests: 12, spentUsd: 0.0042 },
@@ -115,7 +117,7 @@ describe('store', () => {
 		const loaded = await loadState(path, (line) => logged.push(line));
 		expect(loaded).toEqual({
 			version: 3,
-			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null })),
+			sessions: milestone1.sessions.map((session) => ({ ...session, summary: null, taskList: [], lastTurnEndedAt: null, lastViewedAt: null, lastActiveAt: null, limit: null, apiError: null, firstPrompt: null })),
 			summaries: null,
 			plan,
 		});
@@ -143,8 +145,9 @@ describe('store', () => {
 					lastActiveAt: null,
 					limit: null,
 					apiError: null,
+					firstPrompt: null,
 				},
-				{ ...second, taskList: [], lastActiveAt: null, limit: null, apiError: null },
+				{ ...second, taskList: [], lastActiveAt: null, limit: null, apiError: null, firstPrompt: null },
 			],
 			summaries: beforeTaskLists.summaries,
 			plan,
@@ -178,6 +181,14 @@ describe('store', () => {
 		writeFileSync(path, JSON.stringify({ ...state, sessions: state.sessions.map(({ apiError: _, ...session }) => session) }));
 		const logged: string[] = [];
 		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, apiError: null })) });
+		expect(logged).toEqual([]);
+	});
+
+	test('a version 3 file from before the first prompt was kept loads with none, which the hub then reads from the transcript, without a migration', async () => {
+		const path = join(scratch(), 'state.json');
+		writeFileSync(path, JSON.stringify({ ...state, sessions: state.sessions.map(({ firstPrompt: _, ...session }) => session) }));
+		const logged: string[] = [];
+		expect(await loadState(path, (line) => logged.push(line))).toEqual({ ...state, sessions: state.sessions.map((session) => ({ ...session, firstPrompt: null })) });
 		expect(logged).toEqual([]);
 	});
 

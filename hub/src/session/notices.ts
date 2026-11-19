@@ -1,4 +1,4 @@
-import { withUploadNames, type ChatItem, type NoticeKind } from '@orfoni/protocol';
+import type { NoticeKind } from '@orfoni/protocol';
 import type { SessionModel } from './reduce.js';
 
 const said: Record<Exclude<NoticeKind, 'push'>, string> = {
@@ -35,8 +35,6 @@ export function noticesOf(before: SessionModel, after: SessionModel, folder: str
 }
 
 // The name the session list shows: the title, or else the first message that is not a command.
-export function titleOf(title: string | null, chat: ChatItem[]): string {
-	if (title) return title;
-	const prompt = chat.find((item) => item.kind === 'user' && !/^[/!]/.test(item.text.trim()));
-	return prompt?.kind === 'user' ? withUploadNames(prompt.text.trim().split('\n', 1)[0] ?? '') : 'Untitled session';
+export function titleOf(title: string | null, firstPrompt: string | null): string {
+	return title || firstPrompt || 'Untitled session';
 }

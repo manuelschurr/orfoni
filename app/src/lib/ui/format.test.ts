@@ -9,6 +9,12 @@ test('a session without a title is named after its first message that is not a c
 	expect(sessionTitle(summary('a1'), [user('/clear'), user('!ls -la'), user('Fix the login page\nand the logout')])).toBe('Fix the login page');
 });
 
+test('a session without a title is named by the first message the hub sends with it, before its chat is open', () => {
+	expect(sessionTitle(summary('a1', 'idle', { firstPrompt: 'Fix the login page' }))).toBe('Fix the login page');
+	expect(sessionTitle(summary('a1', 'idle', { title: 'Login', firstPrompt: 'Fix the login page' }))).toBe('Login');
+	expect(sessionTitle(summary('a1'))).toBe('Untitled session');
+});
+
 test('a session whose messages are all commands stays untitled', () => {
 	expect(sessionTitle(summary('a1'), [user('/clear')])).toBe('Untitled session');
 });
